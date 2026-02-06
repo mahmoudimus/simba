@@ -88,6 +88,7 @@ def client(config, mock_table, mock_embed) -> fastapi.testclient.TestClient:
     app = simba.memory.server.create_app(config)
     app.state.table = mock_table
     app.state.embed = mock_embed
+    app.state.embed_query = mock_embed
     app.state.db_path = None
     return fastapi.testclient.TestClient(app)
 

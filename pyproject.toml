@@ -8,7 +8,12 @@ dependencies = [
     "uvicorn>=0.34",
     "lancedb>=0.4",
     "httpx>=0.28",
+    "llama-cpp-python>=0.3",
+    "huggingface-hub>=0.26",
 ]
+
+[project.scripts]
+simba = "simba.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

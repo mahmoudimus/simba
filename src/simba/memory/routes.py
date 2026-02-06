@@ -82,8 +82,8 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
         logger.warning("[store] Embedding failed: %s", e)
         raise fastapi.HTTPException(
             status_code=503,
-            detail=f"Ollama embedding service unavailable: {e}",
-        )
+            detail=f"Embedding service error: {e}",
+        ) from e
 
     dup_check = await simba.memory.vector_db.find_duplicates(
         table, embedding, config.duplicate_threshold
@@ -129,11 +129,11 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
 
     table = request.app.state.table
     config = request.app.state.config
-    embed = request.app.state.embed
+    embed_query = request.app.state.embed_query
 
     start_time = time.time()
     try:
-        embedding = await embed(body.query)
+        embedding = await embed_query(body.query)
     except Exception as e:
         logger.warning("[recall] Embedding failed: %s", e)
         return {"memories": [], "queryTimeMs": 0, "error": "embedding_failed"}

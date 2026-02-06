@@ -9,7 +9,7 @@ This is a monorepo ("simba") containing 4 independent Claude Code plugin/tooling
 | Project | Purpose | Language | Deps |
 |---------|---------|----------|------|
 | `claude-tailor` | Error memory + persistent patterns via JSONL reflections | JS (ESM) | Zero |
-| `claude-memory` | Semantic memory daemon with vector DB (LanceDB + Ollama) | JS (CJS) | express, @lancedb/lancedb, uuid |
+| `claude-memory` | Semantic memory daemon with vector DB (LanceDB + llama-cpp-python) | JS (CJS) | express, @lancedb/lancedb, uuid |
 | `claude-turbo-search` | Fast file search + semantic indexing via ripgrep/fzf/QMD | Bash + JS | System tools (ripgrep, fzf, jq, bun, qmd) |
 | `claude-md-memory-guardian` | CLAUDE.md rule reinforcement via `<!-- CORE -->` tag extraction | Bash | None |
 
@@ -38,7 +38,7 @@ Hook output follows the Claude Code hook protocol: read JSON from stdin, write `
 ### claude-memory
 
 - `server.js` — Express daemon (port 8741) with LanceDB vector database
-- `services/embeddings.js` — Ollama integration with request queue and timeout handling
+- `services/embeddings.js` — In-process GGUF embedding via llama-cpp-python with async queue
 - `services/vector-db.js` — LanceDB operations (store, search, duplicate detection at 0.92 similarity threshold)
 - `routes/` — REST API: POST `/store`, POST `/recall`, GET `/health`, GET `/stats`, GET `/list`, DELETE `/memory/:id`
 - `hooks/` — 4 hooks: session-start (daemon auto-start), user-prompt-submit (prompt recall), pre-tool-use (thinking-based recall), pre-compact (transcript export)
@@ -99,7 +99,7 @@ npm run dev                       # Start with --watch for development
 ./uninstall.sh                    # Remove installation
 ```
 
-Requires Ollama running with `nomic-embed-text` model: `ollama pull nomic-embed-text`
+The embedding model (nomic-embed-text GGUF) is auto-downloaded from Hugging Face on first daemon startup.
 
 ### claude-turbo-search
 
