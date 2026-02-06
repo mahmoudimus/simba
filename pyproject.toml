@@ -1,0 +1,76 @@
+[project]
+name = "simba"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "lancedb>=0.4",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "pyrefly>=0.15",
+    "pre-commit>=4.0",
+    "libcst>=1.0",
+]
+
+[tool.ruff]
+src = ["src"]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "TCH",   # flake8-type-checking
+    "TID",   # flake8-tidy-imports
+    "RUF",   # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["TCH003"]
+"tests/conftest.py" = ["TCH003"]
+"tools/**/*.py" = ["N802"]  # libcst uses PascalCase visitor methods
+
+[tool.ruff.lint.isort]
+known-first-party = ["simba"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os.path".msg = "Use pathlib.Path instead of os.path"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.coverage.run]
+source = ["simba"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.pyrefly]
+python_version = "3.10"
+search_path = ["src"]

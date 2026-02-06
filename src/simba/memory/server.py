@@ -1,0 +1,157 @@
+"""FastAPI memory daemon server.
+
+Ported from claude-memory/server.js.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+import contextlib
+import pathlib
+
+import fastapi
+import uvicorn
+
+import simba.memory.config
+import simba.memory.embeddings
+import simba.memory.routes
+
+_DEFAULT_DB_DIR = ".simba/memory"
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
+    """Manage startup/shutdown for the memory daemon."""
+    await init_database(app)
+    await init_embeddings(app)
+    yield
+    await shutdown_embeddings(app)
+
+
+def create_app(
+    config: simba.memory.config.MemoryConfig | None = None,
+    use_lifespan: bool = False,
+) -> fastapi.FastAPI:
+    """Create and configure the FastAPI application."""
+    if config is None:
+        config = simba.memory.config.load_config()
+
+    app = fastapi.FastAPI(
+        title="Memory Daemon",
+        version="1.0.0",
+        lifespan=lifespan if use_lifespan else None,
+    )
+    app.include_router(simba.memory.routes.router)
+
+    app.state.config = config
+    app.state.start_time = time.time()
+    app.state.table = None
+    app.state.db_path = None
+    app.state.embed = None
+
+    return app
+
+
+def _resolve_db_path(config: simba.memory.config.MemoryConfig) -> pathlib.Path:
+    """Resolve the database directory from config or default."""
+    if config.db_path:
+        return pathlib.Path(config.db_path)
+    return pathlib.Path.cwd() / _DEFAULT_DB_DIR
+
+
+async def init_database(
+    app: fastapi.FastAPI, data_dir: pathlib.Path | None = None
+) -> None:
+    """Initialize LanceDB and attach to app state."""
+    import lancedb
+
+    config: simba.memory.config.MemoryConfig = app.state.config
+
+    if data_dir is None:
+        data_dir = _resolve_db_path(config)
+    db_path = data_dir / "memories.lance"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db = await lancedb.connect_async(str(db_path))
+    app.state.db_path = str(db_path)
+
+    try:
+        table = await db.open_table("memories")
+    except Exception:
+        dims = config.embedding_dims
+        zero_vector = [0.0] * dims
+        table = await db.create_table(
+            "memories",
+            [
+                {
+                    "id": f"init_{int(time.time())}",
+                    "type": "SYSTEM",
+                    "content": "Memory system initialized",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 1.0,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "lastAccessedAt": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                    ),
+                    "accessCount": 0,
+                    "vector": zero_vector,
+                }
+            ],
+        )
+
+    app.state.table = table
+
+
+async def init_embeddings(
+    app: fastapi.FastAPI,
+) -> simba.memory.embeddings.EmbeddingService:
+    """Initialize the embedding service and attach to app state."""
+    config: simba.memory.config.MemoryConfig = app.state.config
+    service = simba.memory.embeddings.EmbeddingService(config)
+    await service.start()
+    app.state.embed = service.embed
+    app.state._embedding_service = service
+    return service
+
+
+async def shutdown_embeddings(app: fastapi.FastAPI) -> None:
+    """Stop the embedding service."""
+    service = getattr(app.state, "_embedding_service", None)
+    if service:
+        await service.stop()
+
+
+def main() -> None:
+    """Start the memory daemon."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+    parser = argparse.ArgumentParser(description="Simba memory daemon")
+    parser.add_argument(
+        "--port", type=int, default=None, help="Port to listen on (default: 8741)"
+    )
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help=f"Database directory (default: cwd/{_DEFAULT_DB_DIR})",
+    )
+    args = parser.parse_args()
+
+    config = simba.memory.config.load_config(port=args.port, db_path=args.db_path)
+    app = create_app(config, use_lifespan=True)
+    uvicorn.run(app, host="127.0.0.1", port=config.port)
+
+
+if __name__ == "__main__":
+    main()

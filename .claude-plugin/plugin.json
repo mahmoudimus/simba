@@ -1,0 +1,6 @@
+{
+  "name": "simba",
+  "version": "0.1.0",
+  "description": "Unified Claude Code plugin: error memory, semantic recall, CLAUDE.md guardian",
+  "hooks": "./hooks.json"
+}
