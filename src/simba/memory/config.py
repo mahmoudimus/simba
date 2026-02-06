@@ -19,6 +19,7 @@ class MemoryConfig:
     model_file: str = "nomic-embed-text-v1.5.Q4_K_M.gguf"
     model_path: str = ""
     n_gpu_layers: int = -1
+    embed_url: str = ""
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92

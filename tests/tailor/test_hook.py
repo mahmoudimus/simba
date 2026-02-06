@@ -261,6 +261,29 @@ class TestParseTranscriptContent:
         content = simba.tailor.hook.parse_transcript_content([])
         assert content == ""
 
+    def test_handles_dict_tool_use_result(self):
+        lines = [json.dumps({"toolUseResult": {"output": "Error: failed", "code": 1}})]
+        content = simba.tailor.hook.parse_transcript_content(lines)
+        assert "Error: failed" in content
+
+    def test_handles_dict_tool_result_content(self):
+        lines = [
+            json.dumps(
+                {
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "content": {"text": "TypeError: x is not a function"},
+                            }
+                        ]
+                    }
+                }
+            )
+        ]
+        content = simba.tailor.hook.parse_transcript_content(lines)
+        assert "TypeError" in content
+
 
 class TestProcessHook:
     def test_appends_reflection_to_jsonl(self, tmp_path: pathlib.Path):

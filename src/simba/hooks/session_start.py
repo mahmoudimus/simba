@@ -9,29 +9,26 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
-import sys
 import time
 
 import httpx
 
+import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
 
-_DAEMON_HOST = "localhost"
-_DAEMON_PORT = 8741
 _HEALTH_TIMEOUT = 0.5
 _POLL_ATTEMPTS = 15
 _POLL_INTERVAL = 0.3
 
 
-def _daemon_url() -> str:
-    return f"http://{_DAEMON_HOST}:{_DAEMON_PORT}"
-
-
 def _check_health() -> dict | None:
     """Check daemon health. Returns health dict or None if unreachable."""
     try:
-        resp = httpx.get(f"{_daemon_url()}/health", timeout=_HEALTH_TIMEOUT)
+        resp = httpx.get(
+            f"{simba.hooks._memory_client.daemon_url()}/health",
+            timeout=_HEALTH_TIMEOUT,
+        )
         if resp.status_code == 200:
             return resp.json()
     except (httpx.HTTPError, ValueError):
@@ -75,6 +72,7 @@ def _check_pending_extraction(session_id: str) -> str:
 
     transcript_path = metadata.get("transcript_path", "")
     export_session = metadata.get("session_id", session_id)
+    url = simba.hooks._memory_client.daemon_url()
 
     return (
         "\n<learning-extraction-required>\n"
@@ -82,13 +80,13 @@ def _check_pending_extraction(session_id: str) -> str:
         "learning extraction.\n\n"
         f"TRANSCRIPT: {transcript_path}\n"
         f"SESSION: {export_session}\n"
-        f"DAEMON: {_daemon_url()}\n\n"
+        f"DAEMON: {url}\n\n"
         "You MUST dispatch a sub-agent using the Task tool with this prompt:\n\n"
         "---\n"
         f"Read the transcript at {transcript_path} and extract learnings "
         "to store in the semantic memory database.\n\n"
         "For each learning found, store it by running:\n"
-        f"curl -X POST {_daemon_url()}/store "
+        f"curl -X POST {url}/store "
         '-H "Content-Type: application/json" '
         '-d \'{"type": "<TYPE>", "content": "<LEARNING>", '
         '"context": "<CONTEXT>", "confidence": <SCORE>, '
@@ -170,15 +168,3 @@ def main(hook_input: dict) -> str:
         }
     }
     return json.dumps(output)
-
-
-if __name__ == "__main__":
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(main(hook_data))

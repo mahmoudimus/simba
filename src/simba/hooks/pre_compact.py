@@ -14,6 +14,8 @@ import shutil
 import sys
 import time
 
+import simba.hooks._memory_client
+
 
 def _parse_transcript_to_markdown(lines: list[str]) -> tuple[str, int]:
     """Parse JSONL transcript lines into markdown. Returns (md, msg_count)."""
@@ -152,7 +154,7 @@ def main(hook_input: dict) -> str:
         "project_path": cwd_str,
         "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "transcript_path": str(dest_md),
-        "daemon_url": "http://localhost:8741",
+        "daemon_url": simba.hooks._memory_client.daemon_url(),
         "status": "pending_extraction",
     }
     metadata_path = session_dir / "metadata.json"
@@ -172,15 +174,3 @@ def main(hook_input: dict) -> str:
     print(f"[pre-compact] Transcript: {dest_md}", file=sys.stderr)
 
     return json.dumps({"suppressOutput": True})
-
-
-if __name__ == "__main__":
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(main(hook_data))
