@@ -2,6 +2,7 @@
 
 Usage:
     python -m simba.search init
+    python -m simba.search index
     python -m simba.search add-session "summary" '["file1"]' '["Read"]' "topics"
     python -m simba.search add-knowledge "area" "summary" "patterns"
     python -m simba.search add-fact "fact" "category"
@@ -15,9 +16,101 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
 import sys
 
+import simba.search.deps
 import simba.search.project_memory
+
+
+def _cmd_index(cwd: pathlib.Path) -> int:
+    """Check dependencies, initialize project memory, and index with QMD."""
+    project_name = cwd.name
+
+    # 1. Check dependencies
+    print("Checking dependencies...")
+    deps = simba.search.deps.check_all()
+    for name, (found, version) in deps.items():
+        if found:
+            status = f"  {version}"
+        else:
+            hint = simba.search.deps.get_install_instructions(name)
+            status = f"  MISSING — {hint}"
+        print(f"  {name}: {'ok' if found else 'missing'}{status}")
+    print()
+
+    # 2. Initialize SQLite project memory
+    db_path = simba.search.project_memory.get_db_path(cwd)
+    conn = simba.search.project_memory.init_db(db_path)
+    conn.close()
+    print(f"Project memory: {db_path}")
+
+    # 3. Index with QMD (optional — skip if not installed)
+    qmd_available = deps.get("qmd", (False, ""))[0]
+    if qmd_available:
+        print(f"\nIndexing with QMD (collection: {project_name})...")
+        try:
+            subprocess.run(
+                [
+                    "qmd",
+                    "collection",
+                    "add",
+                    ".",
+                    "--name",
+                    project_name,
+                    "--mask",
+                    "**/*.md",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(cwd),
+            )
+            desc = f"Codebase documentation for {project_name}"
+            subprocess.run(
+                ["qmd", "context", "add", ".", desc],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=str(cwd),
+            )
+            result = subprocess.run(
+                ["qmd", "embed"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(cwd),
+            )
+            if result.returncode == 0:
+                print("  QMD indexing complete.")
+            else:
+                print(f"  QMD embed returned code {result.returncode}", file=sys.stderr)
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f"  QMD indexing failed: {exc}", file=sys.stderr)
+    else:
+        print("\nQMD not installed — skipping semantic indexing.")
+
+    # 4. Summary
+    rg_available = deps.get("rg", (False, ""))[0]
+    if rg_available:
+        try:
+            result = subprocess.run(
+                ["rg", "--files"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(cwd),
+            )
+            stdout = result.stdout.strip()
+            file_count = len(stdout.splitlines()) if stdout else 0
+            print(f"\nProject: {project_name} ({file_count} files)")
+        except (subprocess.SubprocessError, OSError):
+            print(f"\nProject: {project_name}")
+    else:
+        print(f"\nProject: {project_name}")
+
+    print("Index complete.")
+    return 0
 
 
 def main() -> int:
@@ -35,6 +128,9 @@ def main() -> int:
         conn.close()
         print(f"Memory database initialized at {db_path}")
         return 0
+
+    if cmd == "index":
+        return _cmd_index(cwd)
 
     # For all other commands, get connection (init if needed)
     conn = simba.search.project_memory.get_connection(cwd)

@@ -46,7 +46,12 @@ class TestUserPromptSubmitHook:
 
     def test_includes_core_blocks(self, tmp_path):
         claude_md = tmp_path / "CLAUDE.md"
-        claude_md.write_text("# Rules\n<!-- CORE -->\nImportant rule\n<!-- /CORE -->\n")
+        claude_md.write_text(
+            "# Rules\n"
+            "<!-- BEGIN SIMBA:core -->\n"
+            "Important rule\n"
+            "<!-- END SIMBA:core -->\n"
+        )
 
         with unittest.mock.patch(
             "simba.hooks._memory_client.recall_memories", return_value=[]

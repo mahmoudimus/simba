@@ -1,10 +1,12 @@
 """Simba CLI — unified Claude Code plugin.
 
 Usage:
-    simba install          Register hooks in ~/.claude/settings.json
+    simba install          Register hooks and MCP server
     simba install --remove Remove simba hooks from settings
     simba server [opts]    Start the memory daemon
     simba search <cmd>     Project memory operations
+    simba stats            Show token economics and project statistics
+    simba neuron <cmd>     Neuro-symbolic logic server (MCP)
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
 
@@ -126,6 +128,22 @@ def _cmd_search(args: list[str]) -> int:
     return simba.search.__main__.main()
 
 
+def _cmd_stats() -> int:
+    """Show token economics and project statistics."""
+    import simba.stats
+
+    print(simba.stats.run_stats(pathlib.Path.cwd()))
+    return 0
+
+
+def _cmd_neuron(args: list[str]) -> int:
+    """Neuro-symbolic logic server (MCP)."""
+    sys.argv = ["simba neuron", *args]
+    import simba.neuron.__main__
+
+    return simba.neuron.__main__.main()
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -143,6 +161,10 @@ def main() -> None:
         sys.exit(_cmd_server(rest))
     elif cmd == "search":
         sys.exit(_cmd_search(rest))
+    elif cmd == "stats":
+        sys.exit(_cmd_stats())
+    elif cmd == "neuron":
+        sys.exit(_cmd_neuron(rest))
     else:
         print(__doc__)
         sys.exit(1)

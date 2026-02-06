@@ -11,10 +11,10 @@ class TestExtractCoreBlocks:
     def test_extracts_single_core_block(self):
         content = """\
 # Rules
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Rule one
 - Rule two
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 Other content.
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
@@ -25,14 +25,14 @@ Other content.
     def test_extracts_multiple_core_blocks(self):
         content = """\
 ## Section A
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Block A rule
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 
 ## Section B
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Block B rule
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert len(blocks) == 2
@@ -50,22 +50,22 @@ Other content.
 
     def test_excludes_core_tags_from_output(self):
         content = """\
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Important rule
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert len(blocks) == 1
-        assert "<!-- CORE -->" not in blocks[0]
-        assert "<!-- /CORE -->" not in blocks[0]
+        assert "<!-- BEGIN SIMBA:core -->" not in blocks[0]
+        assert "<!-- END SIMBA:core -->" not in blocks[0]
 
     def test_preserves_inner_content_formatting(self):
         content = """\
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Rule with **bold**
 - Rule with `code`
   - Nested item
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert "**bold**" in blocks[0]
@@ -74,8 +74,8 @@ Other content.
 
     def test_handles_empty_core_block(self):
         content = """\
-<!-- CORE -->
-<!-- /CORE -->
+<!-- BEGIN SIMBA:core -->
+<!-- END SIMBA:core -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert len(blocks) == 1
@@ -83,9 +83,9 @@ Other content.
 
     def test_handles_core_tags_with_extra_spaces(self):
         content = """\
-<!--  CORE  -->
+<!--  BEGIN  SIMBA:core  -->
 - Spaced rule
-<!--  /CORE  -->
+<!--  END  SIMBA:core  -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert len(blocks) == 1
@@ -93,7 +93,7 @@ Other content.
 
     def test_malformed_closing_tag_no_match(self):
         content = """\
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Unclosed rule
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
@@ -102,7 +102,7 @@ Other content.
     def test_malformed_opening_tag_no_match(self):
         content = """\
 - Not a core block
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 """
         blocks = simba.guardian.extract_core.extract_core_blocks(content)
         assert blocks == []

@@ -85,7 +85,7 @@ class TrackingMockTable:
     def vector_search(self, embedding: list[float]) -> TrackingMockVectorSearch:
         return TrackingMockVectorSearch(self._rows)
 
-    def search(self) -> TrackingMockSearch:
+    async def search(self) -> TrackingMockSearch:
         return TrackingMockSearch(self._rows)
 
     async def update(
