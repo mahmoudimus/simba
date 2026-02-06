@@ -133,11 +133,25 @@ class EmbeddingService:
 
     def _load_model(self, model_path: pathlib.Path) -> llama_cpp.Llama:
         """Load the GGUF model with embedding mode enabled."""
+        import ctypes
+
         import llama_cpp
+
+        # Suppress C-level ggml/llama.cpp log noise (bf16 kernel skips, etc.)
+        # Store on class to prevent garbage collection of the C callback.
+        if not hasattr(EmbeddingService, "_llama_log_cb"):
+            EmbeddingService._llama_log_cb = llama_cpp.llama_log_callback(
+                lambda *_args: None
+            )
+            llama_cpp.llama_log_set(
+                EmbeddingService._llama_log_cb, ctypes.c_void_p(0)
+            )
 
         return llama_cpp.Llama(
             model_path=str(model_path),
             embedding=True,
+            n_ctx=0,  # use model's training context (2048 for nomic-embed-text)
+            pooling_type=llama_cpp.LLAMA_POOLING_TYPE_MEAN,
             n_gpu_layers=self.config.n_gpu_layers,
             verbose=False,
         )

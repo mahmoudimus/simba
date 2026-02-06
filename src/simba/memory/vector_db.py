@@ -105,7 +105,8 @@ async def update_access_tracking(table: typing.Any, memory_ids: list[str]) -> No
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         for mid in memory_ids:
             # Read current accessCount so we can increment it.
-            rows = await table.search().where(f"id = '{mid}'").limit(1).to_list()
+            search = await table.search()
+            rows = await search.where(f"id = '{mid}'").limit(1).to_list()
             current_count = rows[0].get("accessCount", 0) if rows else 0
             await table.update(
                 where=f"id = '{mid}'",

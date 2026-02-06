@@ -2,7 +2,7 @@
 name = "simba"
 version = "0.1.0"
 description = ""
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
@@ -10,6 +10,8 @@ dependencies = [
     "httpx>=0.28",
     "llama-cpp-python>=0.3",
     "huggingface-hub>=0.26",
+    "mcp[cli]",
+    "z3-solver",
 ]
 
 [project.scripts]
@@ -36,7 +38,7 @@ dev = [
 [tool.ruff]
 src = ["src"]
 line-length = 88
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
@@ -57,6 +59,7 @@ select = [
 "tests/**/*.py" = ["TCH003"]
 "tests/conftest.py" = ["TCH003"]
 "tools/**/*.py" = ["N802"]  # libcst uses PascalCase visitor methods
+"src/simba/neuron/templates.py" = ["E501"]  # markdown template content
 
 [tool.ruff.lint.isort]
 known-first-party = ["simba"]
@@ -77,5 +80,5 @@ show_missing = true
 skip_empty = true
 
 [tool.pyrefly]
-python_version = "3.10"
+python_version = "3.12"
 search_path = ["src"]

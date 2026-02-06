@@ -1,4 +1,4 @@
-"""Extract content between <!-- CORE --> tags from CLAUDE.md.
+"""Extract content between SIMBA:core markers from CLAUDE.md.
 
 Used by UserPromptSubmit hook to inject essential rules every prompt.
 """
@@ -7,18 +7,14 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 import sys
 
-_CORE_PATTERN = re.compile(
-    r"<!--\s*CORE\s*-->\n(.*?)<!--\s*/CORE\s*-->",
-    re.DOTALL,
-)
+import simba.markers
 
 
 def extract_core_blocks(content: str) -> list[str]:
-    """Extract all content blocks between <!-- CORE --> and <!-- /CORE --> tags."""
-    return _CORE_PATTERN.findall(content)
+    """Extract all content blocks between SIMBA:core markers."""
+    return simba.markers.extract_blocks(content, "core")
 
 
 def main(cwd: pathlib.Path | None = None) -> str:

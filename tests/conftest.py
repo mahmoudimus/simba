@@ -17,30 +17,30 @@ def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
 
 @pytest.fixture
 def claude_md_with_core(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Create a CLAUDE.md with CORE-tagged sections."""
+    """Create a CLAUDE.md with SIMBA:core-tagged sections."""
     content = """\
 # Project Rules
 
 ## Critical Constraints
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Never delete files without confirmation
 - Always run tests before committing
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 
 Extended explanation of constraints...
 
 ## Code Style
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 - Use descriptive variable names
 - Keep functions short
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 
 Detailed style guidelines...
 
 ## Memory Signal
-<!-- CORE -->
+<!-- BEGIN SIMBA:core -->
 End every response with: [✓ rules]
-<!-- /CORE -->
+<!-- END SIMBA:core -->
 """
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text(content)
