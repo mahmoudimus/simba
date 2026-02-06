@@ -10,15 +10,11 @@ import contextlib
 import hashlib
 import json
 import pathlib
-import sys
 import time
 
-import httpx
+import simba.hooks._memory_client
 
-_DAEMON_PORT = 8741
 _MIN_SIMILARITY = 0.35
-_MAX_RESULTS = 3
-_TIMEOUT = 2.0
 _THINKING_CHARS = 1500
 _DEDUP_TTL = 60  # seconds
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
@@ -91,47 +87,6 @@ def _save_hash(text: str) -> None:
         )
 
 
-def _recall_memories(query: str, project_path: str | None = None) -> list[dict]:
-    """Query the memory daemon for relevant memories."""
-    url = f"http://localhost:{_DAEMON_PORT}/recall"
-    payload: dict = {
-        "query": query,
-        "minSimilarity": _MIN_SIMILARITY,
-        "maxResults": _MAX_RESULTS,
-    }
-    if project_path:
-        payload["projectPath"] = project_path
-
-    try:
-        resp = httpx.post(url, json=payload, timeout=_TIMEOUT)
-        if resp.status_code == 200:
-            return resp.json().get("memories", [])
-    except (httpx.HTTPError, ValueError):
-        pass
-    return []
-
-
-def _format_memories(memories: list[dict]) -> str:
-    """Format recalled memories as XML context."""
-    if not memories:
-        return ""
-
-    similarities = "-".join(f"{m.get('similarity', 0):.2f}" for m in memories)
-    lines = [
-        f"[Recalled {len(memories)} memories | similarity: {similarities}]",
-        '<recalled-memories source="thinking-block">',
-    ]
-    for m in memories:
-        mtype = m.get("type", "UNKNOWN")
-        sim = m.get("similarity", 0)
-        content = m.get("content", "")
-        lines.append(f'  <memory type="{mtype}" similarity="{sim:.2f}">')
-        lines.append(f"    {content}")
-        lines.append("  </memory>")
-    lines.append("</recalled-memories>")
-    return "\n".join(lines)
-
-
 def main(hook_input: dict) -> str:
     """Run the PreToolUse hook pipeline. Returns JSON output string."""
     tool_name = hook_input.get("tool_name", "")
@@ -155,12 +110,16 @@ def main(hook_input: dict) -> str:
         return json.dumps({"hookSpecificOutput": {}})
 
     project_path = cwd_str if cwd_str else None
-    memories = _recall_memories(thinking, project_path=project_path)
+    memories = simba.hooks._memory_client.recall_memories(
+        thinking, project_path=project_path, min_similarity=_MIN_SIMILARITY
+    )
 
     if memories:
         _save_hash(thinking)
 
-    formatted = _format_memories(memories)
+    formatted = simba.hooks._memory_client.format_memories(
+        memories, source="thinking-block"
+    )
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -168,15 +127,3 @@ def main(hook_input: dict) -> str:
         }
     }
     return json.dumps(output)
-
-
-if __name__ == "__main__":
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(main(hook_data))

@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import pathlib
-import sys
 
 import simba.search.activity_tracker
 
@@ -18,7 +17,13 @@ def main(hook_input: dict) -> str:
     cwd = pathlib.Path(cwd_str) if cwd_str else pathlib.Path.cwd()
 
     if not tool_name:
-        return json.dumps({"hookSpecificOutput": {}})
+        return json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                }
+            }
+        )
 
     detail = ""
     if tool_name in ("Read", "Edit", "Write"):
@@ -36,16 +41,10 @@ def main(hook_input: dict) -> str:
     with contextlib.suppress(Exception):
         simba.search.activity_tracker.log_activity(cwd, tool_name, detail)
 
-    return json.dumps({"hookSpecificOutput": {}})
-
-
-if __name__ == "__main__":
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(main(hook_data))
+    return json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+            }
+        }
+    )

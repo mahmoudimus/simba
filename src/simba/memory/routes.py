@@ -5,6 +5,7 @@ Ported from claude-memory/routes/*.js — all 6 endpoints in a single file.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import pathlib
@@ -20,6 +21,9 @@ import simba.memory.vector_db
 logger = logging.getLogger("simba.memory")
 
 router = fastapi.APIRouter()
+
+# Background tasks need a strong reference to avoid GC before completion.
+_background_tasks: set[asyncio.Task[None]] = set()
 
 VALID_TYPES = [
     "GOTCHA",
@@ -173,6 +177,16 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         query_time_ms,
         top_sim,
     )
+
+    # Fire-and-forget: update access tracking for returned memories.
+    if results:
+        recalled_ids = [r["id"] for r in results]
+        task = asyncio.create_task(
+            simba.memory.vector_db.update_access_tracking(table, recalled_ids)
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
     return {"memories": results, "queryTimeMs": query_time_ms}
 
 

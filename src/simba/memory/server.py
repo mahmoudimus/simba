@@ -120,9 +120,12 @@ async def init_embeddings(
     logger = logging.getLogger("simba.memory")
     config: simba.memory.config.MemoryConfig = app.state.config
     service = simba.memory.embeddings.EmbeddingService(config)
-    logger.info("[embed] Loading model...")
+    if config.embed_url:
+        logger.info("[embed] Connecting to %s ...", config.embed_url)
+    else:
+        logger.info("[embed] Loading model...")
     await service.start()
-    logger.info("[embed] Model ready")
+    logger.info("[embed] Ready")
     app.state.embed = service.embed
     app.state.embed_query = lambda text: service.embed(
         text, task=simba.memory.embeddings.TaskType.QUERY
@@ -164,6 +167,13 @@ def main() -> None:
         default=None,
         help="GPU layers to offload (-1=all, 0=CPU only, default: -1)",
     )
+    parser.add_argument(
+        "--embed-url",
+        default=None,
+        help="URL of an OpenAI-compatible embedding server "
+        "(e.g. http://localhost:8080). When set, uses HTTP "
+        "instead of loading the model in-process.",
+    )
     args = parser.parse_args()
 
     config = simba.memory.config.load_config(
@@ -171,6 +181,7 @@ def main() -> None:
         db_path=args.db_path,
         model_path=args.model_path,
         n_gpu_layers=args.n_gpu_layers,
+        embed_url=args.embed_url,
     )
     app = create_app(config, use_lifespan=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port)

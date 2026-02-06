@@ -126,7 +126,8 @@ def parse_transcript_content(lines: list[str]) -> str:
             continue
 
         if "toolUseResult" in entry:
-            parts.append(entry["toolUseResult"])
+            val = entry["toolUseResult"]
+            parts.append(val if isinstance(val, str) else json.dumps(val))
 
         message = entry.get("message", {})
         if isinstance(message, dict):
@@ -136,7 +137,8 @@ def parse_transcript_content(lines: list[str]) -> str:
                     and item.get("type") == "tool_result"
                     and item.get("content")
                 ):
-                    parts.append(item["content"])
+                    val = item["content"]
+                    parts.append(val if isinstance(val, str) else json.dumps(val))
 
     return "\n".join(parts)
 

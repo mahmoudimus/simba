@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import sys
 
 import simba.guardian.check_signal
 import simba.tailor.hook
@@ -32,23 +31,11 @@ def main(hook_input: dict) -> str:
     # 2. Tailor: error capture from transcript
     simba.tailor.hook.process_hook(json.dumps(hook_input))
 
+    # Stop hooks don't support hookSpecificOutput — only top-level fields.
+    # The tailor error capture writes to disk as a side effect.
+    # Return a minimal valid object.
+    output: dict = {}
     combined = "\n\n".join(parts)
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "Stop",
-            "additionalContext": combined,
-        }
-    }
+    if combined:
+        output["stopReason"] = combined
     return json.dumps(output)
-
-
-if __name__ == "__main__":
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(main(hook_data))

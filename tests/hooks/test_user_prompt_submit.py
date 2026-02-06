@@ -11,7 +11,7 @@ import simba.hooks.user_prompt_submit
 class TestUserPromptSubmitHook:
     def test_returns_valid_json(self, tmp_path):
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories", return_value=[]
+            "simba.hooks._memory_client.recall_memories", return_value=[]
         ):
             result = json.loads(
                 simba.hooks.user_prompt_submit.main({"cwd": str(tmp_path)})
@@ -21,7 +21,7 @@ class TestUserPromptSubmitHook:
 
     def test_skips_short_prompts(self, tmp_path):
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories"
+            "simba.hooks._memory_client.recall_memories"
         ) as mock_recall:
             simba.hooks.user_prompt_submit.main({"prompt": "hi", "cwd": str(tmp_path)})
         mock_recall.assert_not_called()
@@ -29,7 +29,7 @@ class TestUserPromptSubmitHook:
     def test_recalls_with_long_prompt(self, tmp_path):
         memories = [{"type": "GOTCHA", "content": "test memory", "similarity": 0.8}]
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories",
+            "simba.hooks._memory_client.recall_memories",
             return_value=memories,
         ):
             result = json.loads(
@@ -49,7 +49,7 @@ class TestUserPromptSubmitHook:
         claude_md.write_text("# Rules\n<!-- CORE -->\nImportant rule\n<!-- /CORE -->\n")
 
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories", return_value=[]
+            "simba.hooks._memory_client.recall_memories", return_value=[]
         ):
             result = json.loads(
                 simba.hooks.user_prompt_submit.main({"cwd": str(tmp_path)})
@@ -59,7 +59,7 @@ class TestUserPromptSubmitHook:
 
     def test_passes_project_path_to_recall(self, tmp_path):
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories",
+            "simba.hooks._memory_client.recall_memories",
             return_value=[],
         ) as mock_recall:
             simba.hooks.user_prompt_submit.main(
@@ -75,7 +75,7 @@ class TestUserPromptSubmitHook:
     def test_includes_search_context(self, tmp_path):
         with (
             unittest.mock.patch(
-                "simba.hooks.user_prompt_submit._recall_memories",
+                "simba.hooks._memory_client.recall_memories",
                 return_value=[],
             ),
             unittest.mock.patch(
@@ -97,7 +97,7 @@ class TestUserPromptSubmitHook:
     def test_search_context_error_does_not_crash(self, tmp_path):
         with (
             unittest.mock.patch(
-                "simba.hooks.user_prompt_submit._recall_memories",
+                "simba.hooks._memory_client.recall_memories",
                 return_value=[],
             ),
             unittest.mock.patch(
@@ -117,7 +117,7 @@ class TestUserPromptSubmitHook:
 
     def test_empty_input(self):
         with unittest.mock.patch(
-            "simba.hooks.user_prompt_submit._recall_memories", return_value=[]
+            "simba.hooks._memory_client.recall_memories", return_value=[]
         ):
             result = json.loads(simba.hooks.user_prompt_submit.main({}))
         assert "hookSpecificOutput" in result

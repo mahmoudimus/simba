@@ -20,6 +20,13 @@ def config(tmp_path: pathlib.Path) -> simba.memory.config.MemoryConfig:
 
 
 @pytest.fixture
+def http_config() -> simba.memory.config.MemoryConfig:
+    return simba.memory.config.MemoryConfig(
+        embed_url="http://localhost:8080",
+    )
+
+
+@pytest.fixture
 def mock_embedding() -> list[float]:
     return [0.1] * 768
 
@@ -32,7 +39,7 @@ def mock_llama(mock_embedding: list[float]) -> unittest.mock.MagicMock:
     return llama
 
 
-class TestEmbeddingService:
+class TestEmbeddingServiceLocal:
     @pytest.mark.asyncio
     async def test_embed_returns_vector(
         self,
@@ -192,3 +199,105 @@ class TestEmbeddingService:
             assert service._model is not None
             await service.stop()
             assert service._model is None
+
+    @pytest.mark.asyncio
+    async def test_is_not_http_mode(
+        self,
+        config: simba.memory.config.MemoryConfig,
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(config)
+        assert service.is_http_mode is False
+
+
+class TestEmbeddingServiceHTTP:
+    @pytest.mark.asyncio
+    async def test_is_http_mode(
+        self,
+        http_config: simba.memory.config.MemoryConfig,
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(http_config)
+        assert service.is_http_mode is True
+
+    @pytest.mark.asyncio
+    async def test_embed_calls_http_endpoint(
+        self,
+        http_config: simba.memory.config.MemoryConfig,
+        mock_embedding: list[float],
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(http_config)
+
+        mock_response = unittest.mock.MagicMock()
+        mock_response.raise_for_status = unittest.mock.MagicMock()
+        mock_response.json.return_value = {"data": [{"embedding": mock_embedding}]}
+
+        mock_client = unittest.mock.AsyncMock()
+        mock_client.post.return_value = mock_response
+        mock_client.aclose = unittest.mock.AsyncMock()
+
+        service._http_client = mock_client
+        service._task = asyncio.create_task(service._process_loop())
+
+        try:
+            result = await service.embed("test text")
+            assert result == mock_embedding
+            mock_client.post.assert_called_once_with(
+                "/v1/embeddings",
+                json={
+                    "input": "search_document: test text",
+                    "model": "nomic-embed-text",
+                },
+            )
+        finally:
+            await service.stop()
+
+    @pytest.mark.asyncio
+    async def test_embed_query_uses_query_prefix_http(
+        self,
+        http_config: simba.memory.config.MemoryConfig,
+        mock_embedding: list[float],
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(http_config)
+
+        mock_response = unittest.mock.MagicMock()
+        mock_response.raise_for_status = unittest.mock.MagicMock()
+        mock_response.json.return_value = {"data": [{"embedding": mock_embedding}]}
+
+        mock_client = unittest.mock.AsyncMock()
+        mock_client.post.return_value = mock_response
+        mock_client.aclose = unittest.mock.AsyncMock()
+
+        service._http_client = mock_client
+        service._task = asyncio.create_task(service._process_loop())
+
+        try:
+            result = await service.embed(
+                "test query",
+                task=simba.memory.embeddings.TaskType.QUERY,
+            )
+            assert result == mock_embedding
+            mock_client.post.assert_called_once_with(
+                "/v1/embeddings",
+                json={
+                    "input": "search_query: test query",
+                    "model": "nomic-embed-text",
+                },
+            )
+        finally:
+            await service.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_closes_http_client(
+        self,
+        http_config: simba.memory.config.MemoryConfig,
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(http_config)
+
+        mock_client = unittest.mock.AsyncMock()
+        mock_client.aclose = unittest.mock.AsyncMock()
+
+        service._http_client = mock_client
+        service._task = asyncio.create_task(service._process_loop())
+
+        await service.stop()
+        mock_client.aclose.assert_called_once()
+        assert service._http_client is None

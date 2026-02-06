@@ -1,6 +1,7 @@
-"""In-process embedding service using llama-cpp-python with async queue.
+"""Embedding service with two backends: in-process GGUF or external HTTP server.
 
-Replaces the Ollama HTTP-based approach with direct GGUF model inference.
+In-process mode (default): loads a GGUF model via llama-cpp-python.
+HTTP mode (--embed-url): calls an OpenAI-compatible /v1/embeddings endpoint.
 """
 
 from __future__ import annotations
@@ -28,7 +29,12 @@ class TaskType(enum.Enum):
 
 
 class EmbeddingService:
-    """Async embedding service using llama-cpp-python with sequential queue."""
+    """Async embedding service with sequential queue.
+
+    Two backends selected by config.embed_url:
+    - empty (default): in-process GGUF via llama-cpp-python
+    - set: HTTP POST to an OpenAI-compatible /v1/embeddings endpoint
+    """
 
     def __init__(self, config: simba.memory.config.MemoryConfig) -> None:
         self.config = config
@@ -36,21 +42,46 @@ class EmbeddingService:
             tuple[str, TaskType, asyncio.Future[list[float]]]
         ] = asyncio.Queue()
         self._model: llama_cpp.Llama | None = None
+        self._http_client: object | None = None  # httpx.AsyncClient when in HTTP mode
         self._task: asyncio.Task[None] | None = None
 
+    @property
+    def is_http_mode(self) -> bool:
+        return bool(self.config.embed_url)
+
     async def start(self) -> None:
-        """Load the GGUF model and start the background queue processor."""
+        """Load the model or connect to the HTTP server, then start the queue."""
+        if self.is_http_mode:
+            await self._start_http()
+        else:
+            await self._start_local()
+        self._task = asyncio.create_task(self._process_loop())
+
+    async def _start_local(self) -> None:
+        """Load the GGUF model for in-process inference."""
         model_path = await asyncio.to_thread(self._resolve_model_path)
         self._model = await asyncio.to_thread(self._load_model, model_path)
         logger.info("[embed] Model loaded: %s", model_path.name)
-        self._task = asyncio.create_task(self._process_loop())
+
+    async def _start_http(self) -> None:
+        """Create an HTTP client for the external embedding server."""
+        import httpx
+
+        self._http_client = httpx.AsyncClient(
+            base_url=self.config.embed_url,
+            timeout=30.0,
+        )
+        logger.info("[embed] Using external server: %s", self.config.embed_url)
 
     async def stop(self) -> None:
-        """Stop the service and release model resources."""
+        """Stop the service and release resources."""
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        if self._http_client is not None:
+            await self._http_client.aclose()  # type: ignore[union-attr]
+            self._http_client = None
         self._model = None
 
     async def embed(
@@ -70,12 +101,17 @@ class EmbeddingService:
         while True:
             text, task, future = await self._queue.get()
             try:
-                result = await asyncio.to_thread(self._embed_sync, text, task)
+                if self.is_http_mode:
+                    result = await self._embed_http(text, task)
+                else:
+                    result = await asyncio.to_thread(self._embed_sync, text, task)
                 future.set_result(result)
             except Exception as e:
                 future.set_exception(e)
             finally:
                 self._queue.task_done()
+
+    # ── Local (in-process) backend ──────────────────────────────────
 
     def _resolve_model_path(self) -> pathlib.Path:
         """Resolve model path: use config.model_path if set, else download."""
@@ -112,5 +148,24 @@ class EmbeddingService:
         prefixed = f"{task.value}: {text}"
         result = self._model.create_embedding(prefixed)
         embedding = result["data"][0]["embedding"]
+        assert isinstance(embedding, list)
+        return embedding  # type: ignore[return-value]
+
+    # ── HTTP (external server) backend ──────────────────────────────
+
+    async def _embed_http(self, text: str, task: TaskType) -> list[float]:
+        """Call the external OpenAI-compatible embedding endpoint."""
+        assert self._http_client is not None
+        prefixed = f"{task.value}: {text}"
+        response = await self._http_client.post(
+            "/v1/embeddings",
+            json={
+                "input": prefixed,
+                "model": self.config.embedding_model,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        embedding = data["data"][0]["embedding"]
         assert isinstance(embedding, list)
         return embedding  # type: ignore[return-value]

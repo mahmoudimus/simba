@@ -43,7 +43,7 @@ class TestPreToolUseHook:
         memories = [{"type": "GOTCHA", "content": "auth uses JWT", "similarity": 0.5}]
         with (
             unittest.mock.patch(
-                "simba.hooks.pre_tool_use._recall_memories",
+                "simba.hooks._memory_client.recall_memories",
                 return_value=memories,
             ),
             unittest.mock.patch(
@@ -97,7 +97,7 @@ class TestPreToolUseHook:
 
         with (
             unittest.mock.patch(
-                "simba.hooks.pre_tool_use._recall_memories",
+                "simba.hooks._memory_client.recall_memories",
                 return_value=[],
             ) as mock_recall,
             unittest.mock.patch(

@@ -1,30 +1,15 @@
-"""LanceDB operations — cosine similarity, search, deduplication, CRUD.
+"""LanceDB operations — search, deduplication, CRUD.
 
 Ported from claude-memory/services/vector-db.js.
 """
 
 from __future__ import annotations
 
-import math
+import logging
+import time
 import typing
 
-
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-
-    dot_product = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
-
-    for i in range(len(a)):
-        dot_product += a[i] * b[i]
-        norm_a += a[i] * a[i]
-        norm_b += b[i] * b[i]
-
-    denominator = math.sqrt(norm_a) * math.sqrt(norm_b)
-    return 0.0 if denominator == 0 else dot_product / denominator
+logger = logging.getLogger("simba.memory")
 
 
 async def find_duplicates(
@@ -109,3 +94,29 @@ async def count_rows(table: typing.Any) -> int:
         return await table.count_rows()
     except Exception:
         return 0
+
+
+async def update_access_tracking(table: typing.Any, memory_ids: list[str]) -> None:
+    """Update lastAccessedAt and increment accessCount for recalled memories.
+
+    Fire-and-forget: exceptions are logged but never propagated.
+    """
+    try:
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for mid in memory_ids:
+            # Read current accessCount so we can increment it.
+            rows = await table.search().where(f"id = '{mid}'").limit(1).to_list()
+            current_count = rows[0].get("accessCount", 0) if rows else 0
+            await table.update(
+                where=f"id = '{mid}'",
+                values={
+                    "lastAccessedAt": now,
+                    "accessCount": current_count + 1,
+                },
+            )
+    except Exception:
+        logger.debug(
+            "access-tracking update failed for ids=%s",
+            memory_ids,
+            exc_info=True,
+        )

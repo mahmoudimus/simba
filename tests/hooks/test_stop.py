@@ -10,8 +10,8 @@ import simba.hooks.stop
 class TestStopHook:
     def test_returns_valid_json(self, tmp_path):
         result = json.loads(simba.hooks.stop.main({"cwd": str(tmp_path)}))
-        assert "hookSpecificOutput" in result
-        assert result["hookSpecificOutput"]["hookEventName"] == "Stop"
+        # Stop hooks don't use hookSpecificOutput — only top-level fields
+        assert "hookSpecificOutput" not in result
 
     def test_no_warning_when_signal_present(self, tmp_path):
         result = json.loads(
@@ -22,8 +22,9 @@ class TestStopHook:
                 }
             )
         )
-        ctx = result["hookSpecificOutput"]["additionalContext"]
-        assert "MEMORY ALERT" not in ctx
+        assert "stopReason" not in result or "MEMORY ALERT" not in result.get(
+            "stopReason", ""
+        )
 
     def test_warning_when_signal_missing(self, tmp_path):
         claude_md = tmp_path / "CLAUDE.md"
@@ -37,14 +38,13 @@ class TestStopHook:
                 }
             )
         )
-        ctx = result["hookSpecificOutput"]["additionalContext"]
-        assert "MEMORY ALERT" in ctx
-        assert "Project Rules" in ctx
+        reason = result.get("stopReason", "")
+        assert "MEMORY ALERT" in reason
+        assert "Project Rules" in reason
 
     def test_no_warning_without_response(self, tmp_path):
         result = json.loads(simba.hooks.stop.main({"cwd": str(tmp_path)}))
-        ctx = result["hookSpecificOutput"]["additionalContext"]
-        assert ctx == ""
+        assert result == {}
 
     def test_runs_tailor_error_capture(self, tmp_path):
         # Verify process_hook is called (should not crash)
@@ -56,4 +56,5 @@ class TestStopHook:
                 }
             )
         )
-        assert "hookSpecificOutput" in result
+        # No hookSpecificOutput for Stop hooks
+        assert "hookSpecificOutput" not in result
