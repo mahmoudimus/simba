@@ -55,6 +55,7 @@ def create_app(
     app.state.table = None
     app.state.db_path = None
     app.state.embed = None
+    app.state.embed_query = None
 
     return app
 
@@ -116,10 +117,16 @@ async def init_embeddings(
     app: fastapi.FastAPI,
 ) -> simba.memory.embeddings.EmbeddingService:
     """Initialize the embedding service and attach to app state."""
+    logger = logging.getLogger("simba.memory")
     config: simba.memory.config.MemoryConfig = app.state.config
     service = simba.memory.embeddings.EmbeddingService(config)
+    logger.info("[embed] Loading model...")
     await service.start()
+    logger.info("[embed] Model ready")
     app.state.embed = service.embed
+    app.state.embed_query = lambda text: service.embed(
+        text, task=simba.memory.embeddings.TaskType.QUERY
+    )
     app.state._embedding_service = service
     return service
 
@@ -146,9 +153,25 @@ def main() -> None:
         default=None,
         help=f"Database directory (default: cwd/{_DEFAULT_DB_DIR})",
     )
+    parser.add_argument(
+        "--model-path",
+        default=None,
+        help="Path to GGUF model file (default: auto-download from HuggingFace)",
+    )
+    parser.add_argument(
+        "--n-gpu-layers",
+        type=int,
+        default=None,
+        help="GPU layers to offload (-1=all, 0=CPU only, default: -1)",
+    )
     args = parser.parse_args()
 
-    config = simba.memory.config.load_config(port=args.port, db_path=args.db_path)
+    config = simba.memory.config.load_config(
+        port=args.port,
+        db_path=args.db_path,
+        model_path=args.model_path,
+        n_gpu_layers=args.n_gpu_layers,
+    )
     app = create_app(config, use_lifespan=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port)
 

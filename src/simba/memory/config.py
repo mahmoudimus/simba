@@ -15,11 +15,13 @@ class MemoryConfig:
     db_path: str = ""
     embedding_model: str = "nomic-embed-text"
     embedding_dims: int = 768
-    ollama_url: str = "http://localhost:11434"
+    model_repo: str = "nomic-ai/nomic-embed-text-v1.5-GGUF"
+    model_file: str = "nomic-embed-text-v1.5.Q4_K_M.gguf"
+    model_path: str = ""
+    n_gpu_layers: int = -1
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92
-    timeout_ms: int = 10000
     max_content_length: int = 200
     auto_start: bool = True
 

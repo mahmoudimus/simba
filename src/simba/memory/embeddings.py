@@ -1,116 +1,116 @@
-"""Ollama embedding service with async queue.
+"""In-process embedding service using llama-cpp-python with async queue.
 
-Ported from claude-memory/services/embeddings.js.
+Replaces the Ollama HTTP-based approach with direct GGUF model inference.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
 import logging
+import pathlib
 from typing import TYPE_CHECKING
 
-import httpx
-
 if TYPE_CHECKING:
-    from simba.memory.config import MemoryConfig
+    import llama_cpp
+
+    import simba.memory.config
 
 logger = logging.getLogger("simba.memory")
 
-_MAX_RETRIES = 3
-_RETRY_DELAYS = (0.5, 1.0, 2.0)
+
+class TaskType(enum.Enum):
+    """Nomic-embed-text task prefixes for asymmetric embedding."""
+
+    DOCUMENT = "search_document"
+    QUERY = "search_query"
 
 
 class EmbeddingService:
-    """Async embedding service that queues requests to Ollama."""
+    """Async embedding service using llama-cpp-python with sequential queue."""
 
-    def __init__(self, config: MemoryConfig) -> None:
+    def __init__(self, config: simba.memory.config.MemoryConfig) -> None:
         self.config = config
-        self._queue: asyncio.Queue[tuple[str, asyncio.Future[list[float]]]] = (
-            asyncio.Queue()
-        )
-        self._processing = False
-        self._client: httpx.AsyncClient | None = None
+        self._queue: asyncio.Queue[
+            tuple[str, TaskType, asyncio.Future[list[float]]]
+        ] = asyncio.Queue()
+        self._model: llama_cpp.Llama | None = None
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        """Start the background queue processor."""
-        self._client = httpx.AsyncClient(timeout=self.config.timeout_ms / 1000)
+        """Load the GGUF model and start the background queue processor."""
+        model_path = await asyncio.to_thread(self._resolve_model_path)
+        self._model = await asyncio.to_thread(self._load_model, model_path)
+        logger.info("[embed] Model loaded: %s", model_path.name)
         self._task = asyncio.create_task(self._process_loop())
 
     async def stop(self) -> None:
-        """Stop the service and clean up."""
+        """Stop the service and release model resources."""
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-        if self._client:
-            await self._client.aclose()
+        self._model = None
 
-    async def embed(self, text: str) -> list[float]:
-        """Queue a text for embedding and return the result."""
+    async def embed(
+        self, text: str, *, task: TaskType = TaskType.DOCUMENT
+    ) -> list[float]:
+        """Queue text for embedding and return the result.
+
+        Default task is DOCUMENT (for storage). Use TaskType.QUERY for recall.
+        """
         loop = asyncio.get_running_loop()
         future: asyncio.Future[list[float]] = loop.create_future()
-        await self._queue.put((text, future))
+        await self._queue.put((text, task, future))
         return await future
 
     async def _process_loop(self) -> None:
         """Background loop that processes embedding requests sequentially."""
         while True:
-            text, future = await self._queue.get()
+            text, task, future = await self._queue.get()
             try:
-                result = await self._embed_direct(text)
+                result = await asyncio.to_thread(self._embed_sync, text, task)
                 future.set_result(result)
             except Exception as e:
                 future.set_exception(e)
             finally:
                 self._queue.task_done()
-                # Small delay to let Ollama breathe
-                if not self._queue.empty():
-                    await asyncio.sleep(0.1)
 
-    async def _embed_direct(self, text: str) -> list[float]:
-        """Direct embedding call to Ollama with retry on transient errors."""
-        assert self._client is not None
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_RETRIES):
-            try:
-                response = await self._client.post(
-                    f"{self.config.ollama_url}/api/embeddings",
-                    json={
-                        "model": self.config.embedding_model,
-                        "prompt": text,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["embedding"]
-            except httpx.HTTPStatusError as e:
-                last_exc = e
-                status = e.response.status_code
-                if status >= 500 and attempt < _MAX_RETRIES - 1:
-                    delay = _RETRY_DELAYS[attempt]
-                    logger.warning(
-                        "[embed] Ollama %d error, retrying in %.1fs (attempt %d/%d)",
-                        status,
-                        delay,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-            except (httpx.ConnectError, httpx.ReadTimeout) as e:
-                last_exc = e
-                if attempt < _MAX_RETRIES - 1:
-                    delay = _RETRY_DELAYS[attempt]
-                    logger.warning(
-                        "[embed] Ollama connection error, retrying in %.1fs (attempt %d/%d)",
-                        delay,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-        raise last_exc  # type: ignore[misc]
+    def _resolve_model_path(self) -> pathlib.Path:
+        """Resolve model path: use config.model_path if set, else download."""
+        if self.config.model_path:
+            path = pathlib.Path(self.config.model_path)
+            if not path.exists():
+                msg = f"Model file not found: {path}"
+                raise FileNotFoundError(msg)
+            return path
+
+        import huggingface_hub
+
+        return pathlib.Path(
+            huggingface_hub.hf_hub_download(
+                repo_id=self.config.model_repo,
+                filename=self.config.model_file,
+            )
+        )
+
+    def _load_model(self, model_path: pathlib.Path) -> llama_cpp.Llama:
+        """Load the GGUF model with embedding mode enabled."""
+        import llama_cpp
+
+        return llama_cpp.Llama(
+            model_path=str(model_path),
+            embedding=True,
+            n_gpu_layers=self.config.n_gpu_layers,
+            verbose=False,
+        )
+
+    def _embed_sync(self, text: str, task: TaskType) -> list[float]:
+        """Synchronous embedding call (runs in executor thread)."""
+        assert self._model is not None
+        prefixed = f"{task.value}: {text}"
+        result = self._model.create_embedding(prefixed)
+        embedding = result["data"][0]["embedding"]
+        assert isinstance(embedding, list)
+        return embedding  # type: ignore[return-value]

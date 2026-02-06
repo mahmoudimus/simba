@@ -3,42 +3,42 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.session_start",
+        "command": "simba hook SessionStart",
         "timeout": 15000
       }
     ],
     "UserPromptSubmit": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.user_prompt_submit",
+        "command": "simba hook UserPromptSubmit",
         "timeout": 3000
       }
     ],
     "PostToolUse": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.post_tool_use",
+        "command": "simba hook PostToolUse",
         "timeout": 3000
       }
     ],
     "PreToolUse": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.pre_tool_use",
+        "command": "simba hook PreToolUse",
         "timeout": 3000
       }
     ],
     "PreCompact": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.pre_compact",
+        "command": "simba hook PreCompact",
         "timeout": 5000
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "uv run python -m simba.hooks.stop",
+        "command": "simba hook Stop",
         "timeout": 5000
       }
     ]

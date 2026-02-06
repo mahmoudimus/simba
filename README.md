@@ -19,7 +19,7 @@ Simba hooks into six Claude Code lifecycle events to provide persistent context 
 
 ### Memory Daemon (`simba.memory`)
 
-A FastAPI server backed by LanceDB for vector storage and Ollama for embeddings. Stores typed memories (GOTCHA, WORKING_SOLUTION, PATTERN, DECISION, FAILURE, PREFERENCE) with cosine similarity search, duplicate detection, and project-scoped filtering.
+A FastAPI server backed by LanceDB for vector storage and llama-cpp-python for in-process embeddings. Stores typed memories (GOTCHA, WORKING_SOLUTION, PATTERN, DECISION, FAILURE, PREFERENCE) with cosine similarity search, duplicate detection, and project-scoped filtering. The embedding model (nomic-embed-text GGUF) is loaded directly in the daemon process -- no external inference server required.
 
 **Endpoints:** POST `/store`, POST `/recall`, GET `/health`, GET `/stats`, GET `/list`, DELETE `/memory/:id`
 
@@ -46,11 +46,8 @@ Extracts content between `<!-- CORE -->` tags from CLAUDE.md and injects it as c
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- [Ollama](https://ollama.ai/) running with the `nomic-embed-text` model
 
-```
-ollama pull nomic-embed-text
-```
+The embedding model (~81 MB, nomic-embed-text-v1.5 Q4_K_M) is automatically downloaded from Hugging Face on first daemon startup.
 
 Optional external tools for enhanced search:
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) -- fast file discovery
@@ -82,6 +79,12 @@ uv run python -m simba.memory.server --db-path /path/to/db
 
 # Custom port
 uv run python -m simba.memory.server --port 9000
+
+# Use a specific GGUF model file
+uv run python -m simba.memory.server --model-path /path/to/model.gguf
+
+# CPU-only mode (no GPU offloading)
+uv run python -m simba.memory.server --n-gpu-layers 0
 ```
 
 The SessionStart hook auto-starts the daemon if it is not already running.
@@ -147,10 +150,10 @@ Seven custom slash commands are provided as skills:
 ```
 src/simba/
   memory/
-    server.py          FastAPI daemon with LanceDB + Ollama
+    server.py          FastAPI daemon with LanceDB + llama-cpp-python
     routes.py          6 REST endpoints with recall logging
     vector_db.py       Cosine similarity, search, dedup
-    embeddings.py      Ollama embedding service with async queue
+    embeddings.py      In-process GGUF embedding service with async queue
     config.py          Configuration dataclass
   search/
     project_memory.py  SQLite FTS5 for sessions, knowledge, facts
@@ -176,7 +179,7 @@ src/simba/
     pre_compact.py     Transcript export to ~/.claude/transcripts/
     stop.py            Guardian signal check + tailor error capture
 
-tests/                 285 tests across 20 files
+tests/                 287 tests across 20 files
 tools/
   enforce_module_imports.py  libcst-based import style checker/fixer
 skills/
@@ -195,7 +198,7 @@ skills/
 ## Development
 
 ```bash
-uv run pytest                              # run all 285 tests
+uv run pytest                              # run all 287 tests
 uv run pytest -x                           # stop on first failure
 uv run pytest -k "test_name"               # run specific test
 uv run ruff check src/ tests/              # lint
@@ -228,13 +231,15 @@ Runs on every commit: ruff lint (with auto-fix), ruff format, pyrefly type check
 |-------|---------|-------------|
 | `port` | 8741 | Daemon listen port |
 | `db_path` | `""` (cwd/.simba/memory) | Database directory |
-| `embedding_model` | nomic-embed-text | Ollama model for embeddings |
+| `embedding_model` | nomic-embed-text | Display name for embeddings |
 | `embedding_dims` | 768 | Embedding vector dimensions |
-| `ollama_url` | http://localhost:11434 | Ollama API endpoint |
+| `model_repo` | nomic-ai/nomic-embed-text-v1.5-GGUF | HuggingFace repo for auto-download |
+| `model_file` | nomic-embed-text-v1.5.Q4_K_M.gguf | GGUF file name in repo |
+| `model_path` | `""` (auto-download) | Local path to GGUF file |
+| `n_gpu_layers` | -1 | GPU layers (-1=all, 0=CPU only) |
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall |
 | `max_results` | 3 | Maximum memories returned per query |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
-| `timeout_ms` | 10000 | Embedding request timeout |
 | `max_content_length` | 200 | Maximum memory content length |
 
 ### Project Search
