@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Testing/tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# LanceDB data
+*.lance/
+
+# Project memory database
+.claude-memory/
+
+# OS
+.DS_Store
