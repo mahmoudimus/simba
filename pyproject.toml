@@ -1,7 +1,8 @@
 [project]
 name = "simba"
 version = "0.1.0"
-description = ""
+description = "Unified Claude Code plugin — semantic memory, rule enforcement, neuro-symbolic logic, and project search"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
