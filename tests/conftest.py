@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+import simba.db
+
 
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -81,20 +83,12 @@ def mock_reflection():
 
 
 @pytest.fixture
-def reflections_file(tmp_path: pathlib.Path, mock_reflection):
-    """Factory for creating a reflections JSONL file."""
-
-    def _create(reflections: list[dict] | None = None) -> pathlib.Path:
-        memory_dir = tmp_path / ".simba" / "tailor"
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        path = memory_dir / "reflections.jsonl"
-        if reflections is None:
-            reflections = [mock_reflection()]
-        content = "\n".join(json.dumps(r) for r in reflections) + "\n"
-        path.write_text(content)
-        return path
-
-    return _create
+def simba_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide a temporary simba.db with all schemas initialized."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+    with simba.db.get_db(tmp_path) as conn:
+        yield conn
 
 
 @pytest.fixture

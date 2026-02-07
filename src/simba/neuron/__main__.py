@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import simba.neuron.agents
+import simba.db
 import simba.neuron.config
 import simba.neuron.install
 import simba.neuron.templates
@@ -36,11 +36,6 @@ def main() -> int:
         "--name", default="neuron", help="Name of the MCP server"
     )
     install_parser.add_argument(
-        "--db-path",
-        default=".simba/neuron/truth.db",
-        help="Default path for the truth database",
-    )
-    install_parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite existing agent definition files",
@@ -53,22 +48,11 @@ def main() -> int:
 
     # --- run ---
     run_parser = subparsers.add_parser("run", help="Run the MCP server (internal use)")
-    run_parser.add_argument(
-        "--db-path",
-        default=".simba/neuron/truth.db",
-        type=Path,
-        help="Path to SQLite DB",
-    )
     run_parser.add_argument("--root-dir", type=Path, required=True, help="Project root")
 
     # --- proxy ---
     proxy_parser = subparsers.add_parser(
         "proxy", help="Run MCP server via hot-reload proxy"
-    )
-    proxy_parser.add_argument(
-        "--db-path",
-        default=".simba/neuron/truth.db",
-        help="Path to SQLite DB",
     )
     proxy_parser.add_argument(
         "--pid-file",
@@ -141,7 +125,7 @@ def main() -> int:
             print(f"Invalid status: {args.state}", file=sys.stderr)
             return 1
 
-        with simba.neuron.agents.get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             if status_id in (
                 simba.neuron.config.Status.COMPLETED,
                 simba.neuron.config.Status.FAILED,
@@ -217,27 +201,22 @@ def main() -> int:
         return 0
 
     if args.command == "install":
-        simba.neuron.install.install_routine(
-            args.name, args.db_path, args.force, args.proxy
-        )
+        simba.neuron.install.install_routine(args.name, args.force, args.proxy)
         return 0
 
     if args.command == "proxy":
         import simba.neuron.proxy
 
         root_dir = args.root_dir.resolve()
-        simba.neuron.proxy.run_proxy(
-            args.db_path, pid_file=args.pid_file, root_dir=root_dir
-        )
+        simba.neuron.proxy.run_proxy(pid_file=args.pid_file, root_dir=root_dir)
         return 0
 
     # Default: run mode
     if not args.command or args.command == "run":
         import simba.neuron.server
 
-        db_path = getattr(args, "db_path", None)
         root_dir = getattr(args, "root_dir", None)
-        simba.neuron.server.run_server(db_path=db_path, root_dir=root_dir)
+        simba.neuron.server.run_server(root_dir=root_dir)
         return 0
 
     parser.print_help()

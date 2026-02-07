@@ -8,7 +8,6 @@ import sys
 import time
 from dataclasses import dataclass
 from enum import IntEnum
-from pathlib import Path
 
 
 class Status(IntEnum):
@@ -46,25 +45,16 @@ STATUS_NAME_MAP = {
     "failed": Status.FAILED,
 }
 
-AGENT_DB_PATH = Path(".simba/neuron/agents.db")
-
 
 @dataclass
 class ServerConfig:
     """Runtime configuration for the Neuron MCP Server."""
 
-    db_path: Path
     python_cmd: str
     souffle_cmd: str | None
 
-    @property
-    def resolved_db_path(self) -> Path:
-        """Returns the absolute path to the DB based on CWD."""
-        return Path(self.db_path).resolve()
-
 
 CONFIG = ServerConfig(
-    db_path=Path(".simba/neuron/truth.db"),
     python_cmd=sys.executable,
     souffle_cmd=shutil.which("souffle"),
 )

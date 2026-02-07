@@ -2,31 +2,31 @@
 
 from __future__ import annotations
 
+import pathlib
 import sqlite3
-from pathlib import Path
 
 import pytest
 
-import simba.neuron.config
-from simba.neuron.truth import get_db_connection, truth_add, truth_query
+import simba.db
+from simba.neuron.truth import truth_add, truth_query
 
 
 @pytest.fixture(autouse=True)
-def _patch_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point CONFIG.db_path at a temp directory for every test."""
-    db_path = tmp_path / "test_truth.db"
-    monkeypatch.setattr(simba.neuron.config.CONFIG, "db_path", db_path)
+def _patch_db_path(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point simba.db.get_db_path at a temp directory for every test."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
 
 
 class TestTruthAdd:
-    def test_inserts_fact(self, tmp_path: Path) -> None:
+    def test_inserts_fact(self, tmp_path: pathlib.Path) -> None:
         result = truth_add("simba", "supports", "sqlite", "unit test")
         assert result == "Fact recorded: simba supports sqlite"
 
         # Verify the row is actually in the database
-        db_path = simba.neuron.config.CONFIG.resolved_db_path
+        db_path = simba.db.get_db_path()
         conn = sqlite3.connect(str(db_path))
-        rows = conn.execute("SELECT * FROM facts").fetchall()
+        rows = conn.execute("SELECT * FROM proven_facts").fetchall()
         conn.close()
         assert len(rows) == 1
         assert rows[0] == ("simba", "supports", "sqlite", "unit test")
@@ -69,17 +69,18 @@ class TestTruthQuery:
         assert "neuron provides verification" in result
 
 
-class TestGetDbConnection:
-    def test_creates_facts_table(self, tmp_path: Path) -> None:
-        db_path = simba.neuron.config.CONFIG.resolved_db_path
+class TestSchema:
+    def test_creates_proven_facts_table(self, tmp_path: pathlib.Path) -> None:
+        db_path = simba.db.get_db_path()
         assert not db_path.exists()
 
-        with get_db_connection() as conn:
+        with simba.db.get_db() as conn:
             # Table should exist after entering the context manager
             cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='facts'"
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='proven_facts'"
             )
             tables = cursor.fetchall()
 
         assert len(tables) == 1
-        assert tables[0][0] == "facts"
+        assert tables[0][0] == "proven_facts"

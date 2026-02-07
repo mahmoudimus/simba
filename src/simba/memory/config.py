@@ -23,8 +23,10 @@ class MemoryConfig:
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92
-    max_content_length: int = 200
+    max_content_length: int = 1000
     auto_start: bool = True
+    diagnostics_after: int = 50
+    sync_interval: int = 0
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
