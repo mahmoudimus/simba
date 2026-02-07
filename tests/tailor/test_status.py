@@ -200,10 +200,9 @@ class TestLargeSet:
 class TestTimestampParsing:
     def test_last_error_timestamp(self, mock_reflection):
 
-        now = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(tz=datetime.UTC).isoformat()
         past = (
-            datetime.datetime.now(tz=datetime.timezone.utc)
-            - datetime.timedelta(hours=1)
+            datetime.datetime.now(tz=datetime.UTC) - datetime.timedelta(hours=1)
         ).isoformat()
         reflections = [
             mock_reflection({"error_type": "error", "ts": past}),

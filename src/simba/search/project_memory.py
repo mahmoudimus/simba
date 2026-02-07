@@ -8,10 +8,8 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 import typing
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pathlib
+import simba.db
 
 _SCHEMA_BASE_SQL = """\
 -- Session summaries - what was worked on
@@ -113,21 +111,20 @@ END;
 _SCHEMA_SQL = _SCHEMA_BASE_SQL + _SCHEMA_FTS_SQL
 
 
-def init_db(db_path: pathlib.Path) -> sqlite3.Connection:
-    """Create parent dirs, initialize DB with schema, return connection.
+def _init_schema(conn: sqlite3.Connection) -> None:
+    """Initialize project memory tables and FTS indexes.
 
     FTS5 tables and triggers are installed when supported by the SQLite build;
     core tables and indexes are always created.
     """
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA_BASE_SQL)
     with contextlib.suppress(sqlite3.OperationalError):
         # FTS5 module not available in this SQLite build; full-text search
         # will gracefully return empty results.
         conn.executescript(_SCHEMA_FTS_SQL)
-    return conn
+
+
+simba.db.register_schema(_init_schema)
 
 
 def add_session(
@@ -325,42 +322,3 @@ def get_stats(conn: sqlite3.Connection) -> dict[str, int]:
         "knowledge": knowledge,
         "facts": facts,
     }
-
-
-def find_repo_root(cwd: pathlib.Path) -> pathlib.Path | None:
-    """Walk up from *cwd* looking for a ``.git`` directory.
-
-    Returns the repo root path, or ``None`` if not found.
-    """
-    current = cwd.resolve()
-    while True:
-        if (current / ".git").is_dir():
-            return current
-        parent = current.parent
-        if parent == current:
-            # Reached filesystem root without finding .git
-            return None
-        current = parent
-
-
-def get_db_path(cwd: pathlib.Path) -> pathlib.Path:
-    """Determine the memory database path for a working directory.
-
-    Uses the repository root if one is found, otherwise falls back to *cwd*.
-    """
-    root = find_repo_root(cwd)
-    base = root if root is not None else cwd
-    return base / ".simba" / "search" / "memory.db"
-
-
-def get_connection(cwd: pathlib.Path) -> sqlite3.Connection | None:
-    """Open a connection to the memory database if it already exists.
-
-    Returns ``None`` when the database file does not exist.
-    """
-    db_path = get_db_path(cwd)
-    if not db_path.exists():
-        return None
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn

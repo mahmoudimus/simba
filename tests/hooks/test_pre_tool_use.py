@@ -114,3 +114,71 @@ class TestPreToolUseHook:
         mock_recall.assert_called_once()
         _, kwargs = mock_recall.call_args
         assert kwargs["project_path"] == "/my/project"
+
+
+class TestCheckContextLow:
+    def test_below_threshold_returns_none(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("small file\n")
+        assert simba.hooks.pre_tool_use._check_context_low(transcript) is None
+
+    def test_above_threshold_returns_warning(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        flag = tmp_path / "flag.json"
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("x" * 200 + "\n")
+
+        result = simba.hooks.pre_tool_use._check_context_low(transcript)
+        assert result is not None
+        assert "context-low-warning" in result
+        assert "0.0MB" in result
+
+    def test_warns_only_once(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        flag = tmp_path / "flag.json"
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("x" * 200 + "\n")
+
+        first = simba.hooks.pre_tool_use._check_context_low(transcript)
+        assert first is not None
+
+        second = simba.hooks.pre_tool_use._check_context_low(transcript)
+        assert second is None
+
+    def test_different_transcript_resets(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        flag = tmp_path / "flag.json"
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
+
+        t1 = tmp_path / "t1.jsonl"
+        t1.write_text("x" * 200 + "\n")
+        t2 = tmp_path / "t2.jsonl"
+        t2.write_text("x" * 200 + "\n")
+
+        assert simba.hooks.pre_tool_use._check_context_low(t1) is not None
+        assert simba.hooks.pre_tool_use._check_context_low(t1) is None
+        assert simba.hooks.pre_tool_use._check_context_low(t2) is not None
+
+    def test_nonexistent_transcript(self, tmp_path):
+        assert simba.hooks.pre_tool_use._check_context_low(tmp_path / "nope") is None
+
+    def test_fires_for_non_enabled_tool(self, tmp_path, monkeypatch):
+        """Context warning fires even for tools not in _ENABLED_TOOLS."""
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        flag = tmp_path / "flag.json"
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("x" * 200 + "\n")
+
+        result = json.loads(
+            simba.hooks.pre_tool_use.main(
+                {"tool_name": "Write", "transcript_path": str(transcript)}
+            )
+        )
+        ctx = result["hookSpecificOutput"].get("additionalContext", "")
+        assert "context-low-warning" in ctx

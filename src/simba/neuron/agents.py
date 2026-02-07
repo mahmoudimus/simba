@@ -10,23 +10,90 @@ import json
 import logging
 import os
 import signal
-import sqlite3
 import subprocess
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import simba.db
 import simba.neuron.config
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    import sqlite3
 
 # ---------------------------------------------------------------------------
 # Global logger (initialized lazily)
 # ---------------------------------------------------------------------------
 
 _agent_logger: logging.Logger | None = None
+
+
+# ---------------------------------------------------------------------------
+# Schema registration
+# ---------------------------------------------------------------------------
+
+
+def _init_agent_db_schema(conn: sqlite3.Connection) -> None:
+    """Initialize agent database schema with enum tables and main tables."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS status_types (
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL
+        )"""
+    )
+    for status in simba.neuron.config.Status:
+        conn.execute(
+            "INSERT OR IGNORE INTO status_types (id, name) VALUES (?, ?)",
+            (status.value, status.name.lower()),
+        )
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS log_levels (
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL
+        )"""
+    )
+    for level in simba.neuron.config.LogLevel:
+        conn.execute(
+            "INSERT OR IGNORE INTO log_levels (id, name) VALUES (?, ?)",
+            (level.value, level.name.lower()),
+        )
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS agent_runs (
+            ticket_id TEXT PRIMARY KEY,
+            agent TEXT NOT NULL,
+            pid INTEGER,
+            status_id INTEGER REFERENCES status_types(id),
+            command TEXT,
+            working_dir TEXT,
+            output_format TEXT,
+            created_at_utc INTEGER NOT NULL,
+            started_at_utc INTEGER,
+            completed_at_utc INTEGER,
+            result TEXT,
+            error TEXT,
+            stdout TEXT,
+            stderr TEXT
+        )"""
+    )
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS agent_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id TEXT,
+            level_id INTEGER REFERENCES log_levels(id),
+            event TEXT NOT NULL,
+            func TEXT,
+            data TEXT,
+            timestamp_utc INTEGER NOT NULL
+        )"""
+    )
+
+    conn.commit()
+
+
+simba.db.register_schema(_init_agent_db_schema)
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +191,8 @@ def register_sigchld_handler() -> None:
 class SQLiteLogHandler(logging.Handler):
     """Custom logging handler that writes structured logs to SQLite."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.db_path = db_path
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -138,9 +204,7 @@ class SQLiteLogHandler(logging.Handler):
             )
             data_json = json.dumps(data) if data else "{}"
 
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(self.db_path))
-            try:
+            with simba.db.get_db() as conn:
                 conn.execute(
                     """INSERT INTO agent_logs
                        (ticket_id, level_id, event, func, data, timestamp_utc)
@@ -155,8 +219,6 @@ class SQLiteLogHandler(logging.Handler):
                     ),
                 )
                 conn.commit()
-            finally:
-                conn.close()
         except Exception:
             self.handleError(record)
 
@@ -172,12 +234,12 @@ class StructuredFormatter(logging.Formatter):
         return super().format(record)
 
 
-def _setup_logger(db_path: Path) -> logging.Logger:
+def _setup_logger() -> logging.Logger:
     """Set up the agent logger with SQLite handler."""
     logger = logging.getLogger("neuron.agents")
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
-    handler = SQLiteLogHandler(db_path)
+    handler = SQLiteLogHandler()
     handler.setFormatter(StructuredFormatter())
     logger.addHandler(handler)
     return logger
@@ -188,87 +250,10 @@ def _get_logger() -> logging.Logger | None:
     global _agent_logger
     if _agent_logger is None:
         try:
-            _agent_logger = _setup_logger(simba.neuron.config.AGENT_DB_PATH)
+            _agent_logger = _setup_logger()
         except Exception:
             return None
     return _agent_logger
-
-
-# ---------------------------------------------------------------------------
-# Agent database
-# ---------------------------------------------------------------------------
-
-
-def _init_agent_db_schema(conn: sqlite3.Connection) -> None:
-    """Initialize agent database schema with enum tables and main tables."""
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS status_types (
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL
-        )"""
-    )
-    for status in simba.neuron.config.Status:
-        conn.execute(
-            "INSERT OR IGNORE INTO status_types (id, name) VALUES (?, ?)",
-            (status.value, status.name.lower()),
-        )
-
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS log_levels (
-            id INTEGER PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL
-        )"""
-    )
-    for level in simba.neuron.config.LogLevel:
-        conn.execute(
-            "INSERT OR IGNORE INTO log_levels (id, name) VALUES (?, ?)",
-            (level.value, level.name.lower()),
-        )
-
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS agent_runs (
-            ticket_id TEXT PRIMARY KEY,
-            agent TEXT NOT NULL,
-            pid INTEGER,
-            status_id INTEGER REFERENCES status_types(id),
-            command TEXT,
-            working_dir TEXT,
-            output_format TEXT,
-            created_at_utc INTEGER NOT NULL,
-            started_at_utc INTEGER,
-            completed_at_utc INTEGER,
-            result TEXT,
-            error TEXT,
-            stdout TEXT,
-            stderr TEXT
-        )"""
-    )
-
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS agent_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticket_id TEXT,
-            level_id INTEGER REFERENCES log_levels(id),
-            event TEXT NOT NULL,
-            func TEXT,
-            data TEXT,
-            timestamp_utc INTEGER NOT NULL
-        )"""
-    )
-
-    conn.commit()
-
-
-@contextmanager
-def get_agent_db() -> Generator[sqlite3.Connection]:
-    """Connection to the agent coordination database."""
-    simba.neuron.config.AGENT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(simba.neuron.config.AGENT_DB_PATH))
-    try:
-        _init_agent_db_schema(conn)
-        yield conn
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +323,7 @@ def _capture_and_cleanup(
     stderr = _safe_read_file(stderr_path)
     result = _extract_result(stdout, stderr, output_format)
 
-    with get_agent_db() as conn:
+    with simba.db.get_db() as conn:
         conn.execute(
             """UPDATE agent_runs
                SET stdout=?, stderr=?, result=?, completed_at_utc=?,
@@ -407,7 +392,7 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
 
     status_id = simba.neuron.config.STATUS_NAME_MAP[status_lower]
 
-    with get_agent_db() as conn:
+    with simba.db.get_db() as conn:
         cursor = conn.cursor()
         row = cursor.execute(
             "SELECT status_id FROM agent_runs WHERE ticket_id=?",
@@ -469,7 +454,7 @@ def agent_status_check(ticket_id: str | None = None) -> str:
         ticket_id: Optional specific ticket to check. If None, returns all
                  active agents.
     """
-    with get_agent_db() as conn:
+    with simba.db.get_db() as conn:
         cursor = conn.cursor()
 
         base_query = """
@@ -615,7 +600,7 @@ def dispatch_agent(agent_name: str, ticket_id: str, instructions: str) -> str:
         now = simba.neuron.config.utc_now()
         cmd_str = " ".join(cmd)
 
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO agent_runs
                    (ticket_id, agent, pid, status_id, command,

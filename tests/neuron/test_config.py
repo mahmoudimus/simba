@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 
 import simba.neuron.config
 
@@ -125,9 +124,6 @@ class TestLoggingLevelMap:
 
 
 class TestServerConfig:
-    def test_default_db_path(self) -> None:
-        assert simba.neuron.config.CONFIG.db_path == Path(".simba/neuron/truth.db")
-
     def test_default_python_cmd_is_string(self) -> None:
         assert isinstance(simba.neuron.config.CONFIG.python_cmd, str)
         assert len(simba.neuron.config.CONFIG.python_cmd) > 0
@@ -136,28 +132,13 @@ class TestServerConfig:
         cmd = simba.neuron.config.CONFIG.souffle_cmd
         assert cmd is None or isinstance(cmd, str)
 
-    def test_resolved_db_path_is_absolute(self) -> None:
-        assert simba.neuron.config.CONFIG.resolved_db_path.is_absolute()
-
-    def test_resolved_db_path_ends_with_db_path(self) -> None:
-        resolved = simba.neuron.config.CONFIG.resolved_db_path
-        assert resolved.parts[-2:] == ("neuron", "truth.db")
-
     def test_custom_config(self) -> None:
         cfg = simba.neuron.config.ServerConfig(
-            db_path=Path("/tmp/test.db"),
             python_cmd="/usr/bin/python3",
             souffle_cmd=None,
         )
-        assert cfg.db_path == Path("/tmp/test.db")
         assert cfg.python_cmd == "/usr/bin/python3"
         assert cfg.souffle_cmd is None
-
-
-class TestAgentDbPath:
-    def test_value(self) -> None:
-        expected = Path(".simba/neuron/agents.db")
-        assert expected == simba.neuron.config.AGENT_DB_PATH
 
 
 class TestUtcNow:

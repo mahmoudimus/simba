@@ -19,6 +19,7 @@ import pathlib
 import subprocess
 import sys
 
+import simba.db
 import simba.search.deps
 import simba.search.project_memory
 
@@ -40,9 +41,9 @@ def _cmd_index(cwd: pathlib.Path) -> int:
     print()
 
     # 2. Initialize SQLite project memory
-    db_path = simba.search.project_memory.get_db_path(cwd)
-    conn = simba.search.project_memory.init_db(db_path)
-    conn.close()
+    db_path = simba.db.get_db_path(cwd)
+    with simba.db.get_db(cwd):
+        pass
     print(f"Project memory: {db_path}")
 
     # 3. Index with QMD (optional — skip if not installed)
@@ -123,9 +124,9 @@ def main() -> int:
     cwd = pathlib.Path.cwd()
 
     if cmd == "init":
-        db_path = simba.search.project_memory.get_db_path(cwd)
-        conn = simba.search.project_memory.init_db(db_path)
-        conn.close()
+        db_path = simba.db.get_db_path(cwd)
+        with simba.db.get_db(cwd):
+            pass
         print(f"Memory database initialized at {db_path}")
         return 0
 
@@ -133,10 +134,17 @@ def main() -> int:
         return _cmd_index(cwd)
 
     # For all other commands, get connection (init if needed)
-    conn = simba.search.project_memory.get_connection(cwd)
+    conn = simba.db.get_connection(cwd)
     if conn is None:
-        db_path = simba.search.project_memory.get_db_path(cwd)
-        conn = simba.search.project_memory.init_db(db_path)
+        # DB does not exist yet; create it via get_db context manager,
+        # but we need a persistent connection for the commands below.
+        db_path = simba.db.get_db_path(cwd)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        simba.db._init_schemas(conn)
 
     try:
         if cmd == "add-session" and len(args) >= 5:

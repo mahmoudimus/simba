@@ -1,4 +1,4 @@
-"""Tests for search.project_memory — SQLite-backed per-project memory."""
+"""Tests for search.project_memory -- SQLite-backed per-project memory."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import sqlite3
 
 import pytest
 
+import simba.db
 import simba.search.project_memory
 
 # ---------------------------------------------------------------------------
@@ -16,12 +17,14 @@ import simba.search.project_memory
 
 
 @pytest.fixture
-def db_conn(tmp_path: pathlib.Path) -> collections.abc.Generator[sqlite3.Connection]:
-    """Create a temporary DB via init_db and return the connection."""
-    db_path = tmp_path / "test_memory.db"
-    conn = simba.search.project_memory.init_db(db_path)
-    yield conn
-    conn.close()
+def db_conn(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> collections.abc.Generator[sqlite3.Connection]:
+    """Create a temporary DB via simba.db.get_db and return the connection."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+    with simba.db.get_db(tmp_path) as conn:
+        yield conn
 
 
 # ---------------------------------------------------------------------------
@@ -46,18 +49,19 @@ def _has_fts5() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# TestInitDb
+# TestSchema
 # ---------------------------------------------------------------------------
 
 
-class TestInitDb:
-    def test_creates_db_file(self, tmp_path: pathlib.Path) -> None:
-        db_path = tmp_path / "sub" / "memory.db"
-        conn = simba.search.project_memory.init_db(db_path)
-        try:
-            assert db_path.exists()
-        finally:
-            conn.close()
+class TestSchema:
+    def test_creates_db_file(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = tmp_path / "sub" / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+        with simba.db.get_db(tmp_path):
+            pass
+        assert db_path.exists()
 
     def test_tables_exist(self, db_conn: sqlite3.Connection) -> None:
         rows = db_conn.execute(
@@ -335,85 +339,6 @@ class TestGetStats:
 
         stats = simba.search.project_memory.get_stats(db_conn)
         assert stats == {"sessions": 2, "knowledge": 1, "facts": 3}
-
-
-# ---------------------------------------------------------------------------
-# TestFindRepoRoot
-# ---------------------------------------------------------------------------
-
-
-class TestFindRepoRoot:
-    def test_finds_git_directory(self, tmp_path: pathlib.Path) -> None:
-        # Arrange: create repo structure
-        repo = tmp_path / "myrepo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-        subdir = repo / "src" / "pkg"
-        subdir.mkdir(parents=True)
-
-        # Act
-        result = simba.search.project_memory.find_repo_root(subdir)
-
-        # Assert
-        assert result is not None
-        assert result == repo.resolve()
-
-    def test_returns_none_when_no_git(self, tmp_path: pathlib.Path) -> None:
-        # tmp_path has no .git
-        result = simba.search.project_memory.find_repo_root(tmp_path)
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# TestGetDbPath
-# ---------------------------------------------------------------------------
-
-
-class TestGetDbPath:
-    def test_returns_correct_path_structure(self, tmp_path: pathlib.Path) -> None:
-        # Arrange: create a repo with .git
-        repo = tmp_path / "myrepo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-
-        # Act
-        db_path = simba.search.project_memory.get_db_path(repo)
-
-        # Assert
-        assert db_path == repo.resolve() / ".simba" / "search" / "memory.db"
-
-
-# ---------------------------------------------------------------------------
-# TestGetConnection
-# ---------------------------------------------------------------------------
-
-
-class TestGetConnection:
-    def test_returns_none_when_db_does_not_exist(self, tmp_path: pathlib.Path) -> None:
-        conn = simba.search.project_memory.get_connection(tmp_path)
-        assert conn is None
-
-    def test_returns_connection_when_db_exists(self, tmp_path: pathlib.Path) -> None:
-        # Arrange: create a repo with .git and an initialized DB
-        repo = tmp_path / "myrepo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-        db_path = repo / ".simba" / "search" / "memory.db"
-        init_conn = simba.search.project_memory.init_db(db_path)
-        init_conn.close()
-
-        # Act
-        conn = simba.search.project_memory.get_connection(repo)
-
-        # Assert
-        try:
-            assert conn is not None
-            # Verify it's a working connection
-            row = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()
-            assert row["c"] == 0
-        finally:
-            if conn is not None:
-                conn.close()
 
 
 # ---------------------------------------------------------------------------

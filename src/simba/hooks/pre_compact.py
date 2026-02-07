@@ -58,7 +58,9 @@ def _parse_transcript_to_markdown(lines: list[str]) -> tuple[str, int]:
                 parts = []
                 for item in content:
                     if isinstance(item, dict):
-                        parts.append(item.get("text", "") or item.get("content", ""))
+                        val = item.get("text", "") or item.get("content", "")
+                        if isinstance(val, str):
+                            parts.append(val)
                     elif isinstance(item, str):
                         parts.append(item)
                 user_text = "\n".join(p for p in parts if p)

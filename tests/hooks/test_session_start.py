@@ -75,7 +75,7 @@ class TestSessionStartHook:
                 "simba.hooks.session_start._check_health", return_value=health
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 return_value=mock_conn,
             ),
             unittest.mock.patch(
@@ -96,7 +96,7 @@ class TestSessionStartHook:
                 "simba.hooks.session_start._check_health", return_value=None
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 side_effect=OSError("db error"),
             ),
         ):

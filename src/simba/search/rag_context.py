@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+import simba.db
 import simba.search.project_memory
 import simba.search.qmd
 
@@ -48,7 +49,7 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
     # -- Phase 1: Query SQLite project memory -------------------------------
     memory_context = ""
     try:
-        conn = simba.search.project_memory.get_connection(cwd)
+        conn = simba.db.get_connection(cwd)
         if conn is not None:
             try:
                 memory_context = simba.search.project_memory.get_context(

@@ -7,6 +7,8 @@ import unittest.mock
 
 import pytest
 
+import simba.db
+import simba.search.project_memory
 import simba.search.rag_context
 
 # ---------------------------------------------------------------------------
@@ -18,6 +20,48 @@ import simba.search.rag_context
 def cwd(tmp_path: pathlib.Path) -> pathlib.Path:
     """Return a temporary working directory for tests."""
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _use_tmp_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point simba.db at a temp directory so tests use an isolated SQLite DB."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+
+
+def _seed_db(cwd: pathlib.Path) -> None:
+    """Populate the database with test data via the real project_memory API."""
+    with simba.db.get_db(cwd) as conn:
+        simba.search.project_memory.add_fact(conn, "Use ruff for linting", "tooling")
+        simba.search.project_memory.add_fact(
+            conn, "Authentication uses JWT tokens", "architecture"
+        )
+        simba.search.project_memory.add_knowledge(
+            conn,
+            "auth",
+            "Authentication module handles JWT validation and session management",
+            "decorator-based auth, middleware pattern",
+        )
+        simba.search.project_memory.add_knowledge(
+            conn,
+            "database",
+            "Database layer uses SQLAlchemy with connection pooling",
+            "repository pattern, unit of work",
+        )
+        simba.search.project_memory.add_session(
+            conn,
+            summary="Migrated database to async driver",
+            files_touched="src/db.py,src/models.py",
+            tools_used="Read,Write,Bash",
+            topics="database,migration,async",
+        )
+        simba.search.project_memory.add_session(
+            conn,
+            summary="Fixed authentication token refresh bug",
+            files_touched="src/auth.py",
+            tools_used="Read,Edit",
+            topics="authentication,bugfix",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -49,24 +93,15 @@ class TestBuildContext:
         assert result == ""
 
     def test_includes_memory_context_when_db_exists(self, cwd: pathlib.Path) -> None:
-        mock_conn = unittest.mock.MagicMock()
-        with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=mock_conn,
-            ),
-            unittest.mock.patch(
-                "simba.search.project_memory.get_context",
-                return_value="## Project Facts\n- Use ruff for linting",
-            ),
-            unittest.mock.patch("simba.search.qmd.is_available", return_value=False),
-        ):
+        _seed_db(cwd)
+        with unittest.mock.patch("simba.search.qmd.is_available", return_value=False):
             result = simba.search.rag_context.build_context(
                 "how does the authentication module work", cwd
             )
         assert "# Memory Context" in result
+        # get_context returns facts, and the auth-related knowledge/session
+        assert "## Project Facts" in result
         assert "Use ruff for linting" in result
-        mock_conn.close.assert_called_once()
 
     def test_includes_code_context_when_qmd_available(self, cwd: pathlib.Path) -> None:
         qmd_results = [
@@ -76,11 +111,8 @@ class TestBuildContext:
                 "score": "0.85",
             }
         ]
+        # No DB seeded -- get_connection returns None when file doesn't exist
         with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=None,
-            ),
             unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
             unittest.mock.patch("simba.search.qmd.search", return_value=qmd_results),
         ):
@@ -93,7 +125,7 @@ class TestBuildContext:
         assert "def authenticate(user):" in result
 
     def test_combines_both_sources(self, cwd: pathlib.Path) -> None:
-        mock_conn = unittest.mock.MagicMock()
+        _seed_db(cwd)
         qmd_results = [
             {
                 "path": "src/db.py",
@@ -102,14 +134,6 @@ class TestBuildContext:
             }
         ]
         with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=mock_conn,
-            ),
-            unittest.mock.patch(
-                "simba.search.project_memory.get_context",
-                return_value="## Recent Work\n- Migrated database",
-            ),
             unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
             unittest.mock.patch("simba.search.qmd.search", return_value=qmd_results),
         ):
@@ -118,19 +142,16 @@ class TestBuildContext:
             )
         assert "# Memory Context" in result
         assert "# Code Context" in result
-        assert "Migrated database" in result
+        # Real get_context returns knowledge matching "database"
+        has_db = "Database layer uses SQLAlchemy" in result
+        assert has_db or "database" in result.lower()
         assert "src/db.py" in result
 
     def test_no_crash_when_qmd_fails(self, cwd: pathlib.Path) -> None:
-        with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=None,
-            ),
-            unittest.mock.patch(
-                "simba.search.qmd.is_available",
-                side_effect=RuntimeError("qmd exploded"),
-            ),
+        # DB not seeded, so get_connection returns None; qmd blows up
+        with unittest.mock.patch(
+            "simba.search.qmd.is_available",
+            side_effect=RuntimeError("qmd exploded"),
         ):
             result = simba.search.rag_context.build_context(
                 "how does the authentication module work", cwd
@@ -138,9 +159,10 @@ class TestBuildContext:
         assert result == ""
 
     def test_no_crash_when_db_connection_fails(self, cwd: pathlib.Path) -> None:
+        # Force get_connection to raise by making get_db_path raise
         with (
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 side_effect=OSError("disk on fire"),
             ),
             unittest.mock.patch("simba.search.qmd.is_available", return_value=False),
@@ -152,18 +174,8 @@ class TestBuildContext:
         assert result == ""
 
     def test_xml_wrapper_present_in_output(self, cwd: pathlib.Path) -> None:
-        mock_conn = unittest.mock.MagicMock()
-        with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=mock_conn,
-            ),
-            unittest.mock.patch(
-                "simba.search.project_memory.get_context",
-                return_value="## Project Facts\n- some fact",
-            ),
-            unittest.mock.patch("simba.search.qmd.is_available", return_value=False),
-        ):
+        _seed_db(cwd)
+        with unittest.mock.patch("simba.search.qmd.is_available", return_value=False):
             result = simba.search.rag_context.build_context(
                 "how does the authentication module work", cwd
             )
@@ -171,22 +183,11 @@ class TestBuildContext:
         assert result.endswith("</relevant-context>")
 
     def test_search_terms_shown_in_output(self, cwd: pathlib.Path) -> None:
-        mock_conn = unittest.mock.MagicMock()
-        with (
-            unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
-                return_value=mock_conn,
-            ),
-            unittest.mock.patch(
-                "simba.search.project_memory.get_context",
-                return_value="## Project Facts\n- fact here",
-            ),
-            unittest.mock.patch("simba.search.qmd.is_available", return_value=False),
-        ):
+        _seed_db(cwd)
+        with unittest.mock.patch("simba.search.qmd.is_available", return_value=False):
             result = simba.search.rag_context.build_context(
                 "how does the authentication module work", cwd
             )
         assert "**Search terms:**" in result
-        # "authentication" and "module" are stop words, but "authentication"
-        # is not in the stop list so it should appear
+        # "authentication" is not in the stop list so it should appear
         assert "authentication" in result

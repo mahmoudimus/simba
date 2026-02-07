@@ -1,28 +1,24 @@
-"""Tests for search.activity_tracker — pipe-separated activity log."""
+"""Tests for search.activity_tracker -- SQLite-backed activity log."""
 
 from __future__ import annotations
 
 import pathlib
-import unittest
-import unittest.mock
 
 import pytest
 
+import simba.db
 import simba.search.activity_tracker
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _mock_repo_root(tmp_path: pathlib.Path):
-    """Patch find_repo_root so every call resolves to tmp_path."""
-    with unittest.mock.patch(
-        "simba.search.project_memory.find_repo_root",
-        return_value=tmp_path,
-    ):
-        yield
+def _use_tmp_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """Point simba.db.get_db_path to a tmp_path-based location."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -31,30 +27,32 @@ def _mock_repo_root(tmp_path: pathlib.Path):
 
 
 class TestLogActivity:
-    def test_writes_pipe_separated_entry(self, tmp_path: pathlib.Path) -> None:
+    def test_inserts_row_into_activities_table(self, tmp_path: pathlib.Path) -> None:
         simba.search.activity_tracker.log_activity(tmp_path, "grep", "searched for foo")
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        assert log_path.exists()
-        content = log_path.read_text()
-        parts = content.strip().split("|")
-        assert len(parts) == 3
-        assert parts[1] == "grep"
-        assert parts[2] == "searched for foo"
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute("SELECT tool_name, detail FROM activities").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["tool_name"] == "grep"
+        assert rows[0]["detail"] == "searched for foo"
 
-    def test_creates_parent_directory(self, tmp_path: pathlib.Path) -> None:
-        memory_dir = tmp_path / ".simba" / "search"
-        assert not memory_dir.exists()
+    def test_timestamp_is_stored(self, tmp_path: pathlib.Path) -> None:
         simba.search.activity_tracker.log_activity(tmp_path, "read", "file.py")
-        assert memory_dir.exists()
+        with simba.db.get_db(tmp_path) as conn:
+            row = conn.execute("SELECT timestamp FROM activities").fetchone()
+        assert row["timestamp"] is not None
+        # Basic format check: "YYYY-MM-DD HH:MM:SS"
+        assert len(row["timestamp"]) == 19
 
-    def test_appends_multiple_entries(self, tmp_path: pathlib.Path) -> None:
+    def test_inserts_multiple_entries(self, tmp_path: pathlib.Path) -> None:
         simba.search.activity_tracker.log_activity(tmp_path, "grep", "first")
         simba.search.activity_tracker.log_activity(tmp_path, "read", "second")
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        lines = log_path.read_text().strip().splitlines()
-        assert len(lines) == 2
-        assert "grep" in lines[0]
-        assert "read" in lines[1]
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute(
+                "SELECT tool_name FROM activities ORDER BY id ASC"
+            ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["tool_name"] == "grep"
+        assert rows[1]["tool_name"] == "read"
 
 
 # ---------------------------------------------------------------------------
@@ -63,34 +61,34 @@ class TestLogActivity:
 
 
 class TestReadActivityLog:
-    def test_parses_pipe_separated_format(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            "2024-01-01 10:00:00|grep|searched foo\n2024-01-01 10:01:00|read|file.py\n"
-        )
+    def test_returns_tuples_in_chronological_order(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        # Insert rows directly for deterministic timestamps
+        with simba.db.get_db(tmp_path) as conn:
+            conn.execute(
+                "INSERT INTO activities (timestamp, tool_name, detail) "
+                "VALUES (?, ?, ?)",
+                ("2024-01-01 10:00:00", "grep", "searched foo"),
+            )
+            conn.execute(
+                "INSERT INTO activities (timestamp, tool_name, detail) "
+                "VALUES (?, ?, ?)",
+                ("2024-01-01 10:01:00", "read", "file.py"),
+            )
+            conn.commit()
+
         entries = simba.search.activity_tracker.read_activity_log(tmp_path)
         assert len(entries) == 2
         assert entries[0] == ("2024-01-01 10:00:00", "grep", "searched foo")
         assert entries[1] == ("2024-01-01 10:01:00", "read", "file.py")
 
-    def test_returns_empty_list_when_file_missing(self, tmp_path: pathlib.Path) -> None:
-        entries = simba.search.activity_tracker.read_activity_log(tmp_path)
+    def test_returns_empty_list_when_db_missing(self, tmp_path: pathlib.Path) -> None:
+        # Point to a path that does not have a DB file
+        nonexistent = tmp_path / "nonexistent"
+        nonexistent.mkdir()
+        entries = simba.search.activity_tracker.read_activity_log(nonexistent)
         assert entries == []
-
-    def test_skips_malformed_lines(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(
-            "2024-01-01 10:00:00|grep|searched foo\n"
-            "malformed line without pipes\n"
-            "only|one pipe\n"
-            "2024-01-01 10:02:00|edit|bar.py\n"
-        )
-        entries = simba.search.activity_tracker.read_activity_log(tmp_path)
-        assert len(entries) == 2
-        assert entries[0][1] == "grep"
-        assert entries[1][1] == "edit"
 
 
 # ---------------------------------------------------------------------------
@@ -99,42 +97,59 @@ class TestReadActivityLog:
 
 
 class TestClearActivityLog:
-    def test_removes_the_file(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("2024-01-01 10:00:00|grep|foo\n")
-        assert log_path.exists()
+    def test_deletes_all_rows(self, tmp_path: pathlib.Path) -> None:
+        simba.search.activity_tracker.log_activity(tmp_path, "grep", "foo")
+        simba.search.activity_tracker.log_activity(tmp_path, "read", "bar")
         simba.search.activity_tracker.clear_activity_log(tmp_path)
-        assert not log_path.exists()
+        with simba.db.get_db(tmp_path) as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM activities").fetchone()["c"]
+        assert count == 0
 
-    def test_no_error_when_file_missing(self, tmp_path: pathlib.Path) -> None:
-        # Should not raise
-        simba.search.activity_tracker.clear_activity_log(tmp_path)
+    def test_no_error_when_db_missing(self, tmp_path: pathlib.Path) -> None:
+        # Point to a path that does not have a DB file -- should not raise
+        nonexistent = tmp_path / "nonexistent"
+        nonexistent.mkdir()
+        simba.search.activity_tracker.clear_activity_log(nonexistent)
 
 
 # ---------------------------------------------------------------------------
-# TestRotateLog
+# TestRotation
 # ---------------------------------------------------------------------------
 
 
-class TestRotateLog:
-    def test_keeps_last_100_lines_when_over_200(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"2024-01-01 00:00:{i:02d}|tool{i}|detail{i}\n" for i in range(210)]
-        log_path.write_text("".join(lines))
-        simba.search.activity_tracker._rotate_log(log_path)
-        remaining = log_path.read_text().splitlines()
-        assert len(remaining) == 100
-        # Should be the last 100 lines (indices 110..209)
-        assert "tool110" in remaining[0]
-        assert "tool209" in remaining[-1]
+class TestRotation:
+    def test_keeps_only_last_200_rows(self, tmp_path: pathlib.Path) -> None:
+        with simba.db.get_db(tmp_path) as conn:
+            for i in range(210):
+                conn.execute(
+                    "INSERT INTO activities (timestamp, tool_name, detail) "
+                    "VALUES (?, ?, ?)",
+                    (f"2024-01-01 00:00:{i:02d}", f"tool{i}", f"detail{i}"),
+                )
+            conn.commit()
 
-    def test_no_rotation_under_200_lines(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".simba" / "search" / "activity.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"2024-01-01 00:00:{i:02d}|tool{i}|detail{i}\n" for i in range(150)]
-        log_path.write_text("".join(lines))
-        simba.search.activity_tracker._rotate_log(log_path)
-        remaining = log_path.read_text().splitlines()
-        assert len(remaining) == 150
+        # Trigger rotation via log_activity
+        simba.search.activity_tracker.log_activity(tmp_path, "trigger", "rotation")
+
+        with simba.db.get_db(tmp_path) as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM activities").fetchone()["c"]
+        # 210 existing + 1 new = 211, rotation keeps last 200
+        assert count == 200
+
+    def test_no_rotation_under_200_rows(self, tmp_path: pathlib.Path) -> None:
+        with simba.db.get_db(tmp_path) as conn:
+            for i in range(50):
+                conn.execute(
+                    "INSERT INTO activities (timestamp, tool_name, detail) "
+                    "VALUES (?, ?, ?)",
+                    (f"2024-01-01 00:00:{i:02d}", f"tool{i}", f"detail{i}"),
+                )
+            conn.commit()
+
+        # Trigger rotation via log_activity
+        simba.search.activity_tracker.log_activity(tmp_path, "trigger", "no-rotation")
+
+        with simba.db.get_db(tmp_path) as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM activities").fetchone()["c"]
+        # 50 + 1 = 51, no rotation needed
+        assert count == 51

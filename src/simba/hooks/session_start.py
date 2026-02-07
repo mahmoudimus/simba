@@ -13,6 +13,7 @@ import time
 
 import httpx
 
+import simba.db
 import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
@@ -132,6 +133,15 @@ def main(hook_input: dict) -> str:
             f"[Semantic Memory] Active: {count} memories available (model: {model})"
         )
 
+        # Fire-and-forget: trigger a sync cycle so new DB rows get indexed.
+        import contextlib
+
+        with contextlib.suppress(httpx.HTTPError, ValueError):
+            httpx.post(
+                f"{simba.hooks._memory_client.daemon_url()}/sync",
+                timeout=1.0,
+            )
+
     # 2. Tailor session context (time, git, marks)
     tailor_ctx = simba.tailor.session_start.gather_context(cwd=cwd)
     if tailor_ctx:
@@ -139,7 +149,7 @@ def main(hook_input: dict) -> str:
 
     # 3. Project memory status
     try:
-        conn = simba.search.project_memory.get_connection(cwd)
+        conn = simba.db.get_connection(cwd)
         if conn is not None:
             stats = simba.search.project_memory.get_stats(conn)
             conn.close()

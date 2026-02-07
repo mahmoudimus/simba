@@ -3,31 +3,20 @@
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
-from typing import TYPE_CHECKING
 
-import simba.neuron.config
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
+import simba.db
 
 
-@contextmanager
-def get_db_connection() -> Generator[sqlite3.Connection]:
-    """Yield a connection to the truth database, creating the schema if needed."""
-    db_path = simba.neuron.config.CONFIG.resolved_db_path
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+def _init_truth_schema(conn: sqlite3.Connection) -> None:
+    """Create the proven_facts table if it does not exist."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS proven_facts
+           (subject TEXT, predicate TEXT, object TEXT, proof TEXT,
+           UNIQUE(subject, predicate, object))"""
+    )
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS facts
-               (subject TEXT, predicate TEXT, object TEXT, proof TEXT,
-               UNIQUE(subject, predicate, object))"""
-        )
-        yield conn
-    finally:
-        conn.close()
+
+simba.db.register_schema(_init_truth_schema)
 
 
 def truth_add(subject: str, predicate: str, object: str, proof: str) -> str:
@@ -35,10 +24,10 @@ def truth_add(subject: str, predicate: str, object: str, proof: str) -> str:
 
     Use this ONLY when a verifier (Z3/Datalog) has proven a hypothesis.
     """
-    with get_db_connection() as conn:
+    with simba.db.get_db() as conn:
         try:
             conn.execute(
-                "INSERT INTO facts VALUES (?, ?, ?, ?)",
+                "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
                 (subject, predicate, object, proof),
             )
             conn.commit()
@@ -54,9 +43,9 @@ def truth_query(subject: str | None = None, predicate: str | None = None) -> str
 
     Use this BEFORE assuming capabilities or behavior about the codebase.
     """
-    with get_db_connection() as conn:
+    with simba.db.get_db() as conn:
         cursor = conn.cursor()
-        query = "SELECT * FROM facts WHERE 1=1"
+        query = "SELECT * FROM proven_facts WHERE 1=1"
         params: list[str] = []
 
         if subject:
