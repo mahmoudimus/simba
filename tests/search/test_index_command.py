@@ -7,6 +7,7 @@ import subprocess
 import sys
 import unittest.mock
 
+import simba.db
 import simba.search.__main__
 import simba.search.project_memory
 
@@ -19,17 +20,18 @@ class TestIndexCommand:
             "jq": (False, "not found"),
             "qmd": (False, "not found"),
         }
+        db_path = tmp_path / ".simba" / "simba.db"
         with (
             unittest.mock.patch("simba.search.deps.check_all", return_value=deps),
             unittest.mock.patch(
-                "simba.search.project_memory.get_db_path",
-                return_value=tmp_path / "memory.db",
+                "simba.db.get_db_path",
+                return_value=db_path,
             ),
         ):
             code = simba.search.__main__._cmd_index(tmp_path)
 
         assert code == 0
-        assert (tmp_path / "memory.db").exists()
+        assert db_path.exists()
 
     def test_skips_qmd_when_missing(
         self, tmp_path: pathlib.Path, capsys: object
@@ -40,11 +42,12 @@ class TestIndexCommand:
             "jq": (False, "not found"),
             "qmd": (False, "not found"),
         }
+        db_path = tmp_path / ".simba" / "simba.db"
         with (
             unittest.mock.patch("simba.search.deps.check_all", return_value=deps),
             unittest.mock.patch(
-                "simba.search.project_memory.get_db_path",
-                return_value=tmp_path / "memory.db",
+                "simba.db.get_db_path",
+                return_value=db_path,
             ),
         ):
             code = simba.search.__main__._cmd_index(tmp_path)
@@ -64,11 +67,12 @@ class TestIndexCommand:
         mock_result.returncode = 0
         mock_result.stdout = "a.py\nb.py\n"
 
+        db_path = tmp_path / ".simba" / "simba.db"
         with (
             unittest.mock.patch("simba.search.deps.check_all", return_value=deps),
             unittest.mock.patch(
-                "simba.search.project_memory.get_db_path",
-                return_value=tmp_path / "memory.db",
+                "simba.db.get_db_path",
+                return_value=db_path,
             ),
             unittest.mock.patch(
                 "simba.search.__main__.subprocess.run",
@@ -89,11 +93,12 @@ class TestIndexCommand:
             "jq": (False, "not found"),
             "qmd": (True, "1.0"),
         }
+        db_path = tmp_path / ".simba" / "simba.db"
         with (
             unittest.mock.patch("simba.search.deps.check_all", return_value=deps),
             unittest.mock.patch(
-                "simba.search.project_memory.get_db_path",
-                return_value=tmp_path / "memory.db",
+                "simba.db.get_db_path",
+                return_value=db_path,
             ),
             unittest.mock.patch(
                 "simba.search.__main__.subprocess.run",
@@ -112,11 +117,12 @@ class TestIndexCommand:
             "jq": (False, "not found"),
             "qmd": (False, "not found"),
         }
+        db_path = tmp_path / ".simba" / "simba.db"
         with (
             unittest.mock.patch("simba.search.deps.check_all", return_value=deps),
             unittest.mock.patch(
-                "simba.search.project_memory.get_db_path",
-                return_value=tmp_path / "memory.db",
+                "simba.db.get_db_path",
+                return_value=db_path,
             ),
             unittest.mock.patch.object(sys, "argv", ["simba search", "index"]),
             unittest.mock.patch("pathlib.Path.cwd", return_value=tmp_path),

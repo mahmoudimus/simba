@@ -6,6 +6,7 @@ Ported from claude-memory/server.js.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ import fastapi
 import uvicorn
 
 import simba.memory.config
+import simba.memory.diagnostics
 import simba.memory.embeddings
 import simba.memory.routes
 
@@ -31,8 +33,38 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     """Manage startup/shutdown for the memory daemon."""
     await init_database(app)
     await init_embeddings(app)
+    sync_task = await _start_sync_scheduler(app)
     yield
+    if sync_task is not None:
+        scheduler = getattr(app.state, "sync_scheduler", None)
+        if scheduler is not None:
+            scheduler.stop()
+        sync_task.cancel()
     await shutdown_embeddings(app)
+
+
+async def _start_sync_scheduler(
+    app: fastapi.FastAPI,
+) -> asyncio.Task | None:  # type: ignore[type-arg]
+    """Start a background SyncScheduler if configured."""
+    config: simba.memory.config.MemoryConfig = app.state.config
+    if config.sync_interval <= 0:
+        app.state.sync_scheduler = None
+        return None
+
+    from simba.sync.scheduler import SyncScheduler
+
+    logger = logging.getLogger("simba.memory")
+    scheduler = SyncScheduler(
+        daemon_url=f"http://127.0.0.1:{config.port}",
+        interval_seconds=config.sync_interval,
+    )
+    app.state.sync_scheduler = scheduler
+    task = asyncio.create_task(scheduler.run_forever())
+    logger.info(
+        "[sync] Background scheduler started (interval: %ds)", config.sync_interval
+    )
+    return task
 
 
 def create_app(
@@ -49,6 +81,7 @@ def create_app(
         lifespan=lifespan if use_lifespan else None,
     )
     app.include_router(simba.memory.routes.router)
+    app.add_middleware(simba.memory.routes.DiagnosticsMiddleware)
 
     app.state.config = config
     app.state.start_time = time.time()
@@ -56,6 +89,9 @@ def create_app(
     app.state.db_path = None
     app.state.embed = None
     app.state.embed_query = None
+    app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
+        report_interval=config.diagnostics_after,
+    )
 
     return app
 
@@ -174,6 +210,18 @@ def main() -> None:
         "(e.g. http://localhost:8080). When set, uses HTTP "
         "instead of loading the model in-process.",
     )
+    parser.add_argument(
+        "--diagnostics-after",
+        type=int,
+        default=None,
+        help="Print diagnostics summary every N requests (0=disabled, default: 50)",
+    )
+    parser.add_argument(
+        "--sync-interval",
+        type=int,
+        default=None,
+        help="Seconds between sync cycles (0=disabled, default: 0)",
+    )
     args = parser.parse_args()
 
     config = simba.memory.config.load_config(
@@ -182,6 +230,8 @@ def main() -> None:
         model_path=args.model_path,
         n_gpu_layers=args.n_gpu_layers,
         embed_url=args.embed_url,
+        diagnostics_after=args.diagnostics_after,
+        sync_interval=args.sync_interval,
     )
     app = create_app(config, use_lifespan=True)
     uvicorn.run(app, host="127.0.0.1", port=config.port)

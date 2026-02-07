@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
+import simba.db
 import simba.tailor.hook
 
 
@@ -286,10 +289,11 @@ class TestParseTranscriptContent:
 
 
 class TestProcessHook:
-    def test_appends_reflection_to_jsonl(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".simba" / "tailor"
-        memory_dir.mkdir(parents=True)
-        jsonl_path = memory_dir / "reflections.jsonl"
+    def test_stores_reflection_in_db(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
 
         transcript_path = tmp_path / "transcript.jsonl"
         error_msg = (
@@ -303,17 +307,17 @@ class TestProcessHook:
         )
         simba.tailor.hook.process_hook(hook_input)
 
-        assert jsonl_path.exists()
-        entries = [
-            json.loads(line)
-            for line in jsonl_path.read_text().strip().split("\n")
-            if line
-        ]
-        assert len(entries) == 1
-        assert entries[0]["error_type"] in (
-            "error",
-            "failed",
-        )
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute("SELECT * FROM reflections").fetchall()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"].startswith("nano-")
+        assert row["ts"]
+        assert row["error_type"] in ("error", "failed")
+        assert row["snippet"]
+        assert row["signature"]
+        context = json.loads(row["context"])
+        assert isinstance(context, dict)
 
     def test_exits_silently_on_empty_input(self):
         # Should not raise
@@ -328,7 +332,12 @@ class TestProcessHook:
         )
         simba.tailor.hook.process_hook(hook_input)
 
-    def test_exits_silently_on_no_errors(self, tmp_path: pathlib.Path):
+    def test_exits_silently_on_no_errors(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+
         transcript_path = tmp_path / "transcript.jsonl"
         transcript_path.write_text(
             json.dumps({"toolUseResult": "All tests passed"}) + "\n"
@@ -338,22 +347,32 @@ class TestProcessHook:
         )
         simba.tailor.hook.process_hook(hook_input)
 
-        jsonl_path = tmp_path / ".simba" / "tailor" / "reflections.jsonl"
-        assert not jsonl_path.exists()
+        # DB may or may not exist; if it does, reflections table should be empty
+        if db_path.exists():
+            with simba.db.get_db(tmp_path) as conn:
+                rows = conn.execute("SELECT * FROM reflections").fetchall()
+            assert len(rows) == 0
+        # If DB doesn't exist, that's fine too
 
-    def test_handles_write_errors_silently(self):
-        """Write to invalid path should not raise."""
-        transcript_content = json.dumps({"toolUseResult": "Error: something failed"})
-        transcript_path = pathlib.Path(
-            "/tmp/simba-test-hook-write-err/transcript.jsonl"
+    def test_handles_write_errors_silently(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """DB write to problematic path should not raise."""
+        # Point get_db_path to an unwritable location
+        monkeypatch.setattr(
+            simba.db,
+            "get_db_path",
+            lambda cwd=None: pathlib.Path("/nonexistent/path/.simba/simba.db"),
         )
-        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+
+        transcript_content = json.dumps({"toolUseResult": "Error: something failed"})
+        transcript_path = tmp_path / "transcript.jsonl"
         transcript_path.write_text(transcript_content + "\n")
 
         hook_input = json.dumps(
             {
                 "transcript_path": str(transcript_path),
-                "cwd": "/nonexistent/path/that/should/fail",
+                "cwd": str(tmp_path),
             }
         )
         simba.tailor.hook.process_hook(hook_input)  # Should not raise

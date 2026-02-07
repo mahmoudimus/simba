@@ -56,7 +56,7 @@ Simba hooks into six Claude Code lifecycle events to provide persistent context 
 |------|---------|
 | **SessionStart** | Start memory daemon, inject tailor context, show project memory stats |
 | **UserPromptSubmit** | Recall semantic memories, reinforce CLAUDE.md core rules, inject search context |
-| **PreToolUse** | Query semantic memory based on Claude's thinking before tool execution |
+| **PreToolUse** | Query semantic memory based on Claude's thinking; warn when context is low |
 | **PostToolUse** | Track file reads, edits, searches, and commands in an activity log |
 | **PreCompact** | Export transcript to disk before context compaction |
 | **Stop** | Check for rule compliance signal, capture errors from final transcript |
@@ -92,6 +92,7 @@ Works with llama-cpp-python server, vLLM, text-embeddings-inference, or any Open
 |--------|------|-------------|
 | POST | `/store` | Store a typed memory with embedding |
 | POST | `/recall` | Semantic search over memories |
+| POST | `/sync` | Trigger a one-off sync cycle (index + extract) |
 | GET | `/health` | Health check with model info |
 | GET | `/stats` | Memory count and database stats |
 | GET | `/list` | List all memories |
@@ -164,6 +165,28 @@ simba neuron agents --inject
 simba neuron agents --update
 ```
 
+## Context-Low Early Warning
+
+The PreToolUse hook monitors the session transcript file size. When it exceeds a configurable threshold (default 4 MB), it injects a one-time `<context-low-warning>` into Claude's context recommending that it summarize its current work state before auto-compact triggers.
+
+This gives Claude time to document progress, pending tasks, and branch context so the pre-compact transcript export captures a clean snapshot for learning extraction.
+
+## Sync Pipeline
+
+Automatic indexing and learning extraction from project files and session transcripts.
+
+```bash
+simba sync run                              # Full cycle: index + extract
+simba sync schedule --interval 300          # Run every 5 minutes
+simba server --sync-interval 300            # Start daemon with periodic sync
+```
+
+The sync pipeline:
+1. **Index** — scans project files and builds the search database
+2. **Extract** — processes exported transcripts and stores learnings in semantic memory
+
+Sync can also be triggered via `POST /sync` on the daemon, which the SessionStart hook does automatically.
+
 ## Guardian — CLAUDE.md Rule Enforcement
 
 Extracts content between `<!-- BEGIN SIMBA:core -->` tags from CLAUDE.md and injects it as context on every prompt. On session stop, checks whether Claude's response contains the `[✓ rules]` compliance signal.
@@ -213,6 +236,11 @@ simba neuron sync        Update managed sections in CLAUDE.md and agents
 simba neuron agents      Manage agent definition files
 simba neuron status      Update agent task status
 simba search <cmd>       Project memory operations
+simba sync run           Run a full sync cycle (index + extract)
+simba sync index         Index project files only
+simba sync extract       Extract learnings from transcripts only
+simba sync status        Show sync pipeline status
+simba sync schedule      Run sync on a periodic interval
 simba stats              Token economics and project statistics
 simba hook <event>       Run a hook (called by Claude Code, not users)
 ```
@@ -225,7 +253,7 @@ cd simba
 uv sync
 
 # Run tests
-uv run pytest                     # all tests (~386)
+uv run pytest                     # all tests (~516)
 uv run pytest -x                  # stop on first failure
 uv run pytest -k "test_name"      # specific test
 
@@ -281,6 +309,9 @@ This directory is gitignored. The embedding model cache lives in `~/.cache/huggi
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall |
 | `max_results` | 3 | Maximum memories returned per query |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
+| `max_content_length` | 1000 | Maximum memory content length (chars) |
+| `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
+| `diagnostics_after` | 50 | Emit diagnostics report every N requests |
 
 ### Neuron
 

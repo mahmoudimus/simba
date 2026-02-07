@@ -57,6 +57,30 @@ class TestParseTranscriptToMarkdown:
         _md, count = simba.hooks.pre_compact._parse_transcript_to_markdown(lines)
         assert count == 1
 
+    def test_user_content_with_nested_list(self):
+        """Content items may have a 'content' field that is a list, not a string."""
+        lines = [
+            json.dumps(
+                {
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "normal text"},
+                            {
+                                "type": "tool_result",
+                                "content": [
+                                    {"type": "text", "text": "nested"}
+                                ],
+                            },
+                        ],
+                    }
+                }
+            )
+        ]
+        md, count = simba.hooks.pre_compact._parse_transcript_to_markdown(lines)
+        assert "normal text" in md
+        assert count == 1
+
     def test_empty_lines(self):
         _md, count = simba.hooks.pre_compact._parse_transcript_to_markdown([])
         assert count == 0

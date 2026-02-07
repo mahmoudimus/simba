@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import simba.db
 import simba.neuron.config
 from simba.neuron.agents import (
     VALID_AGENTS,
@@ -14,15 +15,14 @@ from simba.neuron.agents import (
     agent_status_check,
     agent_status_update,
     dispatch_agent,
-    get_agent_db,
 )
 
 
 @pytest.fixture(autouse=True)
-def _isolate_agent_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Point AGENT_DB_PATH to a temp directory for every test."""
-    db_path = tmp_path / "agents.db"
-    monkeypatch.setattr(simba.neuron.config, "AGENT_DB_PATH", db_path)
+def _isolate_agent_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+    """Point simba.db.get_db_path to a temp directory for every test."""
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
 
     # Reset the global logger so it re-initialises with the temp path.
     import simba.neuron.agents as _mod
@@ -30,13 +30,13 @@ def _isolate_agent_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(_mod, "_agent_logger", None)
 
 
-# ---- 1. get_agent_db creates schema ----------------------------------------
+# ---- 1. get_db creates agent schema ----------------------------------------
 
 
 class TestGetAgentDb:
-    def test_creates_all_tables(self, tmp_path: Path):
+    def test_creates_all_tables(self, tmp_path: pathlib.Path):
         """Verify the four expected tables exist after opening the DB."""
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             )
@@ -49,7 +49,7 @@ class TestGetAgentDb:
 
     def test_status_types_populated(self):
         """status_types should contain all Status enum members."""
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             rows = conn.execute("SELECT id, name FROM status_types").fetchall()
 
         names = {name for _, name in rows}
@@ -58,7 +58,7 @@ class TestGetAgentDb:
 
     def test_log_levels_populated(self):
         """log_levels should contain all LogLevel enum members."""
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             rows = conn.execute("SELECT id, name FROM log_levels").fetchall()
 
         names = {name for _, name in rows}
@@ -67,10 +67,10 @@ class TestGetAgentDb:
 
     def test_idempotent(self):
         """Opening the DB twice must not raise or duplicate rows."""
-        with get_agent_db() as conn1:
+        with simba.db.get_db() as conn1:
             count1 = conn1.execute("SELECT count(*) FROM status_types").fetchone()[0]
 
-        with get_agent_db() as conn2:
+        with simba.db.get_db() as conn2:
             count2 = conn2.execute("SELECT count(*) FROM status_types").fetchone()[0]
 
         assert count1 == count2
@@ -82,7 +82,7 @@ class TestGetAgentDb:
 class TestAgentStatusUpdate:
     def _insert_run(self, ticket_id: str = "tkt-001", agent: str = "analyst"):
         """Helper: insert a minimal agent_runs row."""
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             conn.execute(
                 """INSERT INTO agent_runs
                    (ticket_id, agent, pid, status_id, created_at_utc)
@@ -103,7 +103,7 @@ class TestAgentStatusUpdate:
         result = agent_status_update("tkt-up1", "running")
         assert "running" in result
 
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             row = conn.execute(
                 "SELECT status_id FROM agent_runs WHERE ticket_id=?", ("tkt-up1",)
             ).fetchone()
@@ -116,7 +116,7 @@ class TestAgentStatusUpdate:
         self._insert_run("tkt-cmp")
         agent_status_update("tkt-cmp", "completed")
 
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             row = conn.execute(
                 "SELECT completed_at_utc FROM agent_runs WHERE ticket_id=?",
                 ("tkt-cmp",),
@@ -130,7 +130,7 @@ class TestAgentStatusUpdate:
         self._insert_run("tkt-fail")
         agent_status_update("tkt-fail", "failed", message="something broke")
 
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             row = conn.execute(
                 "SELECT error FROM agent_runs WHERE ticket_id=?", ("tkt-fail",)
             ).fetchone()
@@ -152,7 +152,7 @@ class TestAgentStatusCheckNoRuns:
     def test_no_active_agents(self):
         """With an empty DB, checking all active agents returns 'No active agents.'"""
         # Ensure DB is initialized.
-        with get_agent_db():
+        with simba.db.get_db():
             pass
 
         result = agent_status_check()
@@ -160,7 +160,7 @@ class TestAgentStatusCheckNoRuns:
 
     def test_specific_ticket_not_found(self):
         """Querying a nonexistent ticket returns 'No status for ...'."""
-        with get_agent_db():
+        with simba.db.get_db():
             pass
 
         result = agent_status_check(ticket_id="nonexistent-ticket")
@@ -174,7 +174,7 @@ class TestAgentStatusCheckNoRuns:
 class TestAgentStatusCheckWithRun:
     def test_returns_formatted_status(self):
         """A pending run should appear in the status output."""
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             conn.execute(
                 """INSERT INTO agent_runs
                    (ticket_id, agent, pid, status_id, created_at_utc)
@@ -248,7 +248,7 @@ class TestCheckProcessAlive:
 
 
 class TestDispatchAgent:
-    def test_creates_db_entry_and_starts_process(self, tmp_path: Path):
+    def test_creates_db_entry_and_starts_process(self, tmp_path: pathlib.Path):
         """dispatch_agent should insert a row and return PID info."""
         mock_proc = MagicMock()
         mock_proc.pid = 54321
@@ -261,7 +261,7 @@ class TestDispatchAgent:
         assert "tkt-d1" in result
 
         # Verify DB row was created.
-        with get_agent_db() as conn:
+        with simba.db.get_db() as conn:
             row = conn.execute(
                 "SELECT agent, pid, status_id FROM agent_runs WHERE ticket_id=?",
                 ("tkt-d1",),
@@ -272,7 +272,7 @@ class TestDispatchAgent:
         assert row[1] == 54321
         assert row[2] == simba.neuron.config.Status.STARTED
 
-    def test_popen_called_with_correct_args(self, tmp_path: Path):
+    def test_popen_called_with_correct_args(self, tmp_path: pathlib.Path):
         """Verify subprocess.Popen is invoked with expected command structure."""
         mock_proc = MagicMock()
         mock_proc.pid = 11111
