@@ -1,4 +1,4 @@
-"""Tests for simba.neuron.agents — dispatch, status, DB, and logging."""
+"""Tests for simba.orchestration.agents — dispatch, status, DB, and logging."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import simba.db
-import simba.neuron.config
-from simba.neuron.agents import (
+import simba.orchestration.config
+from simba.orchestration.agents import (
     VALID_AGENTS,
     _check_process_alive,
     agent_status_check,
@@ -25,7 +25,7 @@ def _isolate_agent_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
 
     # Reset the global logger so it re-initialises with the temp path.
-    import simba.neuron.agents as _mod
+    import simba.orchestration.agents as _mod
 
     monkeypatch.setattr(_mod, "_agent_logger", None)
 
@@ -53,7 +53,7 @@ class TestGetAgentDb:
             rows = conn.execute("SELECT id, name FROM status_types").fetchall()
 
         names = {name for _, name in rows}
-        for status in simba.neuron.config.Status:
+        for status in simba.orchestration.config.Status:
             assert status.name.lower() in names
 
     def test_log_levels_populated(self):
@@ -62,7 +62,7 @@ class TestGetAgentDb:
             rows = conn.execute("SELECT id, name FROM log_levels").fetchall()
 
         names = {name for _, name in rows}
-        for level in simba.neuron.config.LogLevel:
+        for level in simba.orchestration.config.LogLevel:
             assert level.name.lower() in names
 
     def test_idempotent(self):
@@ -91,8 +91,8 @@ class TestAgentStatusUpdate:
                     ticket_id,
                     agent,
                     12345,
-                    simba.neuron.config.Status.PENDING,
-                    simba.neuron.config.utc_now(),
+                    simba.orchestration.config.Status.PENDING,
+                    simba.orchestration.config.utc_now(),
                 ),
             )
             conn.commit()
@@ -109,7 +109,7 @@ class TestAgentStatusUpdate:
             ).fetchone()
 
         assert row is not None
-        assert row[0] == simba.neuron.config.Status.RUNNING
+        assert row[0] == simba.orchestration.config.Status.RUNNING
 
     def test_update_to_completed_sets_timestamp(self):
         """Completing a run should populate completed_at_utc."""
@@ -183,8 +183,8 @@ class TestAgentStatusCheckWithRun:
                     "tkt-fmt",
                     "researcher",
                     9999,
-                    simba.neuron.config.Status.PENDING,
-                    simba.neuron.config.utc_now(),
+                    simba.orchestration.config.Status.PENDING,
+                    simba.orchestration.config.utc_now(),
                 ),
             )
             conn.commit()
@@ -210,8 +210,11 @@ class TestCheckProcessAlive:
         mock_result.stdout = "S"
 
         with (
-            patch("simba.neuron.agents.os.kill") as mock_kill,
-            patch("simba.neuron.agents.subprocess.run", return_value=mock_result),
+            patch("simba.orchestration.agents.os.kill") as mock_kill,
+            patch(
+                "simba.orchestration.agents.subprocess.run",
+                return_value=mock_result,
+            ),
         ):
             mock_kill.return_value = None  # signal 0 success
             is_alive, is_zombie = _check_process_alive(42)
@@ -221,7 +224,9 @@ class TestCheckProcessAlive:
 
     def test_dead_process(self):
         """When os.kill raises ProcessLookupError, process is dead."""
-        with patch("simba.neuron.agents.os.kill", side_effect=ProcessLookupError):
+        with patch(
+            "simba.orchestration.agents.os.kill", side_effect=ProcessLookupError
+        ):
             is_alive, is_zombie = _check_process_alive(42)
 
         assert is_alive is False
@@ -234,8 +239,11 @@ class TestCheckProcessAlive:
         mock_result.stdout = "Z+"
 
         with (
-            patch("simba.neuron.agents.os.kill") as mock_kill,
-            patch("simba.neuron.agents.subprocess.run", return_value=mock_result),
+            patch("simba.orchestration.agents.os.kill") as mock_kill,
+            patch(
+                "simba.orchestration.agents.subprocess.run",
+                return_value=mock_result,
+            ),
         ):
             mock_kill.return_value = None
             is_alive, is_zombie = _check_process_alive(42)
@@ -253,7 +261,9 @@ class TestDispatchAgent:
         mock_proc = MagicMock()
         mock_proc.pid = 54321
 
-        with patch("simba.neuron.agents.subprocess.Popen", return_value=mock_proc):
+        with patch(
+            "simba.orchestration.agents.subprocess.Popen", return_value=mock_proc
+        ):
             result = dispatch_agent("analyst", "tkt-d1", "Do analysis")
 
         assert "54321" in result
@@ -270,7 +280,7 @@ class TestDispatchAgent:
         assert row is not None
         assert row[0] == "analyst"
         assert row[1] == 54321
-        assert row[2] == simba.neuron.config.Status.STARTED
+        assert row[2] == simba.orchestration.config.Status.STARTED
 
     def test_popen_called_with_correct_args(self, tmp_path: pathlib.Path):
         """Verify subprocess.Popen is invoked with expected command structure."""
@@ -278,7 +288,7 @@ class TestDispatchAgent:
         mock_proc.pid = 11111
 
         with patch(
-            "simba.neuron.agents.subprocess.Popen", return_value=mock_proc
+            "simba.orchestration.agents.subprocess.Popen", return_value=mock_proc
         ) as mock_popen:
             dispatch_agent("researcher", "tkt-d2", "Research topic X")
 

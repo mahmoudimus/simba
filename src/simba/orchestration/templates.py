@@ -1,4 +1,4 @@
-"""Agent templates and managed section content for Neuron.
+"""Agent templates and managed section content for orchestration.
 
 MANAGED_SECTIONS are injected into agent files between markers:
     <!-- BEGIN SIMBA:section_name -->

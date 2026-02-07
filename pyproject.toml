@@ -61,6 +61,7 @@ select = [
 "tests/conftest.py" = ["TCH002", "TCH003"]
 "tools/**/*.py" = ["N802"]  # libcst uses PascalCase visitor methods
 "src/simba/neuron/templates.py" = ["E501"]  # markdown template content
+"src/simba/orchestration/templates.py" = ["E501"]  # markdown template content
 
 [tool.ruff.lint.isort]
 known-first-party = ["simba"]

@@ -79,9 +79,9 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
     Returns the ticket_id or None on failure.
     """
     try:
-        from simba.neuron.agents import dispatch_agent
+        from simba.orchestration.agents import dispatch_agent
     except ImportError:
-        logger.debug("neuron.agents not available")
+        logger.debug("orchestration.agents not available")
         return None
 
     memory_text = "\n\n".join(

@@ -1,4 +1,4 @@
-"""Hot-reload proxy (Einhorn-style) for the Neuron MCP server.
+"""Hot-reload proxy (Einhorn-style) for the Orchestration MCP server.
 
 Sits between Claude Code and the actual MCP backend, enabling backend
 restarts without dropping the frontend connection.
@@ -18,7 +18,7 @@ class MCPProxy:
 
     Usage::
 
-        simba neuron proxy --root-dir .
+        simba orchestration proxy --root-dir .
 
     Hot-reload::
 
@@ -165,7 +165,7 @@ def reload_server() -> str:
         return (
             "Proxy not running (no PID file found).\n"
             "   Hot-reload requires proxy mode. Reinstall with:\n"
-            "   simba neuron install --proxy"
+            "   simba orchestration install --proxy"
         )
 
     try:
@@ -199,7 +199,7 @@ def run_proxy(pid_file: Path, root_dir: Path) -> None:
     backend_cmd = [
         sys.executable,
         "-m",
-        "simba.neuron",
+        "simba.orchestration",
         "run",
         "--root-dir",
         str(root_dir),
