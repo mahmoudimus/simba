@@ -111,7 +111,7 @@ simba neuron install
 simba neuron install --proxy
 ```
 
-This registers Neuron as an MCP server in `.claude/settings.json` and creates agent definition files in `.claude/agents/`.
+This registers Neuron as an MCP server in `.claude/settings.json` and creates agent definition files in `.claude/agents/`. Neuron databases are stored under `.simba/neuron/`.
 
 ### MCP Tools
 
@@ -129,7 +129,7 @@ Neuron exposes 7 tools via the Model Context Protocol:
 
 ### Truth Database
 
-A local SQLite database (`.claude/truth.db`) that stores proven facts as subject-predicate-object triples with their proof text. Claude queries this before making assumptions about the codebase.
+A local SQLite database (`.simba/neuron/truth.db`) that stores proven facts as subject-predicate-object triples with their proof text. Claude queries this before making assumptions about the codebase.
 
 ```bash
 # Run the MCP server directly
@@ -272,8 +272,8 @@ uv run pre-commit install
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `db_path` | `.claude/truth.db` | Truth database location |
-| `agents_dir` | `.claude/agents` | Agent definition files |
+| `db_path` | `.simba/neuron/truth.db` | Truth database location |
+| `agents_dir` | `.claude/agents` | Agent definition files (Claude Code convention) |
 
 ## License
 

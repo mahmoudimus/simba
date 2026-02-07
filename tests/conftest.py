@@ -85,7 +85,7 @@ def reflections_file(tmp_path: pathlib.Path, mock_reflection):
     """Factory for creating a reflections JSONL file."""
 
     def _create(reflections: list[dict] | None = None) -> pathlib.Path:
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True, exist_ok=True)
         path = memory_dir / "reflections.jsonl"
         if reflections is None:

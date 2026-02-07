@@ -68,7 +68,7 @@ agent_status_check("task-xxx")
 #    Result: First 100 chars of result...
 ```
 
-**Storage:** `.claude/agents.db` (tables: `agent_runs`, `agent_logs`)
+**Storage:** `.simba/neuron/agents.db` (tables: `agent_runs`, `agent_logs`)
 """,
     "agent_table": """
 | Agent | Purpose | Trigger |

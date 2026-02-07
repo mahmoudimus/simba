@@ -17,7 +17,7 @@ First, check if there's an activity log from this session:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-ACTIVITY_FILE="$REPO_ROOT/.claude-memory/activity.log"
+ACTIVITY_FILE="$REPO_ROOT/.simba/search/activity.log"
 if [ -f "$ACTIVITY_FILE" ]; then
     cat "$ACTIVITY_FILE"
 fi
@@ -87,7 +87,7 @@ After saving, clear the activity log:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-ACTIVITY_FILE="$REPO_ROOT/.claude-memory/activity.log"
+ACTIVITY_FILE="$REPO_ROOT/.simba/search/activity.log"
 [ -f "$ACTIVITY_FILE" ] && rm "$ACTIVITY_FILE"
 ```
 

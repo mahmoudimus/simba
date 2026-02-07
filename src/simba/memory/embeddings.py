@@ -143,9 +143,7 @@ class EmbeddingService:
             EmbeddingService._llama_log_cb = llama_cpp.llama_log_callback(
                 lambda *_args: None
             )
-            llama_cpp.llama_log_set(
-                EmbeddingService._llama_log_cb, ctypes.c_void_p(0)
-            )
+            llama_cpp.llama_log_set(EmbeddingService._llama_log_cb, ctypes.c_void_p(0))
 
         return llama_cpp.Llama(
             model_path=str(model_path),

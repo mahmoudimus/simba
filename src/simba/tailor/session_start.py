@@ -89,7 +89,7 @@ def gather_checkpoints(cwd: pathlib.Path | None = None) -> list[tuple[str, str]]
     if cwd is None:
         cwd = pathlib.Path.cwd()
 
-    memory_dir = cwd / ".claude-tailor" / "memory"
+    memory_dir = cwd / ".simba" / "tailor"
     if not memory_dir.is_dir():
         return []
 
@@ -120,7 +120,7 @@ def gather_context(cwd: pathlib.Path | None = None) -> str:
 
     context = f"Time: {time_str} | Git: {git_status}"
 
-    memory_dir = cwd / ".claude-tailor" / "memory"
+    memory_dir = cwd / ".simba" / "tailor"
     if memory_dir.is_dir():
         marks = gather_checkpoints(cwd=cwd)
         if marks:

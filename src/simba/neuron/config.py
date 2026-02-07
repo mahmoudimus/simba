@@ -46,7 +46,7 @@ STATUS_NAME_MAP = {
     "failed": Status.FAILED,
 }
 
-AGENT_DB_PATH = Path(".claude/agents.db")
+AGENT_DB_PATH = Path(".simba/neuron/agents.db")
 
 
 @dataclass
@@ -64,7 +64,7 @@ class ServerConfig:
 
 
 CONFIG = ServerConfig(
-    db_path=Path(".claude/truth.db"),
+    db_path=Path(".simba/neuron/truth.db"),
     python_cmd=sys.executable,
     souffle_cmd=shutil.which("souffle"),
 )

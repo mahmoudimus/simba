@@ -126,7 +126,7 @@ class TestLoggingLevelMap:
 
 class TestServerConfig:
     def test_default_db_path(self) -> None:
-        assert simba.neuron.config.CONFIG.db_path == Path(".claude/truth.db")
+        assert simba.neuron.config.CONFIG.db_path == Path(".simba/neuron/truth.db")
 
     def test_default_python_cmd_is_string(self) -> None:
         assert isinstance(simba.neuron.config.CONFIG.python_cmd, str)
@@ -141,7 +141,7 @@ class TestServerConfig:
 
     def test_resolved_db_path_ends_with_db_path(self) -> None:
         resolved = simba.neuron.config.CONFIG.resolved_db_path
-        assert resolved.parts[-2:] == (".claude", "truth.db")
+        assert resolved.parts[-2:] == ("neuron", "truth.db")
 
     def test_custom_config(self) -> None:
         cfg = simba.neuron.config.ServerConfig(
@@ -156,7 +156,7 @@ class TestServerConfig:
 
 class TestAgentDbPath:
     def test_value(self) -> None:
-        expected = Path(".claude/agents.db")
+        expected = Path(".simba/neuron/agents.db")
         assert expected == simba.neuron.config.AGENT_DB_PATH
 
 

@@ -29,7 +29,7 @@ Hook output follows the Claude Code hook protocol: read JSON from stdin, write `
 
 ### claude-tailor (tailor-nano)
 
-- `src/hook.js` — Post-conversation hook that reads transcript JSONL, detects errors via regex patterns, normalizes them for clustering (line numbers → `:LINE:COL`, paths → `/PATH/`), and appends reflection entries to `.claude-tailor/memory/reflections.jsonl`
+- `src/hook.js` — Post-conversation hook that reads transcript JSONL, detects errors via regex patterns, normalizes them for clustering (line numbers → `:LINE:COL`, paths → `/PATH/`), and appends reflection entries to `.simba/tailor/reflections.jsonl`
 - `src/install.js` — Installer that creates dirs, copies hooks, registers in `.claude/settings.local.json`, handles CLAUDE.md merge/overwrite/skip
 - `src/session-start.sh` — Reinjects patterns at session start
 - `commands/` — Slash commands: `/mark` (checkpoints), `/recall` (search history), `/test` (run tests), `/reflect` (analyze patterns)
