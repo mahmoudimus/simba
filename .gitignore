@@ -23,5 +23,9 @@ htmlcov/
 # Simba data (memory, neuron, search, tailor)
 .simba/
 
+# LanceDB data (stray copies outside .simba/)
+*.lance/
+src/simba/memory/data/
+
 # OS
 .DS_Store

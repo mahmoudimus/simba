@@ -250,6 +250,20 @@ uv run pyrefly check
 uv run pre-commit install
 ```
 
+## Data Storage
+
+All project-level data lives under a single `.simba/` directory in the project root:
+
+```
+.simba/
+  memory/              LanceDB vector database (727+ semantic memories)
+  neuron/              Neuron truth DB and agent run logs (SQLite)
+  search/              Project search DB and activity log (SQLite + text)
+  tailor/              Error reflection journal (JSONL)
+```
+
+This directory is gitignored. The embedding model cache lives in `~/.cache/huggingface/hub/`.
+
 ## Configuration
 
 ### Memory Daemon
