@@ -20,11 +20,8 @@ build/
 .coverage
 htmlcov/
 
-# LanceDB data
-*.lance/
-
-# Project memory database
-.claude-memory/
+# Simba data (memory, neuron, search, tailor)
+.simba/
 
 # OS
 .DS_Store

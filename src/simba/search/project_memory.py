@@ -350,7 +350,7 @@ def get_db_path(cwd: pathlib.Path) -> pathlib.Path:
     """
     root = find_repo_root(cwd)
     base = root if root is not None else cwd
-    return base / ".claude-memory" / "memory.db"
+    return base / ".simba" / "search" / "memory.db"
 
 
 def get_connection(cwd: pathlib.Path) -> sqlite3.Connection | None:

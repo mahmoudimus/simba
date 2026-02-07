@@ -38,13 +38,13 @@ class TestGatherCheckpoints:
         assert marks == []
 
     def test_no_progress_files(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True)
         marks = simba.tailor.session_start.gather_checkpoints(cwd=tmp_path)
         assert marks == []
 
     def test_finds_progress_files(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True)
         (memory_dir / "progress-feature-a.jsonl").write_text("{}\n")
         (memory_dir / "progress-feature-b.jsonl").write_text("{}\n")
@@ -54,7 +54,7 @@ class TestGatherCheckpoints:
         assert "feature-a" in names or "feature-b" in names
 
     def test_limits_to_3(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True)
         for i in range(5):
             (memory_dir / f"progress-mark{i}.jsonl").write_text("{}\n")
@@ -72,7 +72,7 @@ class TestGatherContext:
         assert "Git:" in ctx
 
     def test_marks_none_message(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True)
         ctx = simba.tailor.session_start.gather_context(cwd=tmp_path)
         assert "Marks:" in ctx

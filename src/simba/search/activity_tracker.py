@@ -19,7 +19,7 @@ def _get_log_path(cwd: pathlib.Path) -> pathlib.Path:
     """Return the activity log path for the repository containing *cwd*."""
     root = simba.search.project_memory.find_repo_root(cwd)
     base = root if root is not None else cwd
-    return base / ".claude-memory" / "activity.log"
+    return base / ".simba" / "search" / "activity.log"
 
 
 def log_activity(cwd: pathlib.Path, tool_name: str, detail: str) -> None:

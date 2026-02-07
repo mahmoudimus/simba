@@ -183,7 +183,7 @@ def process_hook(input_str: str) -> None:
     reflection = create_reflection_entry(error_type, snippet, context)
 
     cwd = hook_data.get("cwd", ".")
-    memory_path = pathlib.Path(cwd) / ".claude-tailor" / "memory" / "reflections.jsonl"
+    memory_path = pathlib.Path(cwd) / ".simba" / "tailor" / "reflections.jsonl"
     try:
         memory_path.parent.mkdir(parents=True, exist_ok=True)
         with open(memory_path, "a") as f:

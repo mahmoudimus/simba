@@ -33,7 +33,7 @@ def _mock_repo_root(tmp_path: pathlib.Path):
 class TestLogActivity:
     def test_writes_pipe_separated_entry(self, tmp_path: pathlib.Path) -> None:
         simba.search.activity_tracker.log_activity(tmp_path, "grep", "searched for foo")
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         assert log_path.exists()
         content = log_path.read_text()
         parts = content.strip().split("|")
@@ -42,7 +42,7 @@ class TestLogActivity:
         assert parts[2] == "searched for foo"
 
     def test_creates_parent_directory(self, tmp_path: pathlib.Path) -> None:
-        memory_dir = tmp_path / ".claude-memory"
+        memory_dir = tmp_path / ".simba" / "search"
         assert not memory_dir.exists()
         simba.search.activity_tracker.log_activity(tmp_path, "read", "file.py")
         assert memory_dir.exists()
@@ -50,7 +50,7 @@ class TestLogActivity:
     def test_appends_multiple_entries(self, tmp_path: pathlib.Path) -> None:
         simba.search.activity_tracker.log_activity(tmp_path, "grep", "first")
         simba.search.activity_tracker.log_activity(tmp_path, "read", "second")
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         lines = log_path.read_text().strip().splitlines()
         assert len(lines) == 2
         assert "grep" in lines[0]
@@ -64,7 +64,7 @@ class TestLogActivity:
 
 class TestReadActivityLog:
     def test_parses_pipe_separated_format(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
             "2024-01-01 10:00:00|grep|searched foo\n2024-01-01 10:01:00|read|file.py\n"
@@ -79,7 +79,7 @@ class TestReadActivityLog:
         assert entries == []
 
     def test_skips_malformed_lines(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
             "2024-01-01 10:00:00|grep|searched foo\n"
@@ -100,7 +100,7 @@ class TestReadActivityLog:
 
 class TestClearActivityLog:
     def test_removes_the_file(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("2024-01-01 10:00:00|grep|foo\n")
         assert log_path.exists()
@@ -119,7 +119,7 @@ class TestClearActivityLog:
 
 class TestRotateLog:
     def test_keeps_last_100_lines_when_over_200(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"2024-01-01 00:00:{i:02d}|tool{i}|detail{i}\n" for i in range(210)]
         log_path.write_text("".join(lines))
@@ -131,7 +131,7 @@ class TestRotateLog:
         assert "tool209" in remaining[-1]
 
     def test_no_rotation_under_200_lines(self, tmp_path: pathlib.Path) -> None:
-        log_path = tmp_path / ".claude-memory" / "activity.log"
+        log_path = tmp_path / ".simba" / "search" / "activity.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         lines = [f"2024-01-01 00:00:{i:02d}|tool{i}|detail{i}\n" for i in range(150)]
         log_path.write_text("".join(lines))

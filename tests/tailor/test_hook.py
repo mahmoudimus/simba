@@ -287,7 +287,7 @@ class TestParseTranscriptContent:
 
 class TestProcessHook:
     def test_appends_reflection_to_jsonl(self, tmp_path: pathlib.Path):
-        memory_dir = tmp_path / ".claude-tailor" / "memory"
+        memory_dir = tmp_path / ".simba" / "tailor"
         memory_dir.mkdir(parents=True)
         jsonl_path = memory_dir / "reflections.jsonl"
 
@@ -338,7 +338,7 @@ class TestProcessHook:
         )
         simba.tailor.hook.process_hook(hook_input)
 
-        jsonl_path = tmp_path / ".claude-tailor" / "memory" / "reflections.jsonl"
+        jsonl_path = tmp_path / ".simba" / "tailor" / "reflections.jsonl"
         assert not jsonl_path.exists()
 
     def test_handles_write_errors_silently(self):

@@ -37,7 +37,7 @@ def main() -> int:
     )
     install_parser.add_argument(
         "--db-path",
-        default=".claude/truth.db",
+        default=".simba/neuron/truth.db",
         help="Default path for the truth database",
     )
     install_parser.add_argument(
@@ -55,7 +55,7 @@ def main() -> int:
     run_parser = subparsers.add_parser("run", help="Run the MCP server (internal use)")
     run_parser.add_argument(
         "--db-path",
-        default=".claude/truth.db",
+        default=".simba/neuron/truth.db",
         type=Path,
         help="Path to SQLite DB",
     )
@@ -67,7 +67,7 @@ def main() -> int:
     )
     proxy_parser.add_argument(
         "--db-path",
-        default=".claude/truth.db",
+        default=".simba/neuron/truth.db",
         help="Path to SQLite DB",
     )
     proxy_parser.add_argument(

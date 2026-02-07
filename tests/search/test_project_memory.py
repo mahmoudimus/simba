@@ -380,7 +380,7 @@ class TestGetDbPath:
         db_path = simba.search.project_memory.get_db_path(repo)
 
         # Assert
-        assert db_path == repo.resolve() / ".claude-memory" / "memory.db"
+        assert db_path == repo.resolve() / ".simba" / "search" / "memory.db"
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ class TestGetConnection:
         repo = tmp_path / "myrepo"
         repo.mkdir()
         (repo / ".git").mkdir()
-        db_path = repo / ".claude-memory" / "memory.db"
+        db_path = repo / ".simba" / "search" / "memory.db"
         init_conn = simba.search.project_memory.init_db(db_path)
         init_conn.close()
 

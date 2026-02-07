@@ -15,7 +15,7 @@ When the user invokes `/token-stats`, analyze token usage and display savings.
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-ACTIVITY_FILE="$REPO_ROOT/.claude-memory/activity.log"
+ACTIVITY_FILE="$REPO_ROOT/.simba/search/activity.log"
 
 # Count files read this session
 if [ -f "$ACTIVITY_FILE" ]; then
