@@ -15,6 +15,9 @@ import uuid
 
 import fastapi
 import pydantic
+import starlette.middleware.base
+import starlette.requests
+import starlette.responses
 
 import simba.memory.vector_db
 
@@ -24,6 +27,30 @@ router = fastapi.APIRouter()
 
 # Background tasks need a strong reference to avoid GC before completion.
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
+    """Record every request and emit diagnostics reports at intervals."""
+
+    async def dispatch(
+        self,
+        request: starlette.requests.Request,
+        call_next: typing.Callable[
+            [starlette.requests.Request],
+            typing.Awaitable[starlette.responses.Response],
+        ],
+    ) -> starlette.responses.Response:
+        diag = getattr(request.app.state, "diagnostics", None)
+        response = await call_next(request)
+        if diag is not None:
+            diag.record_request(request.url.path)
+            if diag.should_report():
+                table = getattr(request.app.state, "table", None)
+                task = asyncio.create_task(diag.emit_report(table))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
+        return response
+
 
 VALID_TYPES = [
     "GOTCHA",
@@ -93,6 +120,15 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
         table, embedding, config.duplicate_threshold
     )
     if dup_check["is_duplicate"]:
+        logger.info(
+            "[store] project=%s type=%s -> duplicate (sim: %.2f)",
+            body.project_path or "(global)",
+            body.type,
+            round(dup_check["similarity"], 2),
+        )
+        diag = getattr(request.app.state, "diagnostics", None)
+        if diag is not None:
+            diag.record_store(body.type, duplicate=True)
         return {
             "status": "duplicate",
             "existing_id": dup_check["existing_id"],
@@ -120,6 +156,18 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             }
         ]
     )
+
+    logger.info(
+        '[store] project=%s type=%s content="%s" -> stored %s',
+        body.project_path or "(global)",
+        body.type,
+        body.content[:50],
+        memory_id,
+    )
+
+    diag = getattr(request.app.state, "diagnostics", None)
+    if diag is not None:
+        diag.record_store(body.type, duplicate=False)
 
     return {
         "status": "stored",
@@ -172,11 +220,17 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     query_time_ms = int((time.time() - start_time) * 1000)
     top_sim = round(results[0]["similarity"], 2) if results else 0.0
     logger.info(
-        "[recall] Found %d memories (%dms), top: %.2f",
+        '[recall] project=%s query="%s" -> %d memories (%dms), top: %.2f',
+        body.project_path or "(global)",
+        body.query[:50],
         len(results),
         query_time_ms,
         top_sim,
     )
+
+    diag = getattr(request.app.state, "diagnostics", None)
+    if diag is not None:
+        diag.record_recall(body.query, len(results))
 
     # Fire-and-forget: update access tracking for returned memories.
     if results:
@@ -220,7 +274,7 @@ async def health(request: fastapi.Request) -> dict:
 async def stats(request: fastapi.Request) -> dict:
     table = request.app.state.table
 
-    all_memories = await table.to_list()
+    all_memories = await table.query().to_list()
 
     by_type: dict[str, int] = {}
     total_confidence = 0.0
@@ -258,7 +312,7 @@ async def list_memories(
 ) -> dict:
     table = request.app.state.table
 
-    all_memories = await table.to_list()
+    all_memories = await table.query().to_list()
 
     if type:
         all_memories = [m for m in all_memories if m.get("type") == type]
@@ -286,6 +340,20 @@ async def list_memories(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.post("/sync")
+async def trigger_sync(request: fastapi.Request) -> dict:
+    """Trigger a one-off sync cycle (index + extract)."""
+    scheduler = getattr(request.app.state, "sync_scheduler", None)
+    if scheduler is None:
+        return {"status": "not_configured"}
+
+    task = asyncio.create_task(scheduler.run_once())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return {"status": "triggered", "cycle": scheduler.cycle_count + 1}
 
 
 @router.delete("/memory/{memory_id}")

@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import simba.neuron.agents
-import simba.neuron.config
 import simba.neuron.proxy
 import simba.neuron.truth
 import simba.neuron.verify
@@ -109,11 +108,8 @@ def reload_server() -> str:
 # --- Server entry point ---
 
 
-def run_server(db_path: Path | None = None, root_dir: Path | None = None) -> None:
+def run_server(root_dir: Path | None = None) -> None:
     """Configure and start the FastMCP server."""
-    if db_path is not None:
-        simba.neuron.config.CONFIG.db_path = db_path
-
     if root_dir is not None:
         resolved = root_dir.resolve()
         os.chdir(resolved)

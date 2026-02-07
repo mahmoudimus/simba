@@ -191,7 +191,7 @@ def reload_server() -> str:
         return f"Failed to send reload signal: {exc}"
 
 
-def run_proxy(db_path: str, pid_file: Path, root_dir: Path) -> None:
+def run_proxy(pid_file: Path, root_dir: Path) -> None:
     """Entry point for proxy mode."""
     root_dir = root_dir.resolve()
     os.chdir(root_dir)
@@ -201,8 +201,6 @@ def run_proxy(db_path: str, pid_file: Path, root_dir: Path) -> None:
         "-m",
         "simba.neuron",
         "run",
-        "--db-path",
-        db_path,
         "--root-dir",
         str(root_dir),
     ]

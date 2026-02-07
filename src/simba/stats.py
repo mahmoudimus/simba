@@ -10,6 +10,7 @@ import contextlib
 import subprocess
 from typing import TYPE_CHECKING
 
+import simba.db
 import simba.search.activity_tracker
 import simba.search.project_memory
 
@@ -106,7 +107,7 @@ def run_stats(cwd: pathlib.Path) -> str:
     )
 
     # -- Project memory --
-    conn = simba.search.project_memory.get_connection(cwd)
+    conn = simba.db.get_connection(cwd)
     if conn is not None:
         try:
             pm_stats = simba.search.project_memory.get_stats(conn)

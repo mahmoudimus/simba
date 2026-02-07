@@ -46,7 +46,6 @@ def install_agents(force: bool = False, update_sections: bool = True) -> None:
 
 def install_routine(
     server_name: str,
-    db_path: str,
     force_agents: bool,
     use_proxy: bool = False,
 ) -> None:
@@ -68,15 +67,12 @@ def install_routine(
         "-m",
         "simba.neuron",
         subcommand,
-        "--db-path",
-        db_path,
         "--root-dir",
         str(project_root),
     ]
 
     mode_str = "proxy (hot-reload)" if use_proxy else "direct"
     print(f"\nInstalling MCP Server '{server_name}' ({mode_str})...")
-    print(f"   Target DB: {db_path} (relative to project root)")
 
     claude_cmd = [
         "claude",

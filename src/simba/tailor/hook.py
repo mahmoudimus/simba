@@ -1,6 +1,6 @@
 """Error capture pipeline.
 
-Reads hook input, parses transcript, detects errors, appends reflection.
+Reads hook input, parses transcript, detects errors, stores reflection in SQLite.
 Ported from claude-tailor/src/hook.js. Uses stdlib only (no external deps).
 """
 
@@ -13,6 +13,27 @@ import re
 import string
 import sys
 import time
+
+import simba.db
+
+
+def _init_reflections_schema(conn) -> None:
+    """Create the reflections table and indexes if they don't exist."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS reflections (
+            id TEXT PRIMARY KEY,
+            ts TEXT NOT NULL,
+            error_type TEXT NOT NULL,
+            snippet TEXT NOT NULL DEFAULT '',
+            context TEXT NOT NULL DEFAULT '{}',
+            signature TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_reflections_ts ON reflections(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_reflections_type ON reflections(error_type);
+    """)
+
+
+simba.db.register_schema(_init_reflections_schema)
 
 ERROR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"Error:", re.IGNORECASE),
@@ -183,12 +204,23 @@ def process_hook(input_str: str) -> None:
     reflection = create_reflection_entry(error_type, snippet, context)
 
     cwd = hook_data.get("cwd", ".")
-    memory_path = pathlib.Path(cwd) / ".simba" / "tailor" / "reflections.jsonl"
     try:
-        memory_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(memory_path, "a") as f:
-            f.write(json.dumps(reflection) + "\n")
-    except OSError:
+        with simba.db.get_db(pathlib.Path(cwd)) as conn:
+            conn.execute(
+                "INSERT INTO reflections "
+                "(id, ts, error_type, snippet, context, signature) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    reflection["id"],
+                    reflection["ts"],
+                    reflection["error_type"],
+                    reflection["snippet"],
+                    json.dumps(reflection["context"]),
+                    reflection["signature"],
+                ),
+            )
+            conn.commit()
+    except Exception:
         pass
 
 

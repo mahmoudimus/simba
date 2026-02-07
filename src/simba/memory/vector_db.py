@@ -17,6 +17,9 @@ async def find_duplicates(
 ) -> dict[str, typing.Any]:
     """Check for duplicate memories based on cosine similarity."""
     try:
+        if hasattr(table, "checkout_latest"):
+            await table.checkout_latest()
+
         results = (
             await table.vector_search(embedding)
             .column("vector")
@@ -35,7 +38,7 @@ async def find_duplicates(
                     "similarity": similarity,
                 }
     except Exception:
-        pass
+        logger.warning("find_duplicates failed", exc_info=True)
 
     return {"is_duplicate": False}
 
@@ -52,6 +55,10 @@ async def search_memories(
         filters = {}
 
     try:
+        # Refresh the table handle to see newly-added fragments.
+        if hasattr(table, "checkout_latest"):
+            await table.checkout_latest()
+
         results = (
             await table.vector_search(embedding)
             .column("vector")
@@ -85,7 +92,23 @@ async def search_memories(
         memories.sort(key=lambda m: m["similarity"], reverse=True)
         return memories[:max_results]
     except Exception:
+        logger.warning("search_memories failed", exc_info=True)
         return []
+
+
+async def compact_table(table: typing.Any) -> bool:
+    """Compact table fragments to improve search performance.
+
+    LanceDB creates one fragment per ``add()`` call.  Periodic compaction
+    merges them into fewer, larger files.  Returns True on success.
+    """
+    try:
+        stats = await table.optimize()
+        logger.info("[compact] optimized: %s", stats)
+        return True
+    except Exception:
+        logger.debug("compact_table failed", exc_info=True)
+        return False
 
 
 async def count_rows(table: typing.Any) -> int:
@@ -105,15 +128,14 @@ async def update_access_tracking(table: typing.Any, memory_ids: list[str]) -> No
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         for mid in memory_ids:
             # Read current accessCount so we can increment it.
-            search = await table.search()
-            rows = await search.where(f"id = '{mid}'").limit(1).to_list()
+            rows = await table.query().where(f"id = '{mid}'").limit(1).to_list()
             current_count = rows[0].get("accessCount", 0) if rows else 0
             await table.update(
-                where=f"id = '{mid}'",
-                values={
+                updates={
                     "lastAccessedAt": now,
                     "accessCount": current_count + 1,
                 },
+                where=f"id = '{mid}'",
             )
     except Exception:
         logger.debug(

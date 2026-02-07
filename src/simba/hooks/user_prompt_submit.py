@@ -11,6 +11,7 @@ import pathlib
 
 import simba.guardian.extract_core
 import simba.hooks._memory_client
+import simba.hooks._truth_client
 import simba.search.rag_context
 
 _MIN_PROMPT_LENGTH = 10
@@ -43,7 +44,16 @@ def main(hook_input: dict) -> str:
         if formatted:
             parts.append(formatted)
 
-    # 3. Search: project memory + QMD context
+    # 3. Truth DB: inject proven facts relevant to the prompt
+    if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
+        try:
+            truth_block = simba.hooks._truth_client.query_truth_db(prompt)
+            if truth_block:
+                parts.append(truth_block)
+        except Exception:
+            pass
+
+    # 4. Search: project memory + QMD context
     if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
         try:
             search_ctx = simba.search.rag_context.build_context(prompt, cwd)

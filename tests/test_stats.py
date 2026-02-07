@@ -75,7 +75,7 @@ class TestRunStats:
                 return_value=entries,
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 return_value=None,
             ),
         ):
@@ -110,7 +110,7 @@ class TestRunStats:
                 return_value=[],
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 return_value=mock_conn,
             ),
             unittest.mock.patch(
@@ -142,7 +142,7 @@ class TestRunStats:
                 return_value=[],
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 return_value=None,
             ),
         ):
@@ -179,7 +179,7 @@ class TestRunStats:
                 return_value=entries,
             ),
             unittest.mock.patch(
-                "simba.search.project_memory.get_connection",
+                "simba.db.get_connection",
                 return_value=None,
             ),
         ):

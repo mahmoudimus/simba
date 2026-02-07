@@ -68,7 +68,7 @@ agent_status_check("task-xxx")
 #    Result: First 100 chars of result...
 ```
 
-**Storage:** `.simba/neuron/agents.db` (tables: `agent_runs`, `agent_logs`)
+**Storage:** `.simba/simba.db` (tables: `agent_runs`, `agent_logs`)
 """,
     "agent_table": """
 | Agent | Purpose | Trigger |
@@ -90,7 +90,7 @@ You are the **Hub** of an agent orchestration system.
 """,
     "prime_directive": """
 1. **Delegate First:** If a task requires reading file content or running commands, dispatch a Subagent.
-2. **Epistemic Check:** Before assuming a fact, query the `truth.db`.
+2. **Epistemic Check:** Before assuming a fact, query the Truth DB.
 3. **No Wall of Text:** Never allow a tool to dump >50 lines of code/logs into your context.
 """,
     "epistemic_protocol": """
@@ -100,6 +100,8 @@ You are the **Hub** of an agent orchestration system.
 2. **QUERY:** `truth_query(subject="X")`
 3. **PROVE:** If missing, delegate to `@verifier`.
 4. **COMMIT:** `truth_add(...)` with proof.
+
+Facts are stored in `.simba/simba.db` (`proven_facts` table).
 """,
     "tickets_workflow": """
 Use `tk` to manage the work queue.
