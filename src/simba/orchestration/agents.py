@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import simba.db
-import simba.neuron.config
+import simba.orchestration.config
 
 if TYPE_CHECKING:
     import sqlite3
@@ -41,7 +41,7 @@ def _init_agent_db_schema(conn: sqlite3.Connection) -> None:
             name TEXT UNIQUE NOT NULL
         )"""
     )
-    for status in simba.neuron.config.Status:
+    for status in simba.orchestration.config.Status:
         conn.execute(
             "INSERT OR IGNORE INTO status_types (id, name) VALUES (?, ?)",
             (status.value, status.name.lower()),
@@ -53,7 +53,7 @@ def _init_agent_db_schema(conn: sqlite3.Connection) -> None:
             name TEXT UNIQUE NOT NULL
         )"""
     )
-    for level in simba.neuron.config.LogLevel:
+    for level in simba.orchestration.config.LogLevel:
         conn.execute(
             "INSERT OR IGNORE INTO log_levels (id, name) VALUES (?, ?)",
             (level.value, level.name.lower()),
@@ -199,8 +199,8 @@ class SQLiteLogHandler(logging.Handler):
             ticket_id = getattr(record, "ticket_id", None)
             event = getattr(record, "event", "log")
             data = getattr(record, "data", {})
-            level_id = simba.neuron.config.LOGGING_LEVEL_MAP.get(
-                record.levelno, simba.neuron.config.LogLevel.INFO
+            level_id = simba.orchestration.config.LOGGING_LEVEL_MAP.get(
+                record.levelno, simba.orchestration.config.LogLevel.INFO
             )
             data_json = json.dumps(data) if data else "{}"
 
@@ -215,7 +215,7 @@ class SQLiteLogHandler(logging.Handler):
                         event,
                         record.funcName,
                         data_json,
-                        simba.neuron.config.utc_now(),
+                        simba.orchestration.config.utc_now(),
                     ),
                 )
                 conn.commit()
@@ -333,8 +333,8 @@ def _capture_and_cleanup(
                 stdout,
                 stderr,
                 result,
-                simba.neuron.config.utc_now(),
-                simba.neuron.config.Status.COMPLETED,
+                simba.orchestration.config.utc_now(),
+                simba.orchestration.config.Status.COMPLETED,
                 ticket_id,
             ),
         )
@@ -386,11 +386,11 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
         message: Optional status message or error details.
     """
     status_lower = status.lower()
-    if status_lower not in simba.neuron.config.STATUS_NAME_MAP:
-        valid = list(simba.neuron.config.STATUS_NAME_MAP.keys())
+    if status_lower not in simba.orchestration.config.STATUS_NAME_MAP:
+        valid = list(simba.orchestration.config.STATUS_NAME_MAP.keys())
         return f"Error: Invalid status '{status}'. Valid: {valid}"
 
-    status_id = simba.neuron.config.STATUS_NAME_MAP[status_lower]
+    status_id = simba.orchestration.config.STATUS_NAME_MAP[status_lower]
 
     with simba.db.get_db() as conn:
         cursor = conn.cursor()
@@ -401,8 +401,8 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
         old_status_id = row[0] if row else None
 
         if status_id in (
-            simba.neuron.config.Status.COMPLETED,
-            simba.neuron.config.Status.FAILED,
+            simba.orchestration.config.Status.COMPLETED,
+            simba.orchestration.config.Status.FAILED,
         ):
             conn.execute(
                 """UPDATE agent_runs
@@ -410,8 +410,10 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
                    WHERE ticket_id=?""",
                 (
                     status_id,
-                    message if status_id == simba.neuron.config.Status.FAILED else None,
-                    simba.neuron.config.utc_now(),
+                    message
+                    if status_id == simba.orchestration.config.Status.FAILED
+                    else None,
+                    simba.orchestration.config.utc_now(),
                     ticket_id,
                 ),
             )
@@ -425,7 +427,7 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
         logger = _get_logger()
         if logger:
             old_name = (
-                simba.neuron.config.Status(old_status_id).name.lower()
+                simba.orchestration.config.Status(old_status_id).name.lower()
                 if old_status_id
                 else "unknown"
             )
@@ -472,8 +474,8 @@ def agent_status_check(ticket_id: str | None = None) -> str:
             rows = cursor.execute(
                 base_query + " WHERE ar.status_id NOT IN (?, ?)",
                 (
-                    simba.neuron.config.Status.COMPLETED,
-                    simba.neuron.config.Status.FAILED,
+                    simba.orchestration.config.Status.COMPLETED,
+                    simba.orchestration.config.Status.FAILED,
                 ),
             ).fetchall()
 
@@ -498,8 +500,8 @@ def agent_status_check(ticket_id: str | None = None) -> str:
 
             # Auto-detect completion
             if status_id in (
-                simba.neuron.config.Status.STARTED,
-                simba.neuron.config.Status.RUNNING,
+                simba.orchestration.config.Status.STARTED,
+                simba.orchestration.config.Status.RUNNING,
             ):
                 is_alive, _is_zombie = _check_process_alive(pid)
                 if not is_alive:
@@ -532,7 +534,8 @@ def agent_status_check(ticket_id: str | None = None) -> str:
                     else:
                         status_name = "finished (no output files)"
 
-            elapsed = simba.neuron.config.utc_now() - created_at if created_at else 0
+            now = simba.orchestration.config.utc_now()
+            elapsed = now - created_at if created_at else 0
             status_line = f"{bid} ({agent}, PID {pid}): {status_name}"
             if elapsed:
                 status_line += f" [{elapsed}s]"
@@ -597,7 +600,7 @@ def dispatch_agent(agent_name: str, ticket_id: str, instructions: str) -> str:
                 start_new_session=True,
             )
 
-        now = simba.neuron.config.utc_now()
+        now = simba.orchestration.config.utc_now()
         cmd_str = " ".join(cmd)
 
         with simba.db.get_db() as conn:
@@ -611,7 +614,7 @@ def dispatch_agent(agent_name: str, ticket_id: str, instructions: str) -> str:
                     ticket_id,
                     agent_name,
                     proc.pid,
-                    simba.neuron.config.Status.STARTED,
+                    simba.orchestration.config.Status.STARTED,
                     cmd_str,
                     str(project_root),
                     output_format,

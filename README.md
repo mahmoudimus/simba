@@ -100,23 +100,18 @@ Works with llama-cpp-python server, vLLM, text-embeddings-inference, or any Open
 
 ## Neuron — Neuro-Symbolic Logic Server
 
-Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools and async agent orchestration.
+Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools (Z3 theorem prover, Souffle Datalog) and a truth database.
 
 ### Setup
 
 ```bash
-# Register the MCP server with Claude Code and bootstrap agent definitions
+# Register the MCP server with Claude Code
 simba neuron install
-
-# With hot-reload proxy (useful during development)
-simba neuron install --proxy
 ```
-
-This registers Neuron as an MCP server in `.claude/settings.json` and creates agent definition files in `.claude/agents/`. Neuron databases are stored under `.simba/neuron/`.
 
 ### MCP Tools
 
-Neuron exposes 7 tools via the Model Context Protocol:
+Neuron exposes 4 tools via the Model Context Protocol:
 
 | Tool | Purpose |
 |------|---------|
@@ -124,45 +119,64 @@ Neuron exposes 7 tools via the Model Context Protocol:
 | `truth_query` | Query the Truth DB for existing proven facts |
 | `verify_z3` | Execute a Z3 proof script in an isolated process |
 | `analyze_datalog` | Run a Souffle Datalog analysis program |
-| `dispatch_agent` | Launch an async subagent (non-blocking) |
-| `agent_status_update` | Report subagent progress |
-| `agent_status_check` | Check subagent completion status |
 
 ### Truth Database
 
-A local SQLite database (`.simba/neuron/truth.db`) that stores proven facts as subject-predicate-object triples with their proof text. Claude queries this before making assumptions about the codebase.
+A local SQLite database (`.simba/simba.db`, `proven_facts` table) that stores proven facts as subject-predicate-object triples with their proof text. Claude queries this before making assumptions about the codebase.
 
 ```bash
 # Run the MCP server directly
 simba neuron run --root-dir .
-
-# Or via hot-reload proxy (restarts backend on code changes)
-simba neuron proxy --root-dir .
 ```
 
-### Agent Orchestration
+## Orchestration — Agent Dispatch Server
 
-Neuron can dispatch Claude Code subagents as background processes:
+Orchestration is an MCP server for async agent dispatch, status tracking, and process management.
+
+### Setup
+
+```bash
+# Register the MCP server with Claude Code and bootstrap agent definitions
+simba orchestration install
+
+# With hot-reload proxy (useful during development)
+simba orchestration install --proxy
+```
+
+This registers Orchestration as an MCP server in `.claude/settings.json` and creates agent definition files in `.claude/agents/`.
+
+### MCP Tools
+
+Orchestration exposes 4 tools via the Model Context Protocol:
+
+| Tool | Purpose |
+|------|---------|
+| `dispatch_agent` | Launch an async subagent (non-blocking) |
+| `agent_status_update` | Report subagent progress |
+| `agent_status_check` | Check subagent completion status |
+| `reload_server` | Hot-reload the MCP backend (proxy mode) |
+
+### Agent Management
 
 ```bash
 # Update agent status (called by subagents, not users)
-simba neuron status <ticket_id> completed
-simba neuron status <ticket_id> failed -m "error message"
+simba orchestration status <ticket_id> completed
+simba orchestration status <ticket_id> failed -m "error message"
 ```
 
 ### Managed Sections
 
-Neuron manages auto-updated sections in CLAUDE.md and agent definition files using `<!-- BEGIN SIMBA:name -->` markers. These sections contain tool instructions, workflows, and agent-specific guidance.
+Orchestration manages auto-updated sections in CLAUDE.md and agent definition files using `<!-- BEGIN SIMBA:name -->` markers. These sections contain tool instructions, workflows, and agent-specific guidance.
 
 ```bash
 # Update managed sections in CLAUDE.md and agent files
-simba neuron sync
+simba orchestration sync
 
 # Inject markers into agent definition files
-simba neuron agents --inject
+simba orchestration agents --inject
 
 # Update content in existing markers
-simba neuron agents --update
+simba orchestration agents --update
 ```
 
 ## Context-Low Early Warning
@@ -226,16 +240,17 @@ Optional external tools for enhanced search:
 ## CLI Reference
 
 ```
-simba install            Register hooks in ~/.claude/settings.json
-simba install --remove   Remove hooks
-simba server [opts]      Start memory daemon
-simba neuron install     Register MCP server and bootstrap agents
-simba neuron run         Run MCP server directly
-simba neuron proxy       Run MCP server via hot-reload proxy
-simba neuron sync        Update managed sections in CLAUDE.md and agents
-simba neuron agents      Manage agent definition files
-simba neuron status      Update agent task status
-simba search <cmd>       Project memory operations
+simba install                 Register hooks in ~/.claude/settings.json
+simba install --remove        Remove hooks
+simba server [opts]           Start memory daemon
+simba neuron run              Run neuron MCP server (truth/verify)
+simba orchestration install   Register orchestration MCP server
+simba orchestration run       Run orchestration MCP server
+simba orchestration proxy     Run via hot-reload proxy
+simba orchestration sync      Update managed sections
+simba orchestration agents    Manage agent definition files
+simba orchestration status    Update agent task status
+simba search <cmd>            Project memory operations
 simba sync run           Run a full sync cycle (index + extract)
 simba sync index         Index project files only
 simba sync extract       Extract learnings from transcripts only
@@ -317,8 +332,14 @@ This directory is gitignored. The embedding model cache lives in `~/.cache/huggi
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `db_path` | `.simba/neuron/truth.db` | Truth database location |
+| `db_path` | `.simba/simba.db` | Truth database (proven_facts table) |
+
+### Orchestration
+
+| Field | Default | Description |
+|-------|---------|-------------|
 | `agents_dir` | `.claude/agents` | Agent definition files (Claude Code convention) |
+| `db_path` | `.simba/simba.db` | Agent runs and logs (agent_runs, agent_logs tables) |
 
 ## License
 
