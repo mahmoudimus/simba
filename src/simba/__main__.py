@@ -8,6 +8,7 @@ Usage:
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
+    simba orchestration <cmd> Agent orchestration server (MCP)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -154,6 +155,14 @@ def _cmd_neuron(args: list[str]) -> int:
     return simba.neuron.__main__.main()
 
 
+def _cmd_orchestration(args: list[str]) -> int:
+    """Agent orchestration server (MCP)."""
+    sys.argv = ["simba orchestration", *args]
+    import simba.orchestration.__main__
+
+    return simba.orchestration.__main__.main(args)
+
+
 _DB_USAGE = """\
 Usage: simba db <subcommand> [options]
 
@@ -195,14 +204,14 @@ def _cmd_db(args: list[str]) -> int:
     import simba.db
 
     # Ensure all schemas are registered by importing modules
-    import simba.neuron.agents
     import simba.neuron.truth
+    import simba.orchestration.agents
     import simba.search.activity_tracker
     import simba.search.project_memory
     import simba.tailor.hook
 
     _use = (
-        simba.neuron.agents,
+        simba.orchestration.agents,
         simba.neuron.truth,
         simba.search.activity_tracker,
         simba.search.project_memory,
@@ -650,6 +659,8 @@ def main() -> None:
         sys.exit(_cmd_sync(rest))
     elif cmd == "neuron":
         sys.exit(_cmd_neuron(rest))
+    elif cmd == "orchestration":
+        sys.exit(_cmd_orchestration(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:
