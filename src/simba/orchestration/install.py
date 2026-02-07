@@ -1,4 +1,4 @@
-"""Installation routines for registering Neuron with Claude Code."""
+"""Installation routines for registering the Orchestration server with Claude Code."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import simba.neuron.templates
+import simba.orchestration.templates
 
 
 def install_agents(force: bool = False, update_sections: bool = True) -> None:
@@ -21,21 +21,23 @@ def install_agents(force: bool = False, update_sections: bool = True) -> None:
         for agent_file in agents_dir.glob("*.md"):
             try:
                 original = agent_file.read_text()
-                updated = simba.neuron.templates.update_managed_sections(original)
+                updated = simba.orchestration.templates.update_managed_sections(
+                    original
+                )
                 if original != updated:
                     agent_file.write_text(updated)
                     print(f"   {agent_file.name} (updated managed sections)")
             except Exception as exc:
                 print(f"   {agent_file.name}: {exc}", file=sys.stderr)
 
-    for filename, content in simba.neuron.templates.AGENT_TEMPLATES.items():
+    for filename, content in simba.orchestration.templates.AGENT_TEMPLATES.items():
         file_path = agents_dir / filename
 
         if file_path.exists() and not force:
             continue
 
         try:
-            final_content = simba.neuron.templates.update_managed_sections(
+            final_content = simba.orchestration.templates.update_managed_sections(
                 content.lstrip()
             )
             file_path.write_text(final_content)
@@ -65,7 +67,7 @@ def install_routine(
     server_launch_cmd = [
         sys.executable,
         "-m",
-        "simba.neuron",
+        "simba.orchestration",
         subcommand,
         "--root-dir",
         str(project_root),
@@ -87,12 +89,12 @@ def install_routine(
         subprocess.run(claude_cmd, check=True)
         print(f"\nSuccessfully installed '{server_name}'!")
         print(
-            "   You can now use tools like 'truth_query' and "
-            "'verify_z3' in this project."
+            "   You can now use tools like 'dispatch_agent' and "
+            "'agent_status_check' in this project."
         )
         if use_proxy:
             print("\n   Hot-reload enabled!")
-            print("      After editing, run: pkill -HUP -f 'simba.neuron proxy'")
+            print("      After editing, run: pkill -HUP -f 'simba.orchestration proxy'")
     except subprocess.CalledProcessError as exc:
         print(
             f"\nInstallation failed with code {exc.returncode}",

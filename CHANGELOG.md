@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased] — 2025-02-06
+## [Unreleased] — 2025-02-07
+
+### Changed
+
+- **Extract orchestration from neuron**: Agent dispatch, status tracking, process
+  management, templates, proxy, and install routines moved from `simba.neuron` to
+  new `simba.orchestration` package. Neuron now contains only formal verification
+  tools (truth DB, Z3, Datalog). CLI: `simba orchestration {install,run,proxy,
+  status,agents,sync}`. All 516 tests pass.
+
+## [0.1.0] — 2025-02-06
 
 ### Added
 
