@@ -2,6 +2,13 @@
 
 ## [Unreleased] — 2025-02-07
 
+### Added
+
+- **`simba markers` CLI**: New subcommand to discover, audit, and update
+  `<!-- BEGIN SIMBA:name -->` markers across `.md` files. Subcommands: `list`,
+  `audit` (unused/orphaned/stale detection), `update` (bulk template refresh),
+  `show` (print raw template content).
+
 ### Changed
 
 - **Extract orchestration from neuron**: Agent dispatch, status tracking, process

@@ -250,6 +250,10 @@ simba orchestration proxy     Run via hot-reload proxy
 simba orchestration sync      Update managed sections
 simba orchestration agents    Manage agent definition files
 simba orchestration status    Update agent task status
+simba markers list             List all SIMBA markers in .md files
+simba markers audit            Compare markers vs MANAGED_SECTIONS
+simba markers update           Update markers with current templates
+simba markers show <section>   Print raw template for a section
 simba search <cmd>            Project memory operations
 simba sync run           Run a full sync cycle (index + extract)
 simba sync index         Index project files only
