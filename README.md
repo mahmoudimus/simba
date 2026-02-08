@@ -217,6 +217,21 @@ Mark critical rules in your CLAUDE.md:
 
 These rules are reinforced on every prompt regardless of context window state.
 
+## Markers CLI
+
+Discover, audit, update, and migrate SIMBA markers across `.md` files.
+
+```bash
+simba markers list                    # Scan for all markers, show file/section/line
+simba markers audit                   # Find unused, orphaned, or stale sections
+simba markers update                  # Bulk-update all markers with current templates
+simba markers show completion_protocol # Print a section's template content
+simba markers migrate --path /project # Convert NEURON:*, CORE, etc. to SIMBA format
+simba markers migrate --dry-run       # Preview without modifying files
+```
+
+The `migrate` command converts non-SIMBA markers (`<!-- BEGIN NEURON:name -->`, `<!-- CORE -->`, bare `<!-- BEGIN X -->`) to proper `<!-- BEGIN SIMBA:name -->` format, preserving body content.
+
 ## Project Search
 
 Per-project session memory and semantic search. Combines SQLite FTS5 with QMD semantic search.
@@ -254,6 +269,7 @@ simba markers list             List all SIMBA markers in .md files
 simba markers audit            Compare markers vs MANAGED_SECTIONS
 simba markers update           Update markers with current templates
 simba markers show <section>   Print raw template for a section
+simba markers migrate          Convert non-SIMBA markers to SIMBA format
 simba search <cmd>            Project memory operations
 simba sync run           Run a full sync cycle (index + extract)
 simba sync index         Index project files only
