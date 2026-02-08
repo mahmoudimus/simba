@@ -14,20 +14,22 @@ import json
 import pathlib
 import time
 
+import simba.config
 import simba.hooks._memory_client
 import simba.hooks._truth_client
 
-_MIN_SIMILARITY = 0.35
-_THINKING_CHARS = 1500
-_DEDUP_TTL = 60  # seconds
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
-
-_CONTEXT_LOW_BYTES = 4_000_000  # 4 MB — approximate transcript size before auto-compact
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
 
 _ENABLED_TOOLS = frozenset(
     ["Read", "Grep", "Glob", "Task", "WebSearch", "WebFetch", "Bash"]
 )
+
+
+def _hooks_cfg():
+    import simba.hooks.config
+
+    return simba.config.load("hooks")
 
 
 def _extract_thinking(transcript_path: pathlib.Path) -> str:
@@ -62,7 +64,7 @@ def _extract_thinking(transcript_path: pathlib.Path) -> str:
         for item in reversed(content):
             if isinstance(item, dict) and item.get("type") == "thinking":
                 thinking = item.get("thinking", "")
-                return thinking[-_THINKING_CHARS:]
+                return thinking[-_hooks_cfg().thinking_chars:]
 
     return ""
 
@@ -75,7 +77,7 @@ def _check_dedup(text: str) -> bool:
         cache = json.loads(_HASH_CACHE.read_text())
         if (
             cache.get("lastHash") == text_hash
-            and (time.time() - cache.get("timestamp", 0)) < _DEDUP_TTL
+            and (time.time() - cache.get("timestamp", 0)) < _hooks_cfg().dedup_ttl
         ):
             return True
     except (json.JSONDecodeError, OSError):
@@ -104,7 +106,7 @@ def _check_context_low(transcript_path: pathlib.Path) -> str | None:
     except OSError:
         return None
 
-    if size < _CONTEXT_LOW_BYTES:
+    if size < _hooks_cfg().context_low_bytes:
         return None
 
     # Only warn once per transcript.
@@ -161,7 +163,9 @@ def main(hook_input: dict) -> str:
         if thinking and not _check_dedup(thinking):
             project_path = cwd_str if cwd_str else None
             memories = simba.hooks._memory_client.recall_memories(
-                thinking, project_path=project_path, min_similarity=_MIN_SIMILARITY
+                thinking,
+                project_path=project_path,
+                min_similarity=_hooks_cfg().min_similarity,
             )
 
             if memories:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import unittest.mock
 
+import simba.hooks.config
 import simba.hooks.pre_tool_use
 
 
@@ -123,7 +125,10 @@ class TestCheckContextLow:
         assert simba.hooks.pre_tool_use._check_context_low(transcript) is None
 
     def test_above_threshold_returns_warning(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        low_cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), context_low_bytes=100
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: low_cfg)
         flag = tmp_path / "flag.json"
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
 
@@ -136,7 +141,10 @@ class TestCheckContextLow:
         assert "0.0MB" in result
 
     def test_warns_only_once(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        low_cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), context_low_bytes=100
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: low_cfg)
         flag = tmp_path / "flag.json"
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
 
@@ -150,7 +158,10 @@ class TestCheckContextLow:
         assert second is None
 
     def test_different_transcript_resets(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        low_cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), context_low_bytes=100
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: low_cfg)
         flag = tmp_path / "flag.json"
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
 
@@ -168,7 +179,10 @@ class TestCheckContextLow:
 
     def test_fires_for_non_enabled_tool(self, tmp_path, monkeypatch):
         """Context warning fires even for tools not in _ENABLED_TOOLS."""
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_BYTES", 100)
+        low_cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), context_low_bytes=100
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: low_cfg)
         flag = tmp_path / "flag.json"
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
 
