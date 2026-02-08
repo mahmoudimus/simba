@@ -9,6 +9,7 @@ Usage:
     simba stats            Show token economics and project statistics
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
     simba orchestration <cmd> Agent orchestration server (MCP)
+    simba markers <cmd>    Discover, audit, and update SIMBA markers
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -636,6 +637,13 @@ def _db_migrate(cwd: pathlib.Path) -> int:
     return 0
 
 
+def _cmd_markers(args: list[str]) -> int:
+    """Discover, audit, and update SIMBA markers."""
+    import simba.markers_cli
+
+    return simba.markers_cli.main(args)
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -661,6 +669,8 @@ def main() -> None:
         sys.exit(_cmd_neuron(rest))
     elif cmd == "orchestration":
         sys.exit(_cmd_orchestration(rest))
+    elif cmd == "markers":
+        sys.exit(_cmd_markers(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:
