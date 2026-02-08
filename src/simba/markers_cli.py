@@ -5,6 +5,7 @@ Usage:
     simba markers audit [--path DIR]    Compare found markers vs MANAGED_SECTIONS
     simba markers update [--path DIR]   Update all markers with current template content
     simba markers show <section>        Print a MANAGED_SECTIONS template by name
+    simba markers migrate [--path DIR]  Convert non-SIMBA markers to SIMBA format
 """
 
 from __future__ import annotations
@@ -21,6 +22,26 @@ import simba.orchestration.templates
 _EXCLUDE_DIRS = {"_gitless", "node_modules", ".git"}
 
 _MARKER_RE = re.compile(r"<!--\s*BEGIN\s+SIMBA:(\w+)\s*-->")
+
+# Matches non-SIMBA markers: <!-- BEGIN NEURON:name -->, <!-- CORE -->,
+# <!-- BEGIN something -->, <!-- BEGIN ns:name --> (any namespace except SIMBA).
+_FOREIGN_BEGIN_RE = re.compile(
+    r"<!--\s*(?:BEGIN\s+)?(?!SIMBA:)(\w+(?::\w+)?)\s*-->"
+)
+_FOREIGN_BLOCK_RE = re.compile(
+    r"(<!--\s*(?:BEGIN\s+)?(?!SIMBA:)(\w+(?::\w+)?)\s*-->)"
+    r"(.*?)"
+    r"(<!--\s*(?:END\s+|/)?\2\s*-->)",
+    re.DOTALL,
+)
+
+
+class ForeignHit(NamedTuple):
+    """A non-SIMBA marker found during scanning."""
+
+    path: Path
+    tag: str
+    line_no: int
 
 
 class MarkerHit(NamedTuple):
@@ -177,6 +198,89 @@ def cmd_update(root: Path) -> int:
     return 0
 
 
+def scan_foreign_markers(root: Path) -> list[ForeignHit]:
+    """Scan ``**/*.md`` for non-SIMBA markers (NEURON, CORE, bare BEGIN, etc.)."""
+    hits: list[ForeignHit] = []
+    for md_file in sorted(root.rglob("*.md")):
+        parts = md_file.relative_to(root).parts
+        if any(p in _EXCLUDE_DIRS for p in parts):
+            continue
+        try:
+            content = md_file.read_text()
+        except OSError:
+            continue
+        for line_no, line in enumerate(content.splitlines(), start=1):
+            m = _FOREIGN_BEGIN_RE.search(line)
+            if m:
+                hits.append(ForeignHit(md_file, m.group(1), line_no))
+    return hits
+
+
+def _migrate_content(content: str) -> tuple[str, list[tuple[str, str]]]:
+    """Rewrite non-SIMBA blocks in *content* to SIMBA format.
+
+    Returns (new_content, [(old_tag, new_name), ...]) for reporting.
+    """
+    changes: list[tuple[str, str]] = []
+
+    def _replacer(m: re.Match[str]) -> str:
+        tag, body = m.group(2), m.group(3)
+        # "NEURON:foo" → "foo", "CORE" → "core", "bar" → "bar"
+        name = tag.split(":", 1)[1].lower() if ":" in tag else tag.lower()
+        changes.append((tag, name))
+        return (
+            f"{simba.markers.begin_tag(name)}"
+            f"{body}"
+            f"{simba.markers.end_tag(name)}"
+        )
+
+    new_content = _FOREIGN_BLOCK_RE.sub(_replacer, content)
+    return new_content, changes
+
+
+def cmd_migrate(root: Path, *, dry_run: bool = False) -> int:
+    """Find non-SIMBA markers and convert them to ``SIMBA:`` format."""
+    foreign = scan_foreign_markers(root)
+    if not foreign:
+        print("No non-SIMBA markers found.")
+        return 0
+
+    # Show what was found.
+    print(f"Found {len(foreign)} non-SIMBA marker(s):\n")
+    for hit in foreign:
+        try:
+            display = str(hit.path.relative_to(root))
+        except ValueError:
+            display = str(hit.path)
+        print(f"  {display}:{hit.line_no}  {hit.tag}")
+
+    if dry_run:
+        print("\n(dry run — no files modified)")
+        return 0
+
+    # Migrate each file.
+    files = sorted({h.path for h in foreign})
+    migrated = 0
+    for md_file in files:
+        try:
+            original = md_file.read_text()
+        except OSError:
+            continue
+        new_content, changes = _migrate_content(original)
+        if new_content != original:
+            md_file.write_text(new_content)
+            try:
+                display = str(md_file.relative_to(root))
+            except ValueError:
+                display = str(md_file)
+            for old_tag, new_name in changes:
+                print(f"  migrated: {display}  {old_tag} → SIMBA:{new_name}")
+            migrated += 1
+
+    print(f"\n{migrated} file(s) migrated.")
+    return 0
+
+
 def cmd_show(section: str) -> int:
     """Print the raw template content for a MANAGED_SECTIONS entry."""
     managed = simba.orchestration.templates.MANAGED_SECTIONS
@@ -210,6 +314,16 @@ def main(argv: list[str] | None = None) -> int:
     p_show = sub.add_parser("show", help="Print raw template for a section")
     p_show.add_argument("section", help="Section name from MANAGED_SECTIONS")
 
+    p_migrate = sub.add_parser(
+        "migrate", help="Find non-SIMBA markers and convert to SIMBA format"
+    )
+    p_migrate.add_argument(
+        "--path", type=Path, default=Path.cwd(), help="Root directory"
+    )
+    p_migrate.add_argument(
+        "--dry-run", action="store_true", help="Show what would be migrated"
+    )
+
     args = parser.parse_args(argv)
 
     if args.subcmd is None:
@@ -224,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_update(args.path)
     elif args.subcmd == "show":
         return cmd_show(args.section)
+    elif args.subcmd == "migrate":
+        return cmd_migrate(args.path, dry_run=args.dry_run)
     else:
         parser.print_help()
         return 1
