@@ -139,3 +139,99 @@ class TestCmdShow:
         assert rc == 1
         captured = capsys.readouterr()
         assert "Unknown section" in captured.err
+
+
+class TestScanForeignMarkers:
+    def test_finds_neuron_markers(self, tmp_path: pathlib.Path) -> None:
+        md = tmp_path / "agent.md"
+        md.write_text(
+            "# Agent\n"
+            "<!-- BEGIN NEURON:completion_protocol -->\nold\n"
+            "<!-- END NEURON:completion_protocol -->\n"
+        )
+        hits = simba.markers_cli.scan_foreign_markers(tmp_path)
+        assert len(hits) == 1
+        assert hits[0].tag == "NEURON:completion_protocol"
+
+    def test_finds_core_markers(self, tmp_path: pathlib.Path) -> None:
+        md = tmp_path / "CLAUDE.md"
+        md.write_text("<!-- CORE -->\nrule one\n<!-- /CORE -->\n")
+        hits = simba.markers_cli.scan_foreign_markers(tmp_path)
+        assert any(h.tag == "CORE" for h in hits)
+
+    def test_ignores_simba_markers(self, tmp_path: pathlib.Path) -> None:
+        md = tmp_path / "doc.md"
+        md.write_text(
+            "<!-- BEGIN SIMBA:core -->\nsimba\n<!-- END SIMBA:core -->\n"
+        )
+        hits = simba.markers_cli.scan_foreign_markers(tmp_path)
+        assert len(hits) == 0
+
+
+class TestMigrateContent:
+    def test_neuron_to_simba(self) -> None:
+        content = (
+            "<!-- BEGIN NEURON:search_tools -->\n"
+            "use rg\n"
+            "<!-- END NEURON:search_tools -->\n"
+        )
+        result, changes = simba.markers_cli._migrate_content(content)
+        assert "<!-- BEGIN SIMBA:search_tools -->" in result
+        assert "<!-- END SIMBA:search_tools -->" in result
+        assert "use rg" in result
+        assert changes == [("NEURON:search_tools", "search_tools")]
+
+    def test_core_to_simba(self) -> None:
+        content = "<!-- CORE -->\nrule\n<!-- /CORE -->\n"
+        result, changes = simba.markers_cli._migrate_content(content)
+        assert "<!-- BEGIN SIMBA:core -->" in result
+        assert "<!-- END SIMBA:core -->" in result
+        assert "rule" in result
+        assert changes == [("CORE", "core")]
+
+    def test_preserves_body(self) -> None:
+        body = "line 1\nline 2\nline 3\n"
+        content = (
+            f"<!-- BEGIN NEURON:nav_tools -->\n"
+            f"{body}<!-- END NEURON:nav_tools -->\n"
+        )
+        result, _ = simba.markers_cli._migrate_content(content)
+        assert body in result
+
+
+class TestCmdMigrate:
+    def test_dry_run(
+        self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        md = tmp_path / "agent.md"
+        original = (
+            "<!-- BEGIN NEURON:foo -->\nbar\n<!-- END NEURON:foo -->\n"
+        )
+        md.write_text(original)
+        simba.markers_cli.cmd_migrate(tmp_path, dry_run=True)
+        # File should NOT be modified.
+        assert md.read_text() == original
+        captured = capsys.readouterr()
+        assert "dry run" in captured.out
+
+    def test_migrate_writes(self, tmp_path: pathlib.Path) -> None:
+        md = tmp_path / "agent.md"
+        md.write_text(
+            "<!-- BEGIN NEURON:completion_protocol -->\n"
+            "old content\n"
+            "<!-- END NEURON:completion_protocol -->\n"
+        )
+        simba.markers_cli.cmd_migrate(tmp_path)
+        result = md.read_text()
+        assert "<!-- BEGIN SIMBA:completion_protocol -->" in result
+        assert "<!-- END SIMBA:completion_protocol -->" in result
+        assert "old content" in result
+
+    def test_no_foreign_markers(
+        self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        md = tmp_path / "clean.md"
+        md.write_text("<!-- BEGIN SIMBA:core -->\nok\n<!-- END SIMBA:core -->\n")
+        simba.markers_cli.cmd_migrate(tmp_path)
+        captured = capsys.readouterr()
+        assert "No non-SIMBA markers found" in captured.out
