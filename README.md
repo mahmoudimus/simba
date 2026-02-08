@@ -232,6 +232,42 @@ simba markers migrate --dry-run       # Preview without modifying files
 
 The `migrate` command converts non-SIMBA markers (`<!-- BEGIN NEURON:name -->`, `<!-- CORE -->`, bare `<!-- BEGIN X -->`) to proper `<!-- BEGIN SIMBA:name -->` format, preserving body content.
 
+## Skills
+
+Skills are slash-command invocable capabilities defined in `skills/`. They run as forked agents with restricted tool access.
+
+### `/memories-learn` — Extract Learnings from Transcripts
+
+Automatically triggered after context compaction:
+1. **PreCompact hook** exports the session transcript to `~/.claude/transcripts/{sessionId}/` with `status: "pending_extraction"`
+2. **SessionStart hook** on the next session detects the pending export and injects extraction instructions
+3. A **memory-extractor agent** reads the transcript, extracts 5-15 learnings, and POSTs each to the memory daemon (`/store`)
+
+Memory types: `GOTCHA`, `WORKING_SOLUTION`, `PATTERN`, `DECISION`, `FAILURE`, `PREFERENCE`
+
+Can also be invoked manually with `/memories-learn`.
+
+### `/memories-sanitize` — Review and Clean Up Memories
+
+Manual skill for auditing the memory database:
+1. Lists all memories via `GET /list`
+2. Identifies invalid, outdated, superseded, or misleading entries
+3. Deletes bad memories via `DELETE /memory/{id}`
+4. Optionally stores corrected replacements
+
+Use when memory quality degrades or after bulk extraction sessions.
+
+### Memory Pipeline Flow
+
+```
+Session ends → PreCompact exports transcript
+    → Next session: SessionStart detects pending extraction
+    → memory-extractor agent reads transcript.md
+    → POSTs learnings to /store (semantic memories in LanceDB)
+    → simba sync extract converts memories to proven facts (SQLite)
+    → UserPromptSubmit + PreToolUse hooks recall memories on future prompts
+```
+
 ## Project Search
 
 Per-project session memory and semantic search. Combines SQLite FTS5 with QMD semantic search.
