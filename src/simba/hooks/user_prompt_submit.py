@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 
 import simba.guardian.extract_core
 import simba.hooks._memory_client
@@ -59,6 +60,7 @@ def main(hook_input: dict) -> str:
         if core_blocks:
             tags += " | \u2713 rules"
         combined += f"\n[simba: {tags}]"
+        print(f"[simba: {tags}]", file=sys.stderr)
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
