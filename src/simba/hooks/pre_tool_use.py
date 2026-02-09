@@ -16,7 +16,6 @@ import time
 
 import simba.config
 import simba.hooks._memory_client
-import simba.hooks._truth_client
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
@@ -177,13 +176,6 @@ def main(hook_input: dict) -> str:
             if formatted:
                 parts.append(formatted)
 
-            # Append proven facts from truth DB
-            try:
-                truth_block = simba.hooks._truth_client.query_truth_db(thinking)
-                if truth_block:
-                    parts.append(truth_block)
-            except Exception:
-                pass
 
     if not parts:
         return json.dumps({"hookSpecificOutput": {}})
