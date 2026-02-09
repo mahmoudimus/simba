@@ -301,6 +301,13 @@ simba orchestration proxy     Run via hot-reload proxy
 simba orchestration sync      Update managed sections
 simba orchestration agents    Manage agent definition files
 simba orchestration status    Update agent task status
+simba config list              List all configurable sections
+simba config get <key>         Print effective value (e.g. memory.port)
+simba config set <key> <val>   Set a config value (local)
+simba config set --global ...  Set a config value (global)
+simba config reset <key>       Remove a local override
+simba config show              Dump full effective config
+simba config edit [--global]   Open config.toml in $EDITOR
 simba markers list             List all SIMBA markers in .md files
 simba markers audit            Compare markers vs MANAGED_SECTIONS
 simba markers update           Update markers with current templates
@@ -363,7 +370,38 @@ All project-level data lives under a single `.simba/` directory in the project r
 
 This directory is gitignored. The embedding model cache lives in `~/.cache/huggingface/hub/`.
 
-## Configuration
+## Unified Configuration
+
+All simba settings are configurable via TOML files with git-style scoping:
+
+```
+~/.config/simba/config.toml     # --global (user-wide defaults)
+.simba/config.toml              # local (project-specific overrides)
+```
+
+Precedence: **local > global > code defaults**. CLI arguments still override config file values.
+
+```bash
+simba config list                              # Show all sections + fields
+simba config get memory.port                   # Print effective value
+simba config set memory.min_similarity 0.40    # Write to local config
+simba config set --global memory.port 9000     # Write to global config
+simba config reset memory.min_similarity       # Revert to default
+simba config show                              # Dump full effective config
+```
+
+### Configurable Sections
+
+| Section | Config Class | Key Fields |
+|---------|-------------|------------|
+| `memory` | `MemoryConfig` | port, min_similarity, max_results, sync_interval, ... |
+| `hooks` | `HooksConfig` | health_timeout, daemon_port, context_low_bytes, ... |
+| `sync` | `SyncConfig` | daemon_url, batch_limit, retry_count, default_interval, ... |
+| `search` | `SearchConfig` | max_context_tokens, min_query_length, memory_token_budget, ... |
+
+New config sections can be added by decorating a dataclass with `@simba.config.configurable("section_name")`.
+
+## Configuration Reference
 
 ### Memory Daemon
 

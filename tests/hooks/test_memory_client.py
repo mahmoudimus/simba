@@ -12,9 +12,13 @@ class TestDaemonUrl:
         url = simba.hooks._memory_client.daemon_url()
         assert url == "http://localhost:8741"
 
-    def test_uses_constants(self):
-        assert simba.hooks._memory_client.DAEMON_HOST == "localhost"
-        assert simba.hooks._memory_client.DAEMON_PORT == 8741
+    def test_uses_config_defaults(self):
+        import simba.config
+        import simba.hooks.config
+
+        cfg = simba.config.load("hooks")
+        assert cfg.daemon_host == "localhost"
+        assert cfg.daemon_port == 8741
 
 
 class TestRecallMemories:
