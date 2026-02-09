@@ -198,6 +198,29 @@ def cmd_audit(root: Path) -> int:
         print()
         issues += len(stale)
 
+    # Guardian injection report: SIMBA:core blocks.
+    core_hits = [h for h in hits if h.name == "core"]
+    if core_hits:
+        total_chars = 0
+        print("Guardian injection (SIMBA:core — re-injected every prompt):")
+        for hit in core_hits:
+            try:
+                display = str(hit.path.relative_to(root))
+            except ValueError:
+                display = str(hit.path)
+            tokens = hit.content_len // 4
+            total_chars += hit.content_len
+            print(
+                f"  {display}:{hit.line_no}"
+                f"  {hit.content_len} chars (~{tokens} tokens)"
+            )
+        total_tokens = total_chars // 4
+        signal = "[✓ rules]" if any(
+            "✓ rules" in hit.path.read_text() for hit in core_hits
+        ) else "(missing)"
+        print(f"  Total: ~{total_tokens} tokens/msg | Signal: {signal}")
+        print()
+
     # Summary.
     if not hits:
         print("No SIMBA markers found in project files.")
