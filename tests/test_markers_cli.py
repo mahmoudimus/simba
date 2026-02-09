@@ -61,31 +61,31 @@ class TestScanMarkers:
         assert len(hits) == 0
 
 
-class TestCmdAuditUnused:
-    def test_reports_unused_section(
+class TestCmdAuditEmpty:
+    def test_no_markers_found(
         self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # No .md files at all -> all MANAGED_SECTIONS are unused.
+        # No project .md files -> reports nothing found.
         simba.markers_cli.cmd_audit(tmp_path)
         captured = capsys.readouterr()
-        assert "Unused sections" in captured.out
+        assert "No SIMBA markers found" in captured.out
 
 
-class TestCmdAuditOrphaned:
-    def test_reports_orphaned_marker(
+class TestCmdAuditUserDefined:
+    def test_reports_user_defined_marker(
         self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        md = tmp_path / "doc.md"
+        md = tmp_path / "CLAUDE.md"
         # Use a marker name that is NOT in MANAGED_SECTIONS.
         md.write_text(
-            "<!-- BEGIN SIMBA:not_a_real_section -->\n"
-            "orphan\n"
-            "<!-- END SIMBA:not_a_real_section -->\n"
+            "<!-- BEGIN SIMBA:core -->\n"
+            "my rules\n"
+            "<!-- END SIMBA:core -->\n"
         )
         simba.markers_cli.cmd_audit(tmp_path)
         captured = capsys.readouterr()
-        assert "Orphaned markers" in captured.out
-        assert "not_a_real_section" in captured.out
+        assert "User-defined markers" in captured.out
+        assert "core" in captured.out
 
 
 class TestCmdAuditStale:
@@ -94,7 +94,7 @@ class TestCmdAuditStale:
     ) -> None:
         # Pick a real section from MANAGED_SECTIONS and put wrong content.
         section = next(iter(simba.orchestration.templates.MANAGED_SECTIONS))
-        md = tmp_path / "doc.md"
+        md = tmp_path / "CLAUDE.md"
         md.write_text(
             f"<!-- BEGIN SIMBA:{section} -->\n"
             "this is definitely not the real template content\n"

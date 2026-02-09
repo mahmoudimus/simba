@@ -1,8 +1,9 @@
 """Simba CLI — unified Claude Code plugin.
 
 Usage:
-    simba install          Register hooks and MCP server
-    simba install --remove Remove simba hooks from settings
+    simba install          Register hooks in current project
+    simba install --global Register hooks globally (~/.claude/settings.json)
+    simba install --remove Remove hooks (add --global for global)
     simba server [opts]    Start the memory daemon
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
@@ -39,7 +40,7 @@ _HOOK_TIMEOUTS = {
     "Stop": 5000,
 }
 
-_SETTINGS_PATH = pathlib.Path.home() / ".claude" / "settings.json"
+_GLOBAL_SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
 
 def _build_hooks_config() -> dict:
@@ -62,26 +63,38 @@ def _build_hooks_config() -> dict:
 
 
 def _cmd_install(args: list[str]) -> int:
-    """Register or remove simba hooks in ~/.claude/settings.json."""
-    remove = "--remove" in args
+    """Register or remove simba hooks.
 
-    if not _SETTINGS_PATH.parent.exists():
-        _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    By default writes to .claude/settings.local.json in the current
+    project.  Use ``--global`` to write to ~/.claude/settings.json
+    instead.
+    """
+    remove = "--remove" in args
+    is_global = "--global" in args
+
+    if is_global:
+        settings_path = _GLOBAL_SETTINGS
+    else:
+        settings_path = pathlib.Path.cwd() / ".claude" / "settings.local.json"
+
+    if not settings_path.parent.exists():
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     settings: dict = {}
-    if _SETTINGS_PATH.exists():
-        settings = json.loads(_SETTINGS_PATH.read_text())
+    if settings_path.exists():
+        settings = json.loads(settings_path.read_text())
 
     if remove:
         if "hooks" in settings:
             del settings["hooks"]
-        _SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
-        print("Simba hooks removed from", _SETTINGS_PATH)
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        print("Simba hooks removed from", settings_path)
         return 0
 
     settings["hooks"] = _build_hooks_config()
-    _SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
-    print(f"Simba hooks registered in {_SETTINGS_PATH}")
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    scope = "global" if is_global else "project"
+    print(f"Simba hooks registered ({scope}) in {settings_path}")
     print(f"  {len(_HOOK_EVENTS)} hooks: {', '.join(_HOOK_EVENTS)}")
     return 0
 

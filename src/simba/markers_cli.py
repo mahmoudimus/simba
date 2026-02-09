@@ -20,6 +20,11 @@ import simba.markers
 import simba.orchestration.templates
 
 _EXCLUDE_DIRS = {"_gitless", "node_modules", ".git"}
+_EXCLUDE_SUBDIRS = {".claude/handoffs", ".claude/notes"}
+
+# Default project files to scan for markers.
+_PROJECT_FILES = ["CLAUDE.md", "AGENTS.md"]
+_PROJECT_GLOBS = [".claude/**/*.md"]
 
 _MARKER_RE = re.compile(r"<!--\s*BEGIN\s+SIMBA:(\w+)\s*-->")
 
@@ -53,30 +58,71 @@ class MarkerHit(NamedTuple):
     content_len: int
 
 
-def scan_markers(root: Path) -> list[MarkerHit]:
-    """Scan ``**/*.md`` under *root* for SIMBA markers, skipping excluded dirs.
+def _collect_project_files(root: Path) -> list[Path]:
+    """Collect project-relevant .md files: CLAUDE.md, AGENTS.md, .claude/*.md.
+
+    Excludes .claude/handoffs/ and .claude/notes/ subdirectories.
+    """
+    files: list[Path] = []
+    for name in _PROJECT_FILES:
+        candidate = root / name
+        if candidate.is_file():
+            files.append(candidate)
+    for pattern in _PROJECT_GLOBS:
+        for candidate in sorted(root.glob(pattern)):
+            if not candidate.is_file():
+                continue
+            rel = str(candidate.relative_to(root))
+            if any(rel.startswith(exc) for exc in _EXCLUDE_SUBDIRS):
+                continue
+            if candidate not in files:
+                files.append(candidate)
+    return sorted(files)
+
+
+def _is_excluded(md_file: Path, root: Path) -> bool:
+    """Check if a file is under an excluded directory."""
+    parts = md_file.relative_to(root).parts
+    return any(p in _EXCLUDE_DIRS for p in parts)
+
+
+def _scan_file(md_file: Path) -> list[MarkerHit]:
+    """Extract all SIMBA markers from a single file."""
+    hits: list[MarkerHit] = []
+    try:
+        content = md_file.read_text()
+    except OSError:
+        return hits
+    for line_no, line in enumerate(content.splitlines(), start=1):
+        m = _MARKER_RE.search(line)
+        if m:
+            name = m.group(1)
+            blocks = simba.markers.extract_blocks(content, name)
+            content_len = sum(len(b) for b in blocks)
+            hits.append(MarkerHit(md_file, name, line_no, content_len))
+    return hits
+
+
+def scan_markers(root: Path, *, project_only: bool = False) -> list[MarkerHit]:
+    """Scan .md files under *root* for SIMBA markers.
+
+    When *project_only* is True, only scans project-relevant files
+    (CLAUDE.md, AGENTS.md, .claude/*.md) excluding handoffs/notes.
+    Otherwise scans all ``**/*.md`` skipping excluded dirs.
 
     Returns a list of :class:`MarkerHit` tuples sorted by (path, line_no).
     """
+    if project_only:
+        files = _collect_project_files(root)
+    else:
+        files = [
+            f for f in sorted(root.rglob("*.md"))
+            if f.is_file() and not _is_excluded(f, root)
+        ]
+
     hits: list[MarkerHit] = []
-    for md_file in sorted(root.rglob("*.md")):
-        # Skip files under excluded directories.
-        parts = md_file.relative_to(root).parts
-        if any(p in _EXCLUDE_DIRS for p in parts):
-            continue
-
-        try:
-            content = md_file.read_text()
-        except OSError:
-            continue
-
-        for line_no, line in enumerate(content.splitlines(), start=1):
-            m = _MARKER_RE.search(line)
-            if m:
-                name = m.group(1)
-                blocks = simba.markers.extract_blocks(content, name)
-                content_len = sum(len(b) for b in blocks)
-                hits.append(MarkerHit(md_file, name, line_no, content_len))
+    for md_file in files:
+        hits.extend(_scan_file(md_file))
     return hits
 
 
@@ -100,16 +146,32 @@ def cmd_list(root: Path) -> int:
 
 
 def cmd_audit(root: Path) -> int:
-    """Compare markers on disk against MANAGED_SECTIONS, report issues."""
+    """Audit markers in project files. Only checks what's actually present."""
     managed = simba.orchestration.templates.MANAGED_SECTIONS
-    hits = scan_markers(root)
+    hits = scan_markers(root, project_only=True)
     found_names = {h.name for h in hits}
-    managed_names = set(managed.keys())
 
-    unused = sorted(managed_names - found_names)
-    orphaned = sorted(found_names - managed_names)
+    issues = 0
 
-    # Detect stale: content between markers differs from template.
+    # Report markers in files that aren't in MANAGED_SECTIONS (user-defined
+    # markers like "core" are fine — just informational).
+    user_defined = sorted(found_names - set(managed.keys()))
+    if user_defined:
+        print("User-defined markers (not in MANAGED_SECTIONS):")
+        for name in user_defined:
+            locs = [h for h in hits if h.name == name]
+            for loc in locs:
+                try:
+                    display = str(loc.path.relative_to(root))
+                except ValueError:
+                    display = str(loc.path)
+                print(
+                    f"  - {name} in {display}:{loc.line_no}"
+                    f" ({loc.content_len} chars)"
+                )
+        print()
+
+    # Detect stale: managed markers whose content differs from template.
     stale: list[tuple[Path, str]] = []
     for hit in hits:
         if hit.name not in managed:
@@ -121,30 +183,9 @@ def cmd_audit(root: Path) -> int:
         blocks = simba.markers.extract_blocks(content, hit.name)
         template = managed[hit.name]
         for block in blocks:
-            # update_managed_sections prepends a timestamp comment, so we
-            # compare the template substring instead of exact match.
             if template.strip() not in block and block.strip() != "":
-                try:
-                    display = str(hit.path.relative_to(root))
-                except ValueError:
-                    display = str(hit.path)
                 stale.append((hit.path, hit.name))
                 break
-
-    issues = 0
-    if unused:
-        print("Unused sections (in MANAGED_SECTIONS but no .md file):")
-        for name in unused:
-            print(f"  - {name}")
-        print()
-        issues += len(unused)
-
-    if orphaned:
-        print("Orphaned markers (in .md files but not in MANAGED_SECTIONS):")
-        for name in orphaned:
-            print(f"  - {name}")
-        print()
-        issues += len(orphaned)
 
     if stale:
         print("Stale markers (content differs from template):")
@@ -157,8 +198,16 @@ def cmd_audit(root: Path) -> int:
         print()
         issues += len(stale)
 
+    # Summary.
+    if not hits:
+        print("No SIMBA markers found in project files.")
+        print(f"Scanned: {', '.join(_PROJECT_FILES)} + {', '.join(_PROJECT_GLOBS)}")
+        return 0
+
     if issues == 0:
-        print("All markers are up to date.")
+        marker_count = len(hits)
+        file_count = len({h.path for h in hits})
+        print(f"All good. {marker_count} marker(s) across {file_count} file(s).")
     else:
         print(f"{issues} issue(s) found.")
     return 0
