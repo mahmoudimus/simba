@@ -180,9 +180,12 @@ def main(hook_input: dict) -> str:
     if not parts:
         return json.dumps({"hookSpecificOutput": {}})
 
+    combined = "\n\n".join(parts)
+    tokens = len(combined) // 4
+    combined += f"\n[simba: ~{tokens} tokens injected]"
     return json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": "\n\n".join(parts),
+            "additionalContext": combined,
         }
     })

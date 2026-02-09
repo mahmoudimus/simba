@@ -66,7 +66,7 @@ simba install
 The `/simba-onboard` skill walks you through:
 - Reading all your project's markdown files (CLAUDE.md, AGENTS.md, `.claude/**/*.md`)
 - Extracting key instructions into categories (constraints, build commands, environment, etc.)
-- Generating `.claude/CORE_INSTRUCTIONS.md` with SIMBA marker sections
+- Generating `.claude/rules/CORE_INSTRUCTIONS.md` with SIMBA marker sections
 - Wiring references into CLAUDE.md and AGENTS.md
 
 ### Day-to-Day Usage
@@ -98,7 +98,7 @@ simba markers update
 simba markers migrate
 ```
 
-Edit `.claude/CORE_INSTRUCTIONS.md` directly to refine rules. Marker sections are preserved — simba only touches content between its own `<!-- BEGIN SIMBA:* -->` tags.
+Edit `.claude/rules/CORE_INSTRUCTIONS.md` directly to refine rules. Marker sections are preserved — simba only touches content between its own `<!-- BEGIN SIMBA:* -->` tags.
 
 ### Configuring Simba
 
@@ -322,7 +322,7 @@ Interactive skill that analyzes your project's markdown files and generates cons
 
 1. Reads CLAUDE.md, AGENTS.md, and all `.claude/**/*.md` files
 2. Extracts key instructions into categories (constraints, build commands, environment, code style, workflow, agent rules)
-3. Generates `.claude/CORE_INSTRUCTIONS.md` with SIMBA marker sections
+3. Generates `.claude/rules/CORE_INSTRUCTIONS.md` with SIMBA marker sections
 4. Presents content for user verification before writing
 5. Wires references into CLAUDE.md and AGENTS.md
 
@@ -334,7 +334,7 @@ Interactive skill that analyzes your project's markdown files and generates cons
 The skill is automatically installed by `simba install`. It creates a structure similar to:
 
 ```markdown
-# .claude/CORE_INSTRUCTIONS.md
+# .claude/rules/CORE_INSTRUCTIONS.md
 <!-- BEGIN SIMBA:constraints -->
 ## Critical Constraints
 - Never delete files without confirmation

@@ -1,6 +1,8 @@
-"""Extract content between SIMBA:core markers from CLAUDE.md.
+"""Extract content between SIMBA:core markers from project files.
 
-Used by UserPromptSubmit hook to inject essential rules every prompt.
+Scans CLAUDE.md, AGENTS.md, and .claude/**/*.md (excluding handoffs/notes)
+for SIMBA:core markers. Used by UserPromptSubmit hook to inject essential
+rules on every prompt — the compaction-safe layer.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import pathlib
 import sys
 
 import simba.markers
+import simba.markers_cli
 
 
 def extract_core_blocks(content: str) -> list[str]:
@@ -18,14 +21,18 @@ def extract_core_blocks(content: str) -> list[str]:
 
 
 def main(cwd: pathlib.Path | None = None) -> str:
-    """Read CLAUDE.md and return concatenated CORE blocks."""
+    """Scan project files and return concatenated CORE blocks."""
     if cwd is None:
         cwd = pathlib.Path.cwd()
-    claude_md = cwd / "CLAUDE.md"
-    if not claude_md.exists():
-        return ""
-    content = claude_md.read_text()
-    blocks = extract_core_blocks(content)
+
+    blocks: list[str] = []
+    for md_file in simba.markers_cli._collect_project_files(cwd):
+        try:
+            content = md_file.read_text()
+        except OSError:
+            continue
+        blocks.extend(extract_core_blocks(content))
+
     return "\n".join(blocks)
 
 
