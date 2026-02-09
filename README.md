@@ -362,10 +362,11 @@ All project-level data lives under a single `.simba/` directory in the project r
 
 ```
 .simba/
-  memory/              LanceDB vector database (727+ semantic memories)
-  neuron/              Neuron truth DB and agent run logs (SQLite)
-  search/              Project search DB and activity log (SQLite + text)
+  simba.db             SQLite — proven facts, activities, reflections, agent runs, sync watermarks
+  memory/              LanceDB vector database (semantic memories)
+  search/              Search activity log
   tailor/              Error reflection journal (JSONL)
+  config.toml          Local configuration overrides (optional)
 ```
 
 This directory is gitignored. The embedding model cache lives in `~/.cache/huggingface/hub/`.
