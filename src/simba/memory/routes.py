@@ -213,6 +213,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             **({"context": m["context"]} if m.get("context") else {}),
             "similarity": round(m["similarity"], 2),
             "confidence": m.get("confidence", 0),
+            **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
         }
         for m in memories
     ]
@@ -330,6 +331,12 @@ async def list_memories(
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
             "accessCount": m.get("accessCount", 0),
+            **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
+            **(
+                {"sessionSource": m["sessionSource"]}
+                if m.get("sessionSource")
+                else {}
+            ),
         }
         for m in paginated
     ]
@@ -354,6 +361,29 @@ async def trigger_sync(request: fastapi.Request) -> dict:
     task.add_done_callback(_background_tasks.discard)
 
     return {"status": "triggered", "cycle": scheduler.cycle_count + 1}
+
+
+class PatchRequest(pydantic.BaseModel):
+    """Partial update to a memory record."""
+
+    project_path: str | None = pydantic.Field(default=None, alias="projectPath")
+    session_source: str | None = pydantic.Field(default=None, alias="sessionSource")
+
+
+@router.patch("/memory/{memory_id}")
+async def patch_memory(
+    memory_id: str, body: PatchRequest, request: fastapi.Request
+) -> dict:
+    table = request.app.state.table
+    updates: dict[str, str] = {}
+    if body.project_path is not None:
+        updates["projectPath"] = body.project_path
+    if body.session_source is not None:
+        updates["sessionSource"] = body.session_source
+    if not updates:
+        raise fastapi.HTTPException(status_code=400, detail="no fields to update")
+    await table.update(updates=updates, where=f"id = '{memory_id}'")
+    return {"status": "updated", "id": memory_id, "fields": list(updates.keys())}
 
 
 @router.delete("/memory/{memory_id}")
