@@ -1,8 +1,15 @@
 # Changelog
 
-## [Unreleased] — 2025-02-07
+## [Unreleased] — 2025-02-08
 
 ### Added
+
+- **`simba config` CLI**: Unified configuration system with TOML-backed
+  persistence. `@configurable` decorator registers dataclass config models
+  into a global registry. Git-style scoping: `~/.config/simba/config.toml`
+  (global) vs `.simba/config.toml` (local). Subcommands: `list`, `get`,
+  `set [--global]`, `reset`, `show`, `edit`. 34+ hardcoded constants now
+  configurable across 4 sections (memory, hooks, sync, search). 560 tests.
 
 - **`simba markers` CLI**: New subcommand to discover, audit, and update
   `<!-- BEGIN SIMBA:name -->` markers across `.md` files. Subcommands: `list`,

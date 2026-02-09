@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 
+import simba.config
 import simba.db
 from simba.sync import exporter
 from simba.sync.text_render import INDEXABLE_TABLES, render_row
@@ -23,10 +24,11 @@ from simba.sync.watermarks import get_watermark, set_watermark
 
 logger = logging.getLogger("simba.sync.indexer")
 
-_BATCH_LIMIT = 20
-_RATE_LIMIT_SEC = 0.1
-_RETRY_COUNT = 2
-_RETRY_BACKOFF = 0.5
+
+def _sync_cfg():
+    import simba.sync.config
+
+    return simba.config.load("sync")
 
 
 @dataclasses.dataclass
@@ -55,7 +57,8 @@ def _post_to_daemon(
         "confidence": 1.0,
     }
     last_exc: Exception | None = None
-    for attempt in range(_RETRY_COUNT + 1):
+    cfg = _sync_cfg()
+    for attempt in range(cfg.retry_count + 1):
         try:
             resp = client.post("/store", json=payload)
             if resp.status_code == 200:
@@ -63,14 +66,14 @@ def _post_to_daemon(
                 if body.get("duplicate"):
                     return "duplicate"
                 return "ok"
-            if resp.status_code == 503 and attempt < _RETRY_COUNT:
-                time.sleep(_RETRY_BACKOFF * (attempt + 1))
+            if resp.status_code == 503 and attempt < cfg.retry_count:
+                time.sleep(cfg.retry_backoff * (attempt + 1))
                 continue
             return "error"
         except httpx.HTTPError as exc:
             last_exc = exc
-            if attempt < _RETRY_COUNT:
-                time.sleep(_RETRY_BACKOFF * (attempt + 1))
+            if attempt < cfg.retry_count:
+                time.sleep(cfg.retry_backoff * (attempt + 1))
                 continue
     logger.debug("POST /store failed: %s", last_exc)
     return "error"
@@ -79,10 +82,14 @@ def _post_to_daemon(
 def run_index(
     cwd: str | Path,
     *,
-    daemon_url: str = "http://localhost:8741",
+    daemon_url: str | None = None,
     dry_run: bool = False,
 ) -> IndexResult:
     """Run one cycle of semantic indexing."""
+    cfg = _sync_cfg()
+    if daemon_url is None:
+        daemon_url = cfg.daemon_url
+
     result = IndexResult()
     export_rows: dict[str, list[dict]] = {}
 
@@ -104,7 +111,7 @@ def run_index(
                 rows = conn.execute(
                     f"SELECT rowid, * FROM {table_name} "
                     "WHERE rowid > ? ORDER BY rowid LIMIT ?",
-                    (cursor, _BATCH_LIMIT),
+                    (cursor, cfg.batch_limit),
                 ).fetchall()
             except Exception:
                 logger.debug("Table %s not found, skipping", table_name)
@@ -140,7 +147,7 @@ def run_index(
                         result.duplicates += 1
                     else:
                         result.errors += 1
-                    time.sleep(_RATE_LIMIT_SEC)
+                    time.sleep(cfg.rate_limit_sec)
 
                 table_export.append(row_dict)
                 max_rowid = rowid

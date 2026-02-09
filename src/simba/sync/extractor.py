@@ -17,7 +17,11 @@ from simba.sync.watermarks import get_watermark, set_watermark
 
 logger = logging.getLogger("simba.sync.extractor")
 
-_PAGE_SIZE = 50
+
+def _sync_cfg():
+    import simba.sync.config
+
+    return simba.config.load("sync")
 
 
 @dataclasses.dataclass
@@ -33,12 +37,14 @@ def _fetch_memories(
     client: httpx.Client,
     *,
     offset: int = 0,
-    limit: int = _PAGE_SIZE,
+    limit: int | None = None,
 ) -> tuple[list[dict], int]:
     """GET /list from daemon, excluding SYSTEM memories.
 
     Returns (memories, total).
     """
+    if limit is None:
+        limit = _sync_cfg().page_size
     try:
         resp = client.get("/list", params={"limit": limit, "offset": offset})
         resp.raise_for_status()
@@ -108,12 +114,16 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
 def run_extract(
     cwd: str | Path,
     *,
-    daemon_url: str = "http://localhost:8741",
+    daemon_url: str | None = None,
     use_claude: bool = False,
     dry_run: bool = False,
 ) -> ExtractResult:
     """Run one cycle of fact extraction."""
     import simba.db
+
+    cfg = _sync_cfg()
+    if daemon_url is None:
+        daemon_url = cfg.daemon_url
 
     cwd_path = Path(cwd) if isinstance(cwd, str) else cwd
     cwd_str = str(cwd_path)
@@ -135,7 +145,9 @@ def run_extract(
     try:
         offset = 0
         while True:
-            memories, total = _fetch_memories(client, offset=offset, limit=_PAGE_SIZE)
+            memories, total = _fetch_memories(
+                client, offset=offset, limit=cfg.page_size
+            )
             if not memories:
                 break
 
@@ -177,7 +189,7 @@ def run_extract(
                 if created > latest_ts:
                     latest_ts = created
 
-            offset += _PAGE_SIZE
+            offset += cfg.page_size
             if offset >= total:
                 break
 

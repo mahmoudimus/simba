@@ -7,25 +7,41 @@ from __future__ import annotations
 
 import httpx
 
-DAEMON_HOST = "localhost"
-DAEMON_PORT = 8741
-DEFAULT_MAX_RESULTS = 3
-DEFAULT_TIMEOUT = 2.0
+# Lazy-loaded config — read at call time, not import time.
+_cfg = None
+
+
+def _get_cfg():
+    global _cfg
+    if _cfg is None:
+        import simba.config
+        import simba.hooks.config
+
+        _ = simba.hooks.config  # side-effect: registers "hooks" section
+        _cfg = simba.config.load("hooks")
+    return _cfg
 
 
 def daemon_url() -> str:
     """Return the memory daemon base URL."""
-    return f"http://{DAEMON_HOST}:{DAEMON_PORT}"
+    cfg = _get_cfg()
+    return f"http://{cfg.daemon_host}:{cfg.daemon_port}"
 
 
 def recall_memories(
     query: str,
     project_path: str | None = None,
     *,
-    min_similarity: float = 0.35,
-    max_results: int = DEFAULT_MAX_RESULTS,
+    min_similarity: float | None = None,
+    max_results: int | None = None,
 ) -> list[dict]:
     """Query the memory daemon for relevant memories."""
+    cfg = _get_cfg()
+    if min_similarity is None:
+        min_similarity = cfg.min_similarity
+    if max_results is None:
+        max_results = cfg.default_max_results
+
     url = f"{daemon_url()}/recall"
     payload: dict = {
         "query": query,
@@ -36,7 +52,7 @@ def recall_memories(
         payload["projectPath"] = project_path
 
     try:
-        resp = httpx.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        resp = httpx.post(url, json=payload, timeout=cfg.default_timeout)
         if resp.status_code == 200:
             return resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):

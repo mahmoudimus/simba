@@ -13,6 +13,7 @@ dependencies = [
     "huggingface-hub>=0.26",
     "mcp[cli]",
     "z3-solver",
+    "tomli-w>=1.0",
 ]
 
 [project.scripts]

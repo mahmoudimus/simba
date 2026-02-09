@@ -13,14 +13,17 @@ import time
 
 import httpx
 
+import simba.config
 import simba.db
 import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
 
-_HEALTH_TIMEOUT = 0.5
-_POLL_ATTEMPTS = 15
-_POLL_INTERVAL = 0.3
+
+def _hooks_cfg():
+    import simba.hooks.config
+
+    return simba.config.load("hooks")
 
 
 def _check_health() -> dict | None:
@@ -28,7 +31,7 @@ def _check_health() -> dict | None:
     try:
         resp = httpx.get(
             f"{simba.hooks._memory_client.daemon_url()}/health",
-            timeout=_HEALTH_TIMEOUT,
+            timeout=_hooks_cfg().health_timeout,
         )
         if resp.status_code == 200:
             return resp.json()
@@ -49,8 +52,9 @@ def _auto_start_daemon() -> bool:
     except (FileNotFoundError, OSError):
         return False
 
-    for _ in range(_POLL_ATTEMPTS):
-        time.sleep(_POLL_INTERVAL)
+    cfg = _hooks_cfg()
+    for _ in range(cfg.poll_attempts):
+        time.sleep(cfg.poll_interval)
         if _check_health() is not None:
             return True
     return False

@@ -8,7 +8,10 @@ from __future__ import annotations
 import dataclasses
 import typing
 
+import simba.config
 
+
+@simba.config.configurable("memory")
 @dataclasses.dataclass
 class MemoryConfig:
     port: int = 8741
@@ -30,7 +33,13 @@ class MemoryConfig:
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
-    """Load config with optional overrides."""
+    """Load config from TOML files, then apply CLI/keyword overrides."""
+    base = simba.config.load("memory")
     valid_keys = {f.name for f in dataclasses.fields(MemoryConfig)}
     filtered = {k: v for k, v in overrides.items() if v is not None and k in valid_keys}
-    return MemoryConfig(**filtered)
+    if not filtered:
+        return base
+    # Merge overrides on top of TOML-loaded base
+    base_dict = dataclasses.asdict(base)
+    base_dict.update(filtered)
+    return MemoryConfig(**base_dict)

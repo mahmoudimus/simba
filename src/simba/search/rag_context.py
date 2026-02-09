@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+import simba.config
 import simba.db
 import simba.search.project_memory
 import simba.search.qmd
@@ -15,10 +16,13 @@ import simba.search.qmd
 if TYPE_CHECKING:
     import pathlib
 
-_MAX_CONTEXT_TOKENS = 1500
-_MAX_CODE_RESULTS = 3
-_MIN_QUERY_LENGTH = 15
-_MEMORY_TOKEN_BUDGET = 500
+
+def _search_cfg():
+    import simba.search.config
+
+    return simba.config.load("search")
+
+
 _SKIP_PATTERNS = re.compile(
     r"^(/|yes|no|ok|thanks|hi|hello|hey|commit|push|pull|git )", re.IGNORECASE
 )
@@ -32,7 +36,8 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
     so that failures never crash the hook.
     """
     # -- Guard checks -------------------------------------------------------
-    if len(prompt) < _MIN_QUERY_LENGTH:
+    cfg = _search_cfg()
+    if len(prompt) < cfg.min_query_length:
         return ""
     if _SKIP_PATTERNS.search(prompt):
         return ""
@@ -53,7 +58,7 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
         if conn is not None:
             try:
                 memory_context = simba.search.project_memory.get_context(
-                    conn, search_terms, _MEMORY_TOKEN_BUDGET
+                    conn, search_terms, cfg.memory_token_budget
                 )
             finally:
                 conn.close()
@@ -65,7 +70,7 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
     try:
         if simba.search.qmd.is_available():
             results = simba.search.qmd.search(
-                search_terms, max_results=_MAX_CODE_RESULTS
+                search_terms, max_results=cfg.max_code_results
             )
             if results:
                 lines: list[str] = []
