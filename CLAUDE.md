@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+<!-- BEGIN SIMBA:core_ref -->
+**Read `.claude/rules/CORE_INSTRUCTIONS.md` for rules that apply to ALL contexts (main session + subagents).**
+
+When dispatching subagents, inject the contents of that file into the prompt.
+<!-- END SIMBA:core_ref -->
+
 ## Repository Overview
 
 This is a monorepo ("simba") containing 4 independent Claude Code plugin/tooling projects. Each project has its own git history, package.json, and distribution channel. They all extend Claude Code's capabilities through the hooks system.
