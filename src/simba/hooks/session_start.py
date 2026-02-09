@@ -60,7 +60,7 @@ def _auto_start_daemon() -> bool:
     return False
 
 
-def _check_pending_extraction(session_id: str) -> str:
+def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
     """Check if there's a pending transcript extraction and return instructions."""
     transcripts_dir = pathlib.Path.home() / ".claude" / "transcripts"
     latest = transcripts_dir / "latest.json"
@@ -95,7 +95,8 @@ def _check_pending_extraction(session_id: str) -> str:
         '-H "Content-Type: application/json" '
         '-d \'{"type": "<TYPE>", "content": "<LEARNING>", '
         '"context": "<CONTEXT>", "confidence": <SCORE>, '
-        f'"sessionSource": "{export_session}"}}\'\n\n'
+        f'"sessionSource": "{export_session}", '
+        f'"projectPath": "{cwd}"}}\'\n\n'
         "LEARNING TYPES:\n"
         "- WORKING_SOLUTION: Commands, code, or approaches that worked\n"
         '- GOTCHA: Traps, counterintuitive behaviors, "watch out for this"\n'
@@ -170,7 +171,7 @@ def main(hook_input: dict) -> str:
 
     # 4. Check for pending transcript extraction
     if hook_input.get("source") == "compact" or session_id:
-        extraction = _check_pending_extraction(session_id)
+        extraction = _check_pending_extraction(session_id, cwd=cwd_str or "")
         if extraction:
             parts.append(extraction)
 
