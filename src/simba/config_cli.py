@@ -23,6 +23,7 @@ import simba.config
 
 def _ensure_registry() -> None:
     """Import all config modules so the registry is populated."""
+    import simba.guardian.config
     import simba.hooks.config
     import simba.memory.config
     import simba.search.config

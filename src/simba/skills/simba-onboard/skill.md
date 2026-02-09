@@ -11,6 +11,18 @@ Set up SIMBA markers for this project by analyzing existing markdown files and g
 
 ---
 
+## Step 0: Resolve Core Filename
+
+Run this command to get the configured filename for the core instructions file:
+
+```bash
+simba config get guardian.core_filename
+```
+
+This defaults to `CORE_INSTRUCTIONS.md`. Legacy projects may configure it to `CORE.md` or another name. Use the returned value as `<CORE_FILE>` throughout the remaining steps. The full output path will be `.claude/rules/<CORE_FILE>`.
+
+---
+
 ## Step 1: Discover Existing Files
 
 Read all project instruction files to understand the current state:
@@ -57,9 +69,9 @@ Build & Test       | CLAUDE.md             | 3 command groups
 
 ---
 
-## Step 3: Generate .claude/rules/CORE_INSTRUCTIONS.md
+## Step 3: Generate .claude/rules/\<CORE_FILE\>
 
-Create the file `.claude/rules/CORE_INSTRUCTIONS.md` with this structure:
+Create the file `.claude/rules/<CORE_FILE>` with this structure:
 
 ```markdown
 # Core Instructions
@@ -132,12 +144,12 @@ Once the user approves:
 
 1. **Create** `.claude/rules/` directory if it doesn't exist
 
-2. **Write** `.claude/rules/CORE_INSTRUCTIONS.md` with the approved content
+2. **Write** `.claude/rules/<CORE_FILE>` with the approved content
 
 3. **Update CLAUDE.md** — Add a reference block (if not already present):
    ```markdown
    <!-- BEGIN SIMBA:core_ref -->
-   **Read `.claude/rules/CORE_INSTRUCTIONS.md` for rules that apply to ALL contexts (main session + subagents).**
+   **Read `.claude/rules/<CORE_FILE>` for rules that apply to ALL contexts (main session + subagents).**
 
    When dispatching subagents, inject the contents of that file into the prompt.
    <!-- END SIMBA:core_ref -->
@@ -147,9 +159,9 @@ Once the user approves:
 4. **Update AGENTS.md** (if it exists) — Add a similar reference:
    ```markdown
    <!-- BEGIN SIMBA:core_ref -->
-   **All agents must follow `.claude/rules/CORE_INSTRUCTIONS.md` before executing.**
+   **All agents must follow `.claude/rules/<CORE_FILE>` before executing.**
 
-   When dispatching write-capable agents (especially implementer), read `.claude/rules/CORE_INSTRUCTIONS.md` and inject its contents into the dispatch prompt.
+   When dispatching write-capable agents (especially implementer), read `.claude/rules/<CORE_FILE>` and inject its contents into the dispatch prompt.
    <!-- END SIMBA:core_ref -->
    ```
 
@@ -162,22 +174,23 @@ Once the user approves:
 3. Report the results to the user
 
 **Done.** The user can now:
-- Edit `.claude/rules/CORE_INSTRUCTIONS.md` directly to refine rules
+- Edit `.claude/rules/<CORE_FILE>` directly to refine rules
 - Run `simba markers audit` anytime to check marker health
 - Run `/simba-onboard` again to re-analyze if files change significantly
+- Change the filename for future projects: `simba config set guardian.core_filename CORE.md`
 
 ### How It Works After Onboarding
 
 ```
 Normal session:
-  Claude Code auto-loads .claude/rules/CORE_INSTRUCTIONS.md  (native)
-  + Guardian re-injects SIMBA:core blocks on every prompt     (compaction-safe)
+  Claude Code auto-loads .claude/rules/<CORE_FILE>        (native)
+  + Guardian re-injects SIMBA:core blocks on every prompt  (compaction-safe)
 
 After compaction:
   Claude Code may lose .claude/rules/ context
-  Guardian still injects SIMBA:core blocks                    (safety net)
+  Guardian still injects SIMBA:core blocks                 (safety net)
 
 Subagents:
-  Must explicitly receive CORE_INSTRUCTIONS.md in their prompt
+  Must explicitly receive <CORE_FILE> in their prompt
   CLAUDE.md and AGENTS.md reference the file for this purpose
 ```
