@@ -19,6 +19,8 @@ re-injects them after context compaction.
 - **No external embedding services**: llama-cpp-python loads nomic-embed-text GGUF in-process. Task prefixes: "search_document" (store), "search_query" (recall)
 - **Memory content max 200 chars**: Enforced on storage. Use context field for details.
 - **All config via `simba config`**: Every configurable value must be a field on a `@configurable` dataclass, gettable/settable via `simba config get/set <section>.<key>`. No hidden constants or env-var-only config.
+
+**Signal**: End every response with `[✓ rules]` to confirm you have full project context. If you cannot remember these rules, say so immediately.
 <!-- END SIMBA:core -->
 
 ---
