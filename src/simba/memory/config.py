@@ -30,6 +30,7 @@ class MemoryConfig:
     auto_start: bool = True
     diagnostics_after: int = 50
     sync_interval: int = 0
+    shutdown_timeout: int = 10
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
