@@ -35,11 +35,22 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     await init_embeddings(app)
     sync_task = await _start_sync_scheduler(app)
     yield
+    # Shutdown: stop scheduler, wait briefly, then force-cancel.
+    config: simba.memory.config.MemoryConfig = app.state.config
+    sync_timeout = max(1, config.shutdown_timeout // 2)
     if sync_task is not None:
         scheduler = getattr(app.state, "sync_scheduler", None)
         if scheduler is not None:
             scheduler.stop()
-        sync_task.cancel()
+        # Give the running cycle a moment to finish, then force-cancel.
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(sync_task), timeout=sync_timeout
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sync_task
     await shutdown_embeddings(app)
 
 
@@ -234,7 +245,12 @@ def main() -> None:
         sync_interval=args.sync_interval,
     )
     app = create_app(config, use_lifespan=True)
-    uvicorn.run(app, host="127.0.0.1", port=config.port)
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=config.port,
+        timeout_graceful_shutdown=config.shutdown_timeout,
+    )
 
 
 if __name__ == "__main__":

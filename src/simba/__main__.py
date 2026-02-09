@@ -62,6 +62,60 @@ def _build_hooks_config() -> dict:
     return hooks
 
 
+def _bundled_skill_names() -> list[str]:
+    """Return names of all bundled skills."""
+    import importlib.resources
+
+    skills_pkg = importlib.resources.files("simba") / "skills"
+    if not skills_pkg.is_dir():
+        return []
+    return [
+        d.name
+        for d in skills_pkg.iterdir()
+        if d.is_dir() and (d / "skill.md").is_file()
+    ]
+
+
+def _install_skills(skills_dir: pathlib.Path) -> int:
+    """Copy bundled skills into *skills_dir*."""
+    import importlib.resources
+
+    skills_pkg = importlib.resources.files("simba") / "skills"
+    if not skills_pkg.is_dir():
+        return 0
+
+    copied = 0
+    for skill_dir in skills_pkg.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "skill.md"
+        if not skill_md.is_file():
+            continue
+        dest_dir = skills_dir / skill_dir.name
+        dest_file = dest_dir / "skill.md"
+        if dest_file.exists():
+            continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_file.write_text(skill_md.read_text())
+        print(f"  + skill: /{skill_dir.name}")
+        copied += 1
+    return copied
+
+
+def _remove_skills(skills_dir: pathlib.Path) -> int:
+    """Remove bundled skills from *skills_dir*."""
+    import shutil
+
+    removed = 0
+    for name in _bundled_skill_names():
+        dest_dir = skills_dir / name
+        if dest_dir.is_dir():
+            shutil.rmtree(dest_dir)
+            print(f"  - skill: /{name}")
+            removed += 1
+    return removed
+
+
 def _cmd_install(args: list[str]) -> int:
     """Register or remove simba hooks.
 
@@ -84,11 +138,19 @@ def _cmd_install(args: list[str]) -> int:
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
 
+    if is_global:
+        skills_dir = pathlib.Path.home() / ".claude" / "skills"
+    else:
+        skills_dir = pathlib.Path.cwd() / ".claude" / "skills"
+
     if remove:
         if "hooks" in settings:
             del settings["hooks"]
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         print("Simba hooks removed from", settings_path)
+        removed = _remove_skills(skills_dir)
+        if removed:
+            print(f"  {removed} skill(s) removed")
         return 0
 
     settings["hooks"] = _build_hooks_config()
@@ -96,6 +158,11 @@ def _cmd_install(args: list[str]) -> int:
     scope = "global" if is_global else "project"
     print(f"Simba hooks registered ({scope}) in {settings_path}")
     print(f"  {len(_HOOK_EVENTS)} hooks: {', '.join(_HOOK_EVENTS)}")
+
+    skill_count = _install_skills(skills_dir)
+    if skill_count:
+        print(f"  {skill_count} skill(s) installed")
+
     return 0
 
 

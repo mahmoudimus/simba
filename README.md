@@ -44,8 +44,9 @@ uv tool install git+https://github.com/mahmoudimus/simba.git
 ### Register hooks
 
 ```bash
-simba install           # Register all 6 hooks in ~/.claude/settings.json
-simba install --remove  # Remove simba hooks from settings
+simba install             # Register hooks + skills in current project
+simba install --global    # Register hooks + skills globally (~/.claude/)
+simba install --remove    # Remove hooks and skills
 ```
 
 ## What It Does
@@ -236,6 +237,36 @@ The `migrate` command converts non-SIMBA markers (`<!-- BEGIN NEURON:name -->`, 
 
 Skills are slash-command invocable capabilities defined in `skills/`. They run as forked agents with restricted tool access.
 
+### `/simba-onboard` — Project Onboarding
+
+Interactive skill that analyzes your project's markdown files and generates consolidated core instructions with SIMBA markers:
+
+1. Reads CLAUDE.md, AGENTS.md, and all `.claude/**/*.md` files
+2. Extracts key instructions into categories (constraints, build commands, environment, code style, workflow, agent rules)
+3. Generates `.claude/CORE_INSTRUCTIONS.md` with SIMBA marker sections
+4. Presents content for user verification before writing
+5. Wires references into CLAUDE.md and AGENTS.md
+
+```bash
+# In Claude Code, after simba install:
+/simba-onboard
+```
+
+The skill is automatically installed by `simba install`. It creates a structure similar to:
+
+```markdown
+# .claude/CORE_INSTRUCTIONS.md
+<!-- BEGIN SIMBA:constraints -->
+## Critical Constraints
+- Never delete files without confirmation
+<!-- END SIMBA:constraints -->
+
+<!-- BEGIN SIMBA:build_commands -->
+## Build & Test
+make && make test
+<!-- END SIMBA:build_commands -->
+```
+
 ### `/memories-learn` — Extract Learnings from Transcripts
 
 Automatically triggered after context compaction:
@@ -291,8 +322,9 @@ Optional external tools for enhanced search:
 ## CLI Reference
 
 ```
-simba install                 Register hooks in ~/.claude/settings.json
-simba install --remove        Remove hooks
+simba install                 Register hooks + skills (project-local)
+simba install --global        Register hooks + skills (~/.claude/)
+simba install --remove        Remove hooks and skills
 simba server [opts]           Start memory daemon
 simba neuron run              Run neuron MCP server (truth/verify)
 simba orchestration install   Register orchestration MCP server
@@ -422,6 +454,7 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `max_content_length` | 1000 | Maximum memory content length (chars) |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
+| `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |
 
 ### Neuron
 
