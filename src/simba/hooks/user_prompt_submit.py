@@ -53,6 +53,9 @@ def main(hook_input: dict) -> str:
             pass
 
     combined = "\n\n".join(parts)
+    if combined:
+        tokens = len(combined) // 4
+        combined += f"\n[simba: ~{tokens} tokens injected]"
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",

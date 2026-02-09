@@ -38,7 +38,7 @@ For each file read in Step 1, extract and categorize content into these groups:
 | **Environment** | Machine names, SSH info, paths, ports, deployment targets | `environment` |
 | **Code Style** | Formatting rules, naming conventions, patterns to follow | `code_style` |
 | **Workflow** | Git workflow, commit conventions, PR process, stuck detection | `workflow` |
-| **Agent Rules** | Subagent dispatch rules, agent-specific constraints, CORE.md injection requirements | `agent_rules` |
+| **Agent Rules** | Subagent dispatch rules, agent-specific constraints, core injection requirements | `agent_rules` |
 
 **Important**:
 - Not every project will have content for every category. Only create sections that have real content.
@@ -57,23 +57,27 @@ Build & Test       | CLAUDE.md             | 3 command groups
 
 ---
 
-## Step 3: Generate .claude/CORE_INSTRUCTIONS.md
+## Step 3: Generate .claude/rules/CORE_INSTRUCTIONS.md
 
-Create the file `.claude/CORE_INSTRUCTIONS.md` with this structure:
+Create the file `.claude/rules/CORE_INSTRUCTIONS.md` with this structure:
 
 ```markdown
 # Core Instructions
 
-These instructions are extracted from project documentation and apply to ALL contexts
-(main session + subagents). Managed by SIMBA markers.
+These instructions apply to ALL contexts (main session + subagents).
+Managed by SIMBA markers — run `simba markers audit` to check health.
+
+This file lives in `.claude/rules/` so Claude Code auto-loads it every session.
+Critical rules are wrapped in `SIMBA:core` markers so the guardian hook
+re-injects them after context compaction.
 
 ---
 
-<!-- BEGIN SIMBA:constraints -->
+<!-- BEGIN SIMBA:core -->
 ## Critical Constraints
 
-[extracted constraints here]
-<!-- END SIMBA:constraints -->
+[The most important rules go here — these survive compaction via guardian hook]
+<!-- END SIMBA:core -->
 
 ---
 
@@ -86,12 +90,20 @@ These instructions are extracted from project documentation and apply to ALL con
 [...additional sections as needed...]
 ```
 
-**Rules**:
+### Marker Strategy
+
+**`SIMBA:core`** — Wrap the most critical rules (constraints, must-never-violate rules) in this marker. The guardian hook extracts these and re-injects them on EVERY prompt, even after context compaction. Keep this section tight — every token here costs context on every message.
+
+**Other SIMBA markers** (`SIMBA:build_commands`, `SIMBA:environment`, etc.) — These are discoverable and auditable via `simba markers`, but NOT re-injected by the guardian. They're reference content that Claude reads from the file when needed. Put the bulk of the instructions here.
+
+### Rules for Content
+
 - Each section gets its own SIMBA marker pair
 - Use the section names from the Category table above
 - Include `---` horizontal rules between sections for readability
 - Only include sections that have actual content (skip empty categories)
 - Content inside markers should be complete and standalone — a subagent reading only this file should have everything it needs
+- Keep `SIMBA:core` lean: only rules that MUST survive compaction (aim for <500 tokens)
 
 ---
 
@@ -103,9 +115,11 @@ For each section:
 1. Show the section name and SIMBA marker
 2. Show the content that will be written
 3. Show which source file(s) it was extracted from
+4. For `SIMBA:core`: explicitly note that this content will be re-injected on every prompt
 
 Ask the user:
 - "Does this look accurate? Should I add, remove, or modify anything?"
+- "Is the `SIMBA:core` section the right set of critical rules? Everything in there costs context on every message."
 - Wait for explicit approval before proceeding
 
 If the user requests changes, apply them and show the updated version.
@@ -116,22 +130,26 @@ If the user requests changes, apply them and show the updated version.
 
 Once the user approves:
 
-1. **Write** `.claude/CORE_INSTRUCTIONS.md` with the approved content
+1. **Create** `.claude/rules/` directory if it doesn't exist
 
-2. **Update CLAUDE.md** — Add a reference block (if not already present):
+2. **Write** `.claude/rules/CORE_INSTRUCTIONS.md` with the approved content
+
+3. **Update CLAUDE.md** — Add a reference block (if not already present):
    ```markdown
    <!-- BEGIN SIMBA:core_ref -->
-   **Read `.claude/CORE_INSTRUCTIONS.md` for rules that apply to ALL contexts (main session + subagents).**
+   **Read `.claude/rules/CORE_INSTRUCTIONS.md` for rules that apply to ALL contexts (main session + subagents).**
+
+   When dispatching subagents, inject the contents of that file into the prompt.
    <!-- END SIMBA:core_ref -->
    ```
    Place this near the top of the file, after any title/heading but before other content.
 
-3. **Update AGENTS.md** (if it exists) — Add a similar reference:
+4. **Update AGENTS.md** (if it exists) — Add a similar reference:
    ```markdown
    <!-- BEGIN SIMBA:core_ref -->
-   **All agents must follow `.claude/CORE_INSTRUCTIONS.md` before executing.**
+   **All agents must follow `.claude/rules/CORE_INSTRUCTIONS.md` before executing.**
 
-   When dispatching subagents (especially implementer), inject the contents of `.claude/CORE_INSTRUCTIONS.md` into the prompt.
+   When dispatching write-capable agents (especially implementer), read `.claude/rules/CORE_INSTRUCTIONS.md` and inject its contents into the dispatch prompt.
    <!-- END SIMBA:core_ref -->
    ```
 
@@ -144,6 +162,22 @@ Once the user approves:
 3. Report the results to the user
 
 **Done.** The user can now:
-- Edit `.claude/CORE_INSTRUCTIONS.md` directly to refine rules
+- Edit `.claude/rules/CORE_INSTRUCTIONS.md` directly to refine rules
 - Run `simba markers audit` anytime to check marker health
 - Run `/simba-onboard` again to re-analyze if files change significantly
+
+### How It Works After Onboarding
+
+```
+Normal session:
+  Claude Code auto-loads .claude/rules/CORE_INSTRUCTIONS.md  (native)
+  + Guardian re-injects SIMBA:core blocks on every prompt     (compaction-safe)
+
+After compaction:
+  Claude Code may lose .claude/rules/ context
+  Guardian still injects SIMBA:core blocks                    (safety net)
+
+Subagents:
+  Must explicitly receive CORE_INSTRUCTIONS.md in their prompt
+  CLAUDE.md and AGENTS.md reference the file for this purpose
+```
