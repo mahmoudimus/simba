@@ -49,6 +49,85 @@ simba install --global    # Register hooks + skills globally (~/.claude/)
 simba install --remove    # Remove hooks and skills
 ```
 
+## Workflow
+
+### Setting Up a New Project
+
+```bash
+cd ~/src/my-project
+
+# 1. Install simba hooks and skills into this project
+simba install
+
+# 2. In Claude Code, run the onboarding skill
+/simba-onboard
+```
+
+The `/simba-onboard` skill walks you through:
+- Reading all your project's markdown files (CLAUDE.md, AGENTS.md, `.claude/**/*.md`)
+- Extracting key instructions into categories (constraints, build commands, environment, etc.)
+- Generating `.claude/CORE_INSTRUCTIONS.md` with SIMBA marker sections
+- Wiring references into CLAUDE.md and AGENTS.md
+
+### Day-to-Day Usage
+
+Once installed, simba works automatically via hooks. No manual steps needed during normal Claude Code sessions.
+
+**What happens on each session:**
+
+1. **SessionStart** — memory daemon auto-starts, tailor context injected, project stats shown
+2. **Every prompt** — relevant memories recalled, core rules reinforced, search context injected
+3. **Every tool call** — vector DB queried based on Claude's thinking; context-low warning when approaching compaction
+4. **Session end** — transcript exported for learning extraction; error patterns captured
+
+### Managing Core Instructions
+
+SIMBA markers (`<!-- BEGIN SIMBA:name -->`) define sections in markdown files that simba can discover, audit, and update.
+
+```bash
+# See what markers exist in your project
+simba markers list
+
+# Check marker health (stale content, user-defined markers)
+simba markers audit
+
+# Update managed sections with latest templates
+simba markers update
+
+# Convert old markers (NEURON:*, CORE, etc.) to SIMBA format
+simba markers migrate
+```
+
+Edit `.claude/CORE_INSTRUCTIONS.md` directly to refine rules. Marker sections are preserved — simba only touches content between its own `<!-- BEGIN SIMBA:* -->` tags.
+
+### Configuring Simba
+
+```bash
+# See all configurable settings
+simba config list
+
+# Adjust memory recall sensitivity
+simba config set memory.min_similarity 0.40
+
+# Use a custom port for the daemon
+simba config set memory.port 9000
+
+# Set a global default (applies to all projects)
+simba config set --global memory.max_results 5
+
+# View effective config (local > global > defaults)
+simba config show
+```
+
+### Global vs Per-Project Install
+
+| Scope | Command | Settings File | Skills Dir |
+|-------|---------|---------------|------------|
+| Project | `simba install` | `.claude/settings.local.json` | `.claude/skills/` |
+| Global | `simba install --global` | `~/.claude/settings.json` | `~/.claude/skills/` |
+
+Per-project is the default. Use global when you want simba active in every Claude Code session regardless of project.
+
 ## What It Does
 
 Simba hooks into six Claude Code lifecycle events to provide persistent context across sessions:
