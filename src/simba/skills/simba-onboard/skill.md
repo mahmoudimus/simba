@@ -85,6 +85,9 @@ Example structure (using `{BEGIN}` and `{END}` as placeholders for the real mark
     {BEGIN SIMBA:core}
     ## Critical Constraints
     [The most important rules — these survive compaction via guardian hook]
+
+    **Signal**: End every response with `[✓ rules]` to confirm you have full
+    project context. If you cannot remember these rules, say so immediately.
     {END SIMBA:core}
     ---
     {BEGIN SIMBA:build_commands}
