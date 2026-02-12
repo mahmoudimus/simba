@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simba Codex Lifecycle"
+  short_description: "Run codex-status/extract/finalize consistently"
+  default_prompt: "Follow Simba's Codex lifecycle routine before and after implementation work."

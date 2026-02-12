@@ -4,6 +4,14 @@ Usage:
     simba install          Register hooks in current project
     simba install --global Register hooks globally (~/.claude/settings.json)
     simba install --remove Remove hooks (add --global for global)
+    simba codex-install    Install bundled skills for Codex (~/.codex/skills)
+    simba codex-install --remove
+                           Remove bundled Codex skills
+    simba codex-status     Check daemon health + pending transcript extraction
+    simba codex-extract    Show extraction prompt for pending transcript
+    simba codex-recall     Query semantic memory (/recall) for a text query
+    simba codex-finalize   Run end-of-task signal/error checks
+    simba codex-automation Print suggested Codex automation directive
     simba server [opts]    Start the memory daemon
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
@@ -18,9 +26,13 @@ Usage:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import pathlib
+import re
 import sys
+from typing import Any
 
 _HOOK_EVENTS = {
     "SessionStart": "simba.hooks.session_start",
@@ -43,6 +55,14 @@ _HOOK_TIMEOUTS = {
 _GLOBAL_SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
 
+def _codex_home() -> pathlib.Path:
+    """Return CODEX_HOME (or ~/.codex)."""
+    env_home = os.environ.get("CODEX_HOME")
+    if env_home:
+        return pathlib.Path(env_home).expanduser()
+    return pathlib.Path.home() / ".codex"
+
+
 def _build_hooks_config() -> dict:
     """Build the hooks section for settings.json."""
     hooks: dict = {}
@@ -60,6 +80,118 @@ def _build_hooks_config() -> dict:
             }
         ]
     return hooks
+
+
+def _latest_transcript_metadata() -> dict[str, Any] | None:
+    """Load latest transcript metadata from ~/.claude/transcripts/latest.json."""
+    latest = pathlib.Path.home() / ".claude" / "transcripts" / "latest.json"
+    if not latest.exists():
+        return None
+    try:
+        return json.loads(latest.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _extract_transcript_text(path: pathlib.Path) -> str:
+    """Extract plain text from markdown or JSONL transcript."""
+    if not path.exists():
+        return ""
+    try:
+        raw = path.read_text()
+    except OSError:
+        return ""
+
+    # JSONL transcript: parse message/tool fields.
+    if path.suffix == ".jsonl":
+        parts: list[str] = []
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            msg = entry.get("message", {})
+            if isinstance(msg, dict):
+                content = msg.get("content", [])
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict):
+                            txt = (
+                                item.get("text")
+                                or item.get("content")
+                                or item.get("thinking")
+                            )
+                            if isinstance(txt, str) and txt.strip():
+                                parts.append(txt.strip())
+            for key in ("toolUseResult", "text", "content"):
+                val = entry.get(key)
+                if isinstance(val, str) and val.strip():
+                    parts.append(val.strip())
+        return "\n".join(parts)
+
+    # Markdown transcript: drop tags and use remaining text.
+    return re.sub(r"<[^>]+>", " ", raw)
+
+
+def _classify_learning(sentence: str) -> tuple[str, float] | None:
+    """Classify a sentence into a memory type with confidence."""
+    s = sentence.lower()
+    if re.search(r"\b(prefer|prefers|always use|always prefer|likes?)\b", s):
+        return ("PREFERENCE", 0.90)
+    if re.search(r"\b(fail|fails|failed|broke|broken|error|exception)\b", s):
+        return ("FAILURE", 0.88)
+    if re.search(r"\b(chose|decided|selected|picked)\b", s):
+        return ("DECISION", 0.90)
+    if re.search(r"\b(watch out|beware|careful|avoid|don't|never)\b", s):
+        return ("GOTCHA", 0.88)
+    if re.search(r"\b(pattern|convention|workflow|approach)\b", s):
+        return ("PATTERN", 0.85)
+    if re.search(r"\b(use|run|fix|resolve|works|worked|solves?)\b", s):
+        return ("WORKING_SOLUTION", 0.86)
+    return None
+
+
+def _extract_learnings(
+    transcript_text: str,
+    *,
+    max_items: int = 15,
+) -> list[dict[str, Any]]:
+    """Extract candidate learnings from transcript text heuristically."""
+    # Split into sentence-like units and normalize whitespace.
+    chunks = re.split(r"[.\n]+", transcript_text)
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+
+    for raw in chunks:
+        sentence = " ".join(raw.strip().split())
+        if len(sentence) < 24 or len(sentence) > 220:
+            continue
+        key = sentence.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        tagged = _classify_learning(sentence)
+        if tagged is None:
+            continue
+
+        mtype, conf = tagged
+        out.append(
+            {
+                "type": mtype,
+                "content": sentence[:200],
+                "context": "extracted from transcript",
+                "confidence": conf,
+            }
+        )
+        if len(out) >= max_items:
+            break
+
+    return out
 
 
 def _bundled_skill_names() -> list[str]:
@@ -116,6 +248,72 @@ def _remove_skills(skills_dir: pathlib.Path) -> int:
     return removed
 
 
+def _bundled_codex_skill_names() -> list[str]:
+    """Return names of bundled Codex skills (SKILL.md)."""
+    import importlib.resources
+
+    skills_pkg = importlib.resources.files("simba") / "codex_skills"
+    if not skills_pkg.is_dir():
+        return []
+    return [
+        d.name
+        for d in skills_pkg.iterdir()
+        if d.is_dir() and (d / "SKILL.md").is_file()
+    ]
+
+
+def _install_codex_skills(skills_dir: pathlib.Path) -> int:
+    """Copy bundled Codex skills (SKILL.md + agents metadata)."""
+    import importlib.resources
+
+    skills_pkg = importlib.resources.files("simba") / "codex_skills"
+    if not skills_pkg.is_dir():
+        return 0
+
+    installed = 0
+    for skill_dir in skills_pkg.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        src_skill = skill_dir / "SKILL.md"
+        if not src_skill.is_file():
+            continue
+
+        dest_dir = skills_dir / skill_dir.name
+        dest_skill = dest_dir / "SKILL.md"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        if not dest_skill.exists():
+            dest_skill.write_text(src_skill.read_text())
+            print(f"  + codex skill: {skill_dir.name}")
+            installed += 1
+
+        src_agents = skill_dir / "agents"
+        if src_agents.is_dir():
+            for src_file in src_agents.rglob("*"):
+                if not src_file.is_file():
+                    continue
+                rel_path = src_file.relative_to(skill_dir)
+                dst_file = dest_dir / rel_path
+                if dst_file.exists():
+                    continue
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                dst_file.write_text(src_file.read_text())
+    return installed
+
+
+def _remove_codex_skills(skills_dir: pathlib.Path) -> int:
+    """Remove bundled Codex skills from CODEX_HOME."""
+    import shutil
+
+    removed = 0
+    for name in _bundled_codex_skill_names():
+        dest_dir = skills_dir / name
+        if dest_dir.is_dir():
+            shutil.rmtree(dest_dir)
+            print(f"  - codex skill: {name}")
+            removed += 1
+    return removed
+
+
 def _cmd_install(args: list[str]) -> int:
     """Register or remove simba hooks.
 
@@ -163,6 +361,274 @@ def _cmd_install(args: list[str]) -> int:
     if skill_count:
         print(f"  {skill_count} skill(s) installed")
 
+    return 0
+
+
+def _cmd_codex_install(args: list[str]) -> int:
+    """Install or remove bundled skills for Codex."""
+    remove = "--remove" in args
+    skills_dir = _codex_home() / "skills"
+
+    if remove:
+        removed = _remove_codex_skills(skills_dir)
+        print(f"Codex skills removed from {skills_dir}")
+        if removed:
+            print(f"  {removed} skill(s) removed")
+        return 0
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    installed = _install_codex_skills(skills_dir)
+    print(f"Codex skills installed in {skills_dir}")
+    if installed:
+        print(f"  {installed} skill(s) installed")
+    return 0
+
+
+def _cmd_codex_status(args: list[str]) -> int:
+    """Check Codex-oriented Simba status: daemon + pending extraction."""
+    del args
+    import httpx
+
+    import simba.hooks._memory_client
+
+    url = simba.hooks._memory_client.daemon_url()
+    print(f"[codex] daemon: {url}")
+
+    health_ok = False
+    try:
+        resp = httpx.get(f"{url}/health", timeout=2.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            health_ok = True
+            print(
+                "[codex] memory: up "
+                f"(count={data.get('memoryCount', 0)}, "
+                f"model={data.get('embeddingModel', 'unknown')})"
+            )
+            # Mirror Claude SessionStart behavior: trigger one sync cycle.
+            with contextlib.suppress(httpx.HTTPError, ValueError):
+                httpx.post(f"{url}/sync", timeout=1.0)
+                print("[codex] sync: triggered")
+    except (httpx.HTTPError, ValueError):
+        pass
+
+    if not health_ok:
+        print("[codex] memory: down (start with `simba server`)")
+
+    meta = _latest_transcript_metadata()
+    if not meta:
+        print("[codex] extraction: no latest transcript metadata found")
+        return 0
+
+    status = meta.get("status", "unknown")
+    transcript = meta.get("transcript_path", "")
+    session_id = meta.get("session_id", "")
+    print(f"[codex] latest transcript: {transcript or 'unknown'}")
+    print(f"[codex] latest session: {session_id or 'unknown'}")
+    print(f"[codex] extraction status: {status}")
+    if status == "pending_extraction":
+        print("[codex] next: run `simba codex-extract`")
+    return 0
+
+
+def _cmd_codex_extract(args: list[str]) -> int:
+    """Print a ready-to-run extraction prompt and optionally mark it done."""
+    import httpx
+
+    mark_done = "--mark-done" in args
+    run_mode = "--run" in args
+
+    meta = _latest_transcript_metadata()
+    if not meta:
+        print("No latest transcript metadata found at ~/.claude/transcripts/latest.json")
+        return 1
+
+    transcript = meta.get("transcript_path", "")
+    session_id = meta.get("session_id", "")
+    project_path = meta.get("project_path", str(pathlib.Path.cwd()))
+    status = meta.get("status", "")
+
+    if not transcript:
+        print("latest.json is missing transcript_path")
+        return 1
+
+    if status and status != "pending_extraction":
+        print(f"Extraction status is '{status}' (not pending).")
+
+    if run_mode:
+        transcript_path = pathlib.Path(transcript)
+        text = _extract_transcript_text(transcript_path)
+        if not text.strip():
+            print(f"No readable transcript content found in {transcript_path}")
+            return 1
+
+        learnings = _extract_learnings(text, max_items=15)
+        if not learnings:
+            print("No candidate learnings found heuristically.")
+            print("Fallback: run `simba codex-extract` without --run for manual prompt.")
+            return 1
+
+        daemon = "http://localhost:8741"
+        stored = 0
+        duplicates = 0
+        errors = 0
+
+        for mem in learnings:
+            payload = {
+                "type": mem["type"],
+                "content": mem["content"],
+                "context": mem["context"],
+                "confidence": mem["confidence"],
+                "sessionSource": session_id,
+                "projectPath": project_path,
+            }
+            try:
+                resp = httpx.post(f"{daemon}/store", json=payload, timeout=10.0)
+                resp.raise_for_status()
+                body = resp.json()
+                if body.get("status") == "stored":
+                    stored += 1
+                elif body.get("status") == "duplicate":
+                    duplicates += 1
+                else:
+                    errors += 1
+            except (httpx.HTTPError, ValueError):
+                errors += 1
+
+        print(
+            f"[codex] extract run complete: candidates={len(learnings)} "
+            f"stored={stored} duplicate={duplicates} errors={errors}"
+        )
+    else:
+        print("Use this prompt with Codex (or the `memories-learn` skill):")
+        print("---")
+        print(
+            f"Read transcript `{transcript}` and extract 5-15 high-value learnings. "
+            "Store each learning to semantic memory using:"
+        )
+        print(
+            "curl -X POST http://localhost:8741/store "
+            '-H "Content-Type: application/json" '
+            f"-d '{{\"type\":\"<TYPE>\",\"content\":\"<LEARNING>\","
+            f"\"context\":\"<CONTEXT>\",\"confidence\":<SCORE>,"
+            f"\"sessionSource\":\"{session_id}\",\"projectPath\":\"{project_path}\"}}'"
+        )
+        print(
+            "Types: WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, PREFERENCE."
+        )
+        print("---")
+
+    if mark_done:
+        meta["status"] = "extracted"
+        latest = pathlib.Path.home() / ".claude" / "transcripts" / "latest.json"
+        target = latest.resolve() if latest.is_symlink() else latest
+        target.write_text(json.dumps(meta, indent=2))
+        print(f"Updated extraction status to 'extracted' in {target}")
+
+    return 0
+
+
+def _cmd_codex_recall(args: list[str]) -> int:
+    """Recall memories for a query via the memory daemon."""
+    if not args:
+        print("Usage: simba codex-recall <query text>", file=sys.stderr)
+        return 1
+
+    query = " ".join(args).strip()
+    if not query:
+        print("Usage: simba codex-recall <query text>", file=sys.stderr)
+        return 1
+
+    import simba.hooks._memory_client
+
+    memories = simba.hooks._memory_client.recall_memories(
+        query,
+        project_path=str(pathlib.Path.cwd()),
+    )
+    if not memories:
+        print("[codex] recall: no memories")
+        return 0
+
+    print(f"[codex] recall: {len(memories)} memories")
+    for m in memories:
+        mtype = m.get("type", "UNKNOWN")
+        sim = m.get("similarity", 0.0)
+        content = str(m.get("content", "")).strip()
+        print(f"- [{mtype}] ({sim:.2f}) {content}")
+    return 0
+
+
+def _parse_opt_value(args: list[str], key: str) -> str | None:
+    """Parse `--key value` from args."""
+    if key not in args:
+        return None
+    idx = args.index(key)
+    if idx + 1 >= len(args):
+        return None
+    return args[idx + 1]
+
+
+def _cmd_codex_finalize(args: list[str]) -> int:
+    """Run end-of-task checks equivalent to the Stop hook."""
+    response = _parse_opt_value(args, "--response") or ""
+    response_file = _parse_opt_value(args, "--response-file")
+    transcript = _parse_opt_value(args, "--transcript")
+
+    if response_file:
+        try:
+            response = pathlib.Path(response_file).read_text()
+        except OSError as exc:
+            print(f"Failed to read --response-file: {exc}", file=sys.stderr)
+            return 1
+
+    if not transcript:
+        meta = _latest_transcript_metadata()
+        if meta:
+            transcript = meta.get("transcript_path", "")
+
+    import simba.guardian.check_signal
+    import simba.tailor.hook
+
+    if response:
+        signal_result = simba.guardian.check_signal.main(
+            response=response, cwd=pathlib.Path.cwd()
+        )
+        if signal_result:
+            print(signal_result)
+        else:
+            print("[codex] signal check: ok ([✓ rules] present)")
+    else:
+        print("[codex] signal check: skipped (no response provided)")
+
+    if transcript:
+        simba.tailor.hook.process_hook(
+            json.dumps(
+                {
+                    "transcript_path": transcript,
+                    "cwd": str(pathlib.Path.cwd()),
+                }
+            )
+        )
+        print(f"[codex] reflection capture: processed {transcript}")
+    else:
+        print("[codex] reflection capture: skipped (no transcript found)")
+
+    return 0
+
+
+def _cmd_codex_automation(args: list[str]) -> int:
+    """Print a suggested Codex automation directive for Simba checks."""
+    del args
+    cwd = str(pathlib.Path.cwd())
+    print(
+        "::automation-update{mode=\"suggested create\" "
+        "name=\"Simba Codex Health\" "
+        "prompt=\"Run simba codex-status and report whether extraction is pending "
+        "or memory daemon is down. If pending extraction exists, include the exact "
+        "simba codex-extract command in the result.\" "
+        "rrule=\"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0\" "
+        f"cwds=\"{cwd}\" status=\"ACTIVE\"}}"
+    )
     return 0
 
 
@@ -743,6 +1209,18 @@ def main() -> None:
 
     if cmd == "install":
         sys.exit(_cmd_install(rest))
+    elif cmd == "codex-install":
+        sys.exit(_cmd_codex_install(rest))
+    elif cmd == "codex-status":
+        sys.exit(_cmd_codex_status(rest))
+    elif cmd == "codex-extract":
+        sys.exit(_cmd_codex_extract(rest))
+    elif cmd == "codex-recall":
+        sys.exit(_cmd_codex_recall(rest))
+    elif cmd == "codex-finalize":
+        sys.exit(_cmd_codex_finalize(rest))
+    elif cmd == "codex-automation":
+        sys.exit(_cmd_codex_automation(rest))
     elif cmd == "hook":
         sys.exit(_cmd_hook(rest))
     elif cmd == "server":

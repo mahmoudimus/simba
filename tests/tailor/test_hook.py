@@ -287,6 +287,29 @@ class TestParseTranscriptContent:
         content = simba.tailor.hook.parse_transcript_content(lines)
         assert "TypeError" in content
 
+    def test_handles_string_message_content(self):
+        lines = [
+            json.dumps(
+                {
+                    "message": {
+                        "content": "TypeError: string-shaped message content",
+                    }
+                }
+            )
+        ]
+        content = simba.tailor.hook.parse_transcript_content(lines)
+        assert "TypeError" in content
+
+    def test_ignores_non_list_non_string_message_content(self):
+        lines = [json.dumps({"message": {"content": {"unexpected": True}}})]
+        content = simba.tailor.hook.parse_transcript_content(lines)
+        assert content == ""
+
+    def test_ignores_json_string_entries(self):
+        lines = [json.dumps("just-a-string"), json.dumps({"toolUseResult": "Error: x"})]
+        content = simba.tailor.hook.parse_transcript_content(lines)
+        assert "Error: x" in content
+
 
 class TestProcessHook:
     def test_stores_reflection_in_db(
