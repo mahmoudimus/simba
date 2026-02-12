@@ -3,7 +3,7 @@ name = "simba"
 version = "0.1.0"
 description = "Unified Claude Code plugin — semantic memory, rule enforcement, neuro-symbolic logic, and project search"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
@@ -27,7 +27,11 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-simba = ["skills/**/*.md"]
+simba = [
+    "skills/**/*.md",
+    "codex_skills/**/*.md",
+    "codex_skills/**/*.yaml",
+]
 
 [dependency-groups]
 dev = [
@@ -43,7 +47,7 @@ dev = [
 [tool.ruff]
 src = ["src"]
 line-length = 88
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -86,5 +90,5 @@ show_missing = true
 skip_empty = true
 
 [tool.pyrefly]
-python_version = "3.12"
+python_version = "3.13"
 search_path = ["src"]

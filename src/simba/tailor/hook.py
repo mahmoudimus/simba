@@ -145,6 +145,8 @@ def parse_transcript_content(lines: list[str]) -> str:
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
+        if not isinstance(entry, dict):
+            continue
 
         if "toolUseResult" in entry:
             val = entry["toolUseResult"]
@@ -152,14 +154,18 @@ def parse_transcript_content(lines: list[str]) -> str:
 
         message = entry.get("message", {})
         if isinstance(message, dict):
-            for item in message.get("content", []):
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "tool_result"
-                    and item.get("content")
-                ):
-                    val = item["content"]
-                    parts.append(val if isinstance(val, str) else json.dumps(val))
+            content = message.get("content", [])
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "tool_result"
+                        and item.get("content")
+                    ):
+                        val = item["content"]
+                        parts.append(val if isinstance(val, str) else json.dumps(val))
 
     return "\n".join(parts)
 

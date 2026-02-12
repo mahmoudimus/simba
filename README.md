@@ -2,7 +2,7 @@
 
 > *"Remember who you are."* — Mufasa
 
-A unified Claude Code plugin that combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), and project-aware search into a single Python package.
+A unified Claude Code plugin that combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), and project-aware search into a single Python package, with Codex skill support for onboarding workflows.
 
 ## Quick Start
 
@@ -48,6 +48,29 @@ simba install             # Register hooks + skills in current project
 simba install --global    # Register hooks + skills globally (~/.claude/)
 simba install --remove    # Remove hooks and skills
 ```
+
+## Codex Skill
+
+This repo now includes a Codex-native skill (`simba-onboard`) and an installer command:
+
+```bash
+simba codex-install           # Install bundled Codex skills to $CODEX_HOME/skills
+simba codex-install --remove  # Remove bundled Codex skills
+simba codex-status            # Check daemon health + pending extraction
+simba codex-extract           # Print extraction prompt for latest transcript
+simba codex-recall "<query>"  # Query semantic memory via /recall
+simba codex-finalize          # Run end-of-task signal/error checks
+simba codex-automation        # Print a suggested Codex automation directive
+```
+
+Default install path:
+
+- `${CODEX_HOME:-$HOME/.codex}/skills/simba-onboard/`
+- `${CODEX_HOME:-$HOME/.codex}/skills/simba-codex-lifecycle/`
+
+Ask Codex to use:
+- `simba-onboard` for project instruction onboarding
+- `simba-codex-lifecycle` to enforce `codex-status` / `codex-extract` / `codex-finalize`
 
 ## Workflow
 
@@ -404,6 +427,13 @@ Optional external tools for enhanced search:
 simba install                 Register hooks + skills (project-local)
 simba install --global        Register hooks + skills (~/.claude/)
 simba install --remove        Remove hooks and skills
+simba codex-install           Install bundled Codex skills (~/.codex/skills)
+simba codex-install --remove  Remove bundled Codex skills
+simba codex-status            Check daemon health + pending extraction
+simba codex-extract           Print extraction prompt for latest transcript
+simba codex-recall <query>    Query semantic memory via /recall
+simba codex-finalize          Run end-of-task signal/error checks
+simba codex-automation        Print a suggested Codex automation directive
 simba server [opts]           Start memory daemon
 simba neuron run              Run neuron MCP server (truth/verify)
 simba orchestration install   Register orchestration MCP server

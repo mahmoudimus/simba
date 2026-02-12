@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simba Onboard"
+  short_description: "Generate SIMBA core instructions from project docs"
+  default_prompt: "Analyze project instruction markdown and onboard SIMBA markers end-to-end."
