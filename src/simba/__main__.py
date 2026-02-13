@@ -45,9 +45,9 @@ _HOOK_EVENTS = {
 
 _HOOK_TIMEOUTS = {
     "SessionStart": 15000,
-    "UserPromptSubmit": 3000,
-    "PreToolUse": 3000,
-    "PostToolUse": 3000,
+    "UserPromptSubmit": 5000,
+    "PreToolUse": 5000,
+    "PostToolUse": 5000,
     "PreCompact": 5000,
     "Stop": 5000,
 }
