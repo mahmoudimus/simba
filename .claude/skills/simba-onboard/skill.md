@@ -73,9 +73,8 @@ Build & Test       | CLAUDE.md             | 3 command groups
 
 Create the file `.claude/rules/${CORE_FILE}` with this structure:
 
-NOTE: The generated file must use real HTML comment markers. The pattern is:
-`<-- BEGIN SIMBA:{section_name} -->` ... content ... `<-- END SIMBA:{section_name} -->`
-(with `!` after the opening `<` — standard HTML comments).
+NOTE: The generated file must use real HTML comment markers. The pattern is
+`<!-- BEGIN SIMBA:name -->` content `<!-- END SIMBA:name -->` (standard HTML comments).
 
 Example structure (using `{BEGIN}` and `{END}` as placeholders for the real markers):
 
