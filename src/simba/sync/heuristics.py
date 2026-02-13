@@ -173,6 +173,32 @@ def _extract_preference(content: str, context: str, memory_id: str) -> list[Trip
     return triples
 
 
+def _extract_tool_rule(
+    content: str, context: str, memory_id: str
+) -> list[Triple]:
+    proof = f"memory:{memory_id}"
+    triples: list[Triple] = []
+    # TOOL_RULE context is JSON with tool, pattern, error_source, correction
+    import json as _json
+
+    try:
+        ctx = _json.loads(context)
+    except (ValueError, TypeError):
+        ctx = {}
+
+    tool = ctx.get("tool", "")
+    pattern = ctx.get("pattern", "")
+    error_source = ctx.get("error_source", "")
+    correction = ctx.get("correction", "")
+
+    subj = f"{tool} {pattern}".strip()[:80]
+    if error_source:
+        triples.append((subj, "fails_for", error_source[:80], proof))
+    if correction:
+        triples.append((subj, "has_fix", correction[:80], proof))
+    return triples
+
+
 _EXTRACTORS: dict[str, object] = {
     "WORKING_SOLUTION": _extract_working_solution,
     "GOTCHA": _extract_gotcha,
@@ -180,6 +206,7 @@ _EXTRACTORS: dict[str, object] = {
     "DECISION": _extract_decision,
     "FAILURE": _extract_failure,
     "PREFERENCE": _extract_preference,
+    "TOOL_RULE": _extract_tool_rule,
 }
 
 

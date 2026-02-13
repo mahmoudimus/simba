@@ -20,6 +20,7 @@ Usage:
     simba orchestration <cmd> Agent orchestration server (MCP)
     simba config <cmd>     Unified configuration (get/set/list/show)
     simba markers <cmd>    Discover, audit, and update SIMBA markers
+    simba rule <cmd>       Manage tool rules (auto-learned + manual)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -1198,6 +1199,13 @@ def _cmd_markers(args: list[str]) -> int:
     return simba.markers_cli.main(args)
 
 
+def _cmd_rule(args: list[str]) -> int:
+    """Manage tool rules (auto-learned + manual)."""
+    import simba.rules_cli
+
+    return simba.rules_cli.main(args)
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -1239,6 +1247,8 @@ def main() -> None:
         sys.exit(_cmd_config(rest))
     elif cmd == "markers":
         sys.exit(_cmd_markers(rest))
+    elif cmd == "rule":
+        sys.exit(_cmd_rule(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:
