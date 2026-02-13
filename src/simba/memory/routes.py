@@ -60,6 +60,7 @@ VALID_TYPES = [
     "FAILURE",
     "PREFERENCE",
     "SYSTEM",
+    "TOOL_RULE",
 ]
 
 

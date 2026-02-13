@@ -26,3 +26,9 @@ class HooksConfig:
     thinking_chars: int = 1500
     dedup_ttl: int = 60
     context_low_bytes: int = 4_000_000
+
+    # Tool rules (auto-learning from failures)
+    rule_check_enabled: bool = True
+    rule_min_similarity: float = 0.6
+    rule_max_per_session: int = 10
+    auto_learn_from_failures: bool = True

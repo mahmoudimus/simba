@@ -1,9 +1,12 @@
-"""PreToolUse hook — thinking-based memory recall with dedup.
+"""PreToolUse hook — tool-rule checking, thinking-based memory recall, truth DB.
 
-Reads stdin JSON with tool_name and transcript_path, extracts the last
-thinking block, queries memory daemon, deduplicates via hash cache.
-Also monitors transcript size to warn when context is approaching the
-auto-compact threshold.
+Reads stdin JSON with tool_name, tool_input, and transcript_path.
+
+Pipeline (in order):
+1. Context-low warning (transcript size check, once per session)
+2. Tool-rule check (query TOOL_RULE memories matching current tool call)
+3. Truth DB check (query proven facts for Bash commands)
+4. Memory recall (extract thinking block, query general memories)
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import time
 
 import simba.config
 import simba.hooks._memory_client
+import simba.hooks._truth_client
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
@@ -140,9 +144,64 @@ def _check_context_low(transcript_path: pathlib.Path) -> str | None:
     )
 
 
+def _check_tool_rules(
+    tool_name: str, tool_input: dict, cwd_str: str | None
+) -> str | None:
+    """Query TOOL_RULE memories matching this tool call."""
+    cfg = _hooks_cfg()
+    if not cfg.rule_check_enabled:
+        return None
+
+    # Build a query from the tool input
+    if tool_name == "Bash":
+        query = tool_input.get("command", "")[:200]
+    elif tool_name in ("Read", "Write", "Edit"):
+        query = tool_input.get("file_path", "")
+    else:
+        return None
+
+    if not query:
+        return None
+
+    memories = simba.hooks._memory_client.recall_memories(
+        query,
+        project_path=cwd_str,
+        min_similarity=cfg.rule_min_similarity,
+        max_results=2,
+        filters={"types": ["TOOL_RULE"]},
+    )
+    if not memories:
+        return None
+
+    lines = ["<tool-rule-warning>"]
+    for m in memories:
+        ctx_str = m.get("context", "{}")
+        with contextlib.suppress(json.JSONDecodeError):
+            ctx = json.loads(ctx_str)
+            correction = ctx.get("correction", "")
+            lines.append(f"  WARNING: {m.get('content', '')}")
+            if correction:
+                lines.append(f"  INSTEAD: {correction}")
+    lines.append("</tool-rule-warning>")
+    return "\n".join(lines) if len(lines) > 2 else None
+
+
+def _check_truth_constraints(
+    tool_name: str, tool_input: dict
+) -> str | None:
+    """Check truth DB for facts relevant to this tool call."""
+    if tool_name != "Bash":
+        return None
+    command = tool_input.get("command", "")
+    if not command:
+        return None
+    return simba.hooks._truth_client.query_truth_db(command) or None
+
+
 def main(hook_input: dict) -> str:
     """Run the PreToolUse hook pipeline. Returns JSON output string."""
     tool_name = hook_input.get("tool_name", "")
+    tool_input = hook_input.get("tool_input", {})
     transcript_path_str = hook_input.get("transcript_path", "")
     cwd_str = hook_input.get("cwd")
 
@@ -153,6 +212,16 @@ def main(hook_input: dict) -> str:
         warning = _check_context_low(pathlib.Path(transcript_path_str))
         if warning:
             parts.append(warning)
+
+    # --- Tool-rule check (fires before thinking recall) ---
+    if tool_input:
+        rule_warning = _check_tool_rules(tool_name, tool_input, cwd_str)
+        if rule_warning:
+            parts.append(rule_warning)
+
+        truth_warning = _check_truth_constraints(tool_name, tool_input)
+        if truth_warning:
+            parts.append(truth_warning)
 
     # --- Memory recall (only for specific tools with thinking) ---
     if tool_name in _ENABLED_TOOLS and transcript_path_str:

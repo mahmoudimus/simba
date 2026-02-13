@@ -34,6 +34,7 @@ def recall_memories(
     *,
     min_similarity: float | None = None,
     max_results: int | None = None,
+    filters: dict | None = None,
 ) -> list[dict]:
     """Query the memory daemon for relevant memories."""
     cfg = _get_cfg()
@@ -50,6 +51,8 @@ def recall_memories(
     }
     if project_path:
         payload["projectPath"] = project_path
+    if filters:
+        payload["filters"] = filters
 
     try:
         resp = httpx.post(url, json=payload, timeout=cfg.default_timeout)
@@ -58,6 +61,39 @@ def recall_memories(
     except (httpx.HTTPError, ValueError):
         pass
     return []
+
+
+def store_memory(
+    *,
+    memory_type: str,
+    content: str,
+    context: str = "",
+    tags: list[str] | None = None,
+    confidence: float = 0.90,
+    project_path: str | None = None,
+) -> dict:
+    """Store a memory in the daemon. Returns response dict or empty on error."""
+    cfg = _get_cfg()
+    url = f"{daemon_url()}/store"
+    payload: dict = {
+        "type": memory_type,
+        "content": content,
+    }
+    if context:
+        payload["context"] = context
+    if tags:
+        payload["tags"] = tags
+    if project_path:
+        payload["projectPath"] = project_path
+    payload["confidence"] = confidence
+
+    try:
+        resp = httpx.post(url, json=payload, timeout=cfg.default_timeout)
+        if resp.status_code == 200:
+            return resp.json()
+    except (httpx.HTTPError, ValueError):
+        pass
+    return {}
 
 
 def format_memories(memories: list[dict], source: str) -> str:
