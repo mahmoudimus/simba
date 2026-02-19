@@ -32,3 +32,8 @@ class HooksConfig:
     rule_min_similarity: float = 0.6
     rule_max_per_session: int = 10
     auto_learn_from_failures: bool = True
+
+    # memories-learn skill dispatch mode
+    # False (default): dispatch synchronously, Claude waits for extraction to complete
+    # True: dispatch in background, Claude continues immediately
+    learn_async: bool = False
