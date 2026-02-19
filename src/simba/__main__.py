@@ -13,6 +13,8 @@ Usage:
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
     simba server [opts]    Start the memory daemon
+    simba memory store     Store a memory (--type, --content, --context, --confidence)
+    simba memory recall    Recall memories for a query text
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
@@ -342,9 +344,17 @@ def _cmd_install(args: list[str]) -> int:
     else:
         skills_dir = pathlib.Path.cwd() / ".claude" / "skills"
 
+    _SIMBA_PERMISSION = "Bash(simba:*)"
+
     if remove:
         if "hooks" in settings:
             del settings["hooks"]
+        perms = settings.get("permissions", {})
+        allow = perms.get("allow", [])
+        if _SIMBA_PERMISSION in allow:
+            allow.remove(_SIMBA_PERMISSION)
+            perms["allow"] = allow
+            settings["permissions"] = perms
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         print("Simba hooks removed from", settings_path)
         removed = _remove_skills(skills_dir)
@@ -353,10 +363,15 @@ def _cmd_install(args: list[str]) -> int:
         return 0
 
     settings["hooks"] = _build_hooks_config()
+    perms = settings.setdefault("permissions", {})
+    allow = perms.setdefault("allow", [])
+    if _SIMBA_PERMISSION not in allow:
+        allow.append(_SIMBA_PERMISSION)
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     scope = "global" if is_global else "project"
     print(f"Simba hooks registered ({scope}) in {settings_path}")
     print(f"  {len(_HOOK_EVENTS)} hooks: {', '.join(_HOOK_EVENTS)}")
+    print(f"  permission granted: {_SIMBA_PERMISSION}")
 
     skill_count = _install_skills(skills_dir)
     if skill_count:
@@ -508,11 +523,9 @@ def _cmd_codex_extract(args: list[str]) -> int:
             "Store each learning to semantic memory using:"
         )
         print(
-            "curl -X POST http://localhost:8741/store "
-            '-H "Content-Type: application/json" '
-            f"-d '{{\"type\":\"<TYPE>\",\"content\":\"<LEARNING>\","
-            f"\"context\":\"<CONTEXT>\",\"confidence\":<SCORE>,"
-            f"\"sessionSource\":\"{session_id}\",\"projectPath\":\"{project_path}\"}}'"
+            'simba memory store --type <TYPE> --content "<LEARNING>" '
+            '--context "<CONTEXT>" --confidence <SCORE> '
+            f'--session-source "{session_id}" --project-path "{project_path}"'
         )
         print(
             "Types: WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, PREFERENCE."
@@ -659,6 +672,166 @@ def _cmd_hook(args: list[str]) -> int:
         pass
 
     print(module.main(hook_data))
+    return 0
+
+
+_MEMORY_USAGE = """\
+Usage: simba memory <subcommand> [options]
+
+Subcommands:
+    store    Store a learning in semantic memory
+    recall   Recall memories for a query
+
+store options:
+    --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
+                           DECISION, FAILURE, PREFERENCE
+    --content TEXT         Learning text (max 200 chars)
+    --context TEXT         Additional context / details
+    --confidence FLOAT     Confidence score 0.0-1.0 (default: 0.85)
+    --session-source ID    Session ID this came from
+    --project-path PATH    Project path for scoping (default: cwd)
+
+recall options:
+    --limit N              Max results to return (default: 5)
+    --project-path PATH    Project path for scoping (default: cwd)
+"""
+
+_VALID_MEMORY_TYPES = {
+    "WORKING_SOLUTION",
+    "GOTCHA",
+    "PATTERN",
+    "DECISION",
+    "FAILURE",
+    "PREFERENCE",
+}
+
+
+def _cmd_memory(args: list[str]) -> int:
+    """Store or recall memories via the daemon."""
+    if not args:
+        print(_MEMORY_USAGE)
+        return 1
+
+    subcmd = args[0]
+    rest = args[1:]
+
+    if subcmd == "store":
+        return _memory_store(rest)
+    elif subcmd == "recall":
+        return _memory_recall(rest)
+    else:
+        print(f"Unknown memory subcommand: {subcmd}")
+        print(_MEMORY_USAGE)
+        return 1
+
+
+def _memory_store(args: list[str]) -> int:
+    """Store a single memory in the daemon."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    mtype = _parse_opt_value(args, "--type")
+    content = _parse_opt_value(args, "--content")
+    context = _parse_opt_value(args, "--context") or ""
+    confidence_raw = _parse_opt_value(args, "--confidence")
+    session_source = _parse_opt_value(args, "--session-source") or ""
+    project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+
+    if not mtype:
+        print("Error: --type is required", file=sys.stderr)
+        print(f"Valid types: {', '.join(sorted(_VALID_MEMORY_TYPES))}", file=sys.stderr)
+        return 1
+    if mtype not in _VALID_MEMORY_TYPES:
+        print(f"Error: unknown type '{mtype}'", file=sys.stderr)
+        print(f"Valid types: {', '.join(sorted(_VALID_MEMORY_TYPES))}", file=sys.stderr)
+        return 1
+    if not content:
+        print("Error: --content is required", file=sys.stderr)
+        return 1
+    if len(content) > 200:
+        print(f"Error: --content exceeds 200 chars ({len(content)})", file=sys.stderr)
+        return 1
+
+    try:
+        confidence = float(confidence_raw) if confidence_raw else 0.85
+    except ValueError:
+        print(f"Error: --confidence must be a float, got '{confidence_raw}'", file=sys.stderr)
+        return 1
+
+    payload: dict = {
+        "type": mtype,
+        "content": content,
+        "context": context,
+        "confidence": confidence,
+        "projectPath": project_path,
+    }
+    if session_source:
+        payload["sessionSource"] = session_source
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(f"{url}/store", json=payload, timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    status = body.get("status", "unknown")
+    if status == "stored":
+        print(f"stored: {body.get('id', '?')}")
+    elif status == "duplicate":
+        print(f"duplicate: existing={body.get('existing_id', '?')} similarity={body.get('similarity', 0):.2f}")
+    else:
+        print(f"status: {status}")
+    return 0
+
+
+def _memory_recall(args: list[str]) -> int:
+    """Recall memories for a query."""
+    limit_raw = _parse_opt_value(args, "--limit")
+    project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+
+    # Query is everything that isn't a --flag or its value
+    skip_next = False
+    query_parts: list[str] = []
+    for i, tok in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if tok.startswith("--"):
+            skip_next = True
+            continue
+        query_parts.append(tok)
+    query = " ".join(query_parts).strip()
+
+    if not query:
+        print("Usage: simba memory recall [--limit N] [--project-path P] <query text>", file=sys.stderr)
+        return 1
+
+    try:
+        limit = int(limit_raw) if limit_raw else 5
+    except ValueError:
+        print(f"Error: --limit must be an integer, got '{limit_raw}'", file=sys.stderr)
+        return 1
+
+    import simba.hooks._memory_client
+
+    memories = simba.hooks._memory_client.recall_memories(query, project_path=project_path, max_results=limit)
+    if not memories:
+        print("no memories found")
+        return 0
+
+    print(f"{len(memories)} memories:")
+    for m in memories:
+        mtype = m.get("type", "UNKNOWN")
+        sim = m.get("similarity", 0.0)
+        content = str(m.get("content", "")).strip()
+        print(f"  [{mtype}] ({sim:.2f}) {content}")
     return 0
 
 
@@ -1231,6 +1404,8 @@ def main() -> None:
         sys.exit(_cmd_codex_automation(rest))
     elif cmd == "hook":
         sys.exit(_cmd_hook(rest))
+    elif cmd == "memory":
+        sys.exit(_cmd_memory(rest))
     elif cmd == "server":
         sys.exit(_cmd_server(rest))
     elif cmd == "search":

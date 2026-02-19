@@ -91,12 +91,10 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
         f"Read the transcript at {transcript_path} and extract learnings "
         "to store in the semantic memory database.\n\n"
         "For each learning found, store it by running:\n"
-        f"curl -X POST {url}/store "
-        '-H "Content-Type: application/json" '
-        '-d \'{"type": "<TYPE>", "content": "<LEARNING>", '
-        '"context": "<CONTEXT>", "confidence": <SCORE>, '
-        f'"sessionSource": "{export_session}", '
-        f'"projectPath": "{cwd}"}}\'\n\n'
+        'simba memory store --type "<TYPE>" --content "<LEARNING>" '
+        '--context "<CONTEXT>" --confidence <SCORE> '
+        f'--session-source "{export_session}" '
+        f'--project-path "{cwd}"\n\n'
         "LEARNING TYPES:\n"
         "- WORKING_SOLUTION: Commands, code, or approaches that worked\n"
         '- GOTCHA: Traps, counterintuitive behaviors, "watch out for this"\n'
