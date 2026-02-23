@@ -15,6 +15,9 @@ Usage:
     simba server [opts]    Start the memory daemon
     simba memory store     Store a memory (--type, --content, --context, --confidence)
     simba memory recall    Recall memories for a query text
+    simba memory list      List all memories (optional --type filter)
+    simba memory delete    Delete a memory by ID
+    simba memory update    Update memory metadata (--project-path, --session-source)
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
@@ -85,15 +88,105 @@ def _build_hooks_config() -> dict:
     return hooks
 
 
-def _latest_transcript_metadata() -> dict[str, Any] | None:
+def _latest_codex_transcript_metadata() -> dict[str, Any] | None:
+    """Build transcript metadata from the newest Codex session JSONL."""
+    sessions_dir = _codex_home() / "sessions"
+    if not sessions_dir.exists():
+        return None
+
+    candidates: list[pathlib.Path] = []
+    try:
+        for path in sessions_dir.rglob("*.jsonl"):
+            if path.is_file():
+                candidates.append(path)
+    except OSError:
+        return None
+
+    if not candidates:
+        return None
+
+    def _session_sort_key(path: pathlib.Path) -> tuple[int, str, float]:
+        # Prefer Codex rollout timestamp from filename when available.
+        # Example: rollout-2026-02-20T08-33-13-<id>.jsonl
+        m = re.search(
+            r"rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-",
+            path.name,
+        )
+        ts_key = ""
+        has_ts = 0
+        if m:
+            has_ts = 1
+            ts_key = "".join(m.groups())  # yyyymmddHHMMSS
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (has_ts, ts_key, mtime)
+
+    try:
+        latest = max(candidates, key=_session_sort_key)
+    except ValueError:
+        return None
+
+    session_id = latest.stem
+    project_path = str(pathlib.Path.cwd())
+    try:
+        with latest.open() as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("type") != "session_meta":
+                    continue
+                payload = entry.get("payload", {})
+                if isinstance(payload, dict):
+                    sid = payload.get("id")
+                    cwd = payload.get("cwd")
+                    if isinstance(sid, str) and sid:
+                        session_id = sid
+                    if isinstance(cwd, str) and cwd:
+                        project_path = cwd
+                break
+    except OSError:
+        return None
+
+    return {
+        "session_id": session_id,
+        "project_path": project_path,
+        "transcript_path": str(latest),
+        "status": "pending_extraction",
+        "source": "codex",
+    }
+
+
+def _latest_claude_transcript_metadata() -> dict[str, Any] | None:
     """Load latest transcript metadata from ~/.claude/transcripts/latest.json."""
     latest = pathlib.Path.home() / ".claude" / "transcripts" / "latest.json"
     if not latest.exists():
         return None
     try:
-        return json.loads(latest.read_text())
+        data = json.loads(latest.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+    if not isinstance(data, dict):
+        return None
+    target = latest.resolve() if latest.is_symlink() else latest
+    data["_metadata_path"] = str(target)
+    data.setdefault("source", "claude")
+    return data
+
+
+def _latest_transcript_metadata() -> dict[str, Any] | None:
+    """Load latest transcript metadata, preferring Codex sessions."""
+    codex_meta = _latest_codex_transcript_metadata()
+    if codex_meta is not None:
+        return codex_meta
+    return _latest_claude_transcript_metadata()
 
 
 def _extract_transcript_text(path: pathlib.Path) -> str:
@@ -162,8 +255,11 @@ def _extract_learnings(
     transcript_text: str,
     *,
     max_items: int = 15,
+    max_content_length: int | None = None,
 ) -> list[dict[str, Any]]:
     """Extract candidate learnings from transcript text heuristically."""
+    if max_content_length is None:
+        max_content_length = _memory_max_content_length()
     # Split into sentence-like units and normalize whitespace.
     chunks = re.split(r"[.\n]+", transcript_text)
     seen: set[str] = set()
@@ -171,7 +267,7 @@ def _extract_learnings(
 
     for raw in chunks:
         sentence = " ".join(raw.strip().split())
-        if len(sentence) < 24 or len(sentence) > 220:
+        if len(sentence) < 24:
             continue
         key = sentence.lower()
         if key in seen:
@@ -186,7 +282,7 @@ def _extract_learnings(
         out.append(
             {
                 "type": mtype,
-                "content": sentence[:200],
+                "content": sentence[:max_content_length],
                 "context": "extracted from transcript",
                 "confidence": conf,
             }
@@ -431,14 +527,16 @@ def _cmd_codex_status(args: list[str]) -> int:
     if not health_ok:
         print("[codex] memory: down (start with `simba server`)")
 
-    meta = _latest_transcript_metadata()
+    meta = _latest_codex_transcript_metadata()
     if not meta:
-        print("[codex] extraction: no latest transcript metadata found")
+        print("[codex] extraction: no latest Codex transcript metadata found")
         return 0
 
     status = meta.get("status", "unknown")
     transcript = meta.get("transcript_path", "")
     session_id = meta.get("session_id", "")
+    source = meta.get("source", "unknown")
+    print(f"[codex] transcript source: {source}")
     print(f"[codex] latest transcript: {transcript or 'unknown'}")
     print(f"[codex] latest session: {session_id or 'unknown'}")
     print(f"[codex] extraction status: {status}")
@@ -454,9 +552,12 @@ def _cmd_codex_extract(args: list[str]) -> int:
     mark_done = "--mark-done" in args
     run_mode = "--run" in args
 
-    meta = _latest_transcript_metadata()
+    meta = _latest_codex_transcript_metadata()
     if not meta:
-        print("No latest transcript metadata found at ~/.claude/transcripts/latest.json")
+        print(
+            "No transcript metadata found in Codex sessions "
+            "(~/.codex/sessions)."
+        )
         return 1
 
     transcript = meta.get("transcript_path", "")
@@ -465,7 +566,7 @@ def _cmd_codex_extract(args: list[str]) -> int:
     status = meta.get("status", "")
 
     if not transcript:
-        print("latest.json is missing transcript_path")
+        print("Latest transcript metadata is missing transcript_path")
         return 1
 
     if status and status != "pending_extraction":
@@ -533,11 +634,18 @@ def _cmd_codex_extract(args: list[str]) -> int:
         print("---")
 
     if mark_done:
-        meta["status"] = "extracted"
-        latest = pathlib.Path.home() / ".claude" / "transcripts" / "latest.json"
-        target = latest.resolve() if latest.is_symlink() else latest
-        target.write_text(json.dumps(meta, indent=2))
-        print(f"Updated extraction status to 'extracted' in {target}")
+        meta_path = meta.get("_metadata_path")
+        if isinstance(meta_path, str) and meta_path:
+            meta["status"] = "extracted"
+            to_write = {k: v for k, v in meta.items() if not k.startswith("_")}
+            target = pathlib.Path(meta_path)
+            target.write_text(json.dumps(to_write, indent=2))
+            print(f"Updated extraction status to 'extracted' in {target}")
+        else:
+            print(
+                "Mark-done not persisted for Codex session JSONL metadata "
+                "(no writable latest.json)."
+            )
 
     return 0
 
@@ -596,7 +704,7 @@ def _cmd_codex_finalize(args: list[str]) -> int:
             return 1
 
     if not transcript:
-        meta = _latest_transcript_metadata()
+        meta = _latest_codex_transcript_metadata()
         if meta:
             transcript = meta.get("transcript_path", "")
 
@@ -681,11 +789,15 @@ Usage: simba memory <subcommand> [options]
 Subcommands:
     store    Store a learning in semantic memory
     recall   Recall memories for a query
+    list     List all memories
+    delete   Delete a memory by ID
+    update   Update memory metadata
 
 store options:
     --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
                            DECISION, FAILURE, PREFERENCE
-    --content TEXT         Learning text (max 200 chars)
+    --content TEXT         Learning text (max memory.max_content_length;
+                           default 1000 chars)
     --context TEXT         Additional context / details
     --confidence FLOAT     Confidence score 0.0-1.0 (default: 0.85)
     --session-source ID    Session ID this came from
@@ -694,6 +806,16 @@ store options:
 recall options:
     --limit N              Max results to return (default: 5)
     --project-path PATH    Project path for scoping (default: cwd)
+
+list options:
+    --type TYPE            Filter by memory type
+    --limit N              Max results (default: all)
+
+delete:
+    simba memory delete <memory_id>
+
+update:
+    simba memory update <memory_id> [--project-path PATH] [--session-source ID]
 """
 
 _VALID_MEMORY_TYPES = {
@@ -704,6 +826,22 @@ _VALID_MEMORY_TYPES = {
     "FAILURE",
     "PREFERENCE",
 }
+
+
+def _memory_max_content_length() -> int:
+    """Return configured memory content length cap (default 1000)."""
+    try:
+        import simba.config
+        import simba.memory.config
+
+        _ = simba.memory.config  # ensure section registration
+        cfg = simba.config.load("memory")
+        max_len = int(getattr(cfg, "max_content_length", 1000))
+        if max_len <= 0:
+            return 1000
+        return max_len
+    except Exception:
+        return 1000
 
 
 def _cmd_memory(args: list[str]) -> int:
@@ -719,6 +857,12 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_store(rest)
     elif subcmd == "recall":
         return _memory_recall(rest)
+    elif subcmd == "list":
+        return _memory_list(rest)
+    elif subcmd == "delete":
+        return _memory_delete(rest)
+    elif subcmd == "update":
+        return _memory_update(rest)
     else:
         print(f"Unknown memory subcommand: {subcmd}")
         print(_MEMORY_USAGE)
@@ -749,8 +893,12 @@ def _memory_store(args: list[str]) -> int:
     if not content:
         print("Error: --content is required", file=sys.stderr)
         return 1
-    if len(content) > 200:
-        print(f"Error: --content exceeds 200 chars ({len(content)})", file=sys.stderr)
+    max_len = _memory_max_content_length()
+    if len(content) > max_len:
+        print(
+            f"Error: --content exceeds {max_len} chars ({len(content)})",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -832,6 +980,122 @@ def _memory_recall(args: list[str]) -> int:
         sim = m.get("similarity", 0.0)
         content = str(m.get("content", "")).strip()
         print(f"  [{mtype}] ({sim:.2f}) {content}")
+    return 0
+
+
+def _memory_list(args: list[str]) -> int:
+    """List all memories from the daemon."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    mtype = _parse_opt_value(args, "--type")
+    limit_raw = _parse_opt_value(args, "--limit")
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.get(f"{url}/list", timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    memories = body.get("memories", [])
+
+    if mtype:
+        memories = [m for m in memories if m.get("type") == mtype]
+
+    if limit_raw:
+        try:
+            memories = memories[: int(limit_raw)]
+        except ValueError:
+            print(f"Error: --limit must be an integer, got '{limit_raw}'", file=sys.stderr)
+            return 1
+
+    if not memories:
+        print("no memories found")
+        return 0
+
+    print(f"{len(memories)} memories:")
+    for m in memories:
+        mid = m.get("id", "?")
+        mt = m.get("type", "UNKNOWN")
+        content = str(m.get("content", "")).strip()
+        confidence = m.get("confidence", 0)
+        print(f"  {mid} [{mt}] (conf={confidence}) {content}")
+    return 0
+
+
+def _memory_delete(args: list[str]) -> int:
+    """Delete a memory by ID."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    if not args or args[0].startswith("--"):
+        print("Usage: simba memory delete <memory_id>", file=sys.stderr)
+        return 1
+
+    memory_id = args[0]
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.delete(f"{url}/memory/{memory_id}", timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"deleted: {body.get('id', memory_id)}")
+    return 0
+
+
+def _memory_update(args: list[str]) -> int:
+    """Update memory metadata by ID."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    if not args or args[0].startswith("--"):
+        print("Usage: simba memory update <memory_id> [--project-path PATH] [--session-source ID]", file=sys.stderr)
+        return 1
+
+    memory_id = args[0]
+    rest = args[1:]
+    project_path = _parse_opt_value(rest, "--project-path")
+    session_source = _parse_opt_value(rest, "--session-source")
+
+    if project_path is None and session_source is None:
+        print("Error: at least one of --project-path or --session-source is required", file=sys.stderr)
+        return 1
+
+    payload: dict = {}
+    if project_path is not None:
+        payload["projectPath"] = project_path
+    if session_source is not None:
+        payload["sessionSource"] = session_source
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.patch(f"{url}/memory/{memory_id}", json=payload, timeout=10.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    fields = body.get("fields", [])
+    print(f"updated: {body.get('id', memory_id)} fields={','.join(fields)}")
     return 0
 
 

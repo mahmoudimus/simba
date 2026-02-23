@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 
 import simba.__main__ as cli
@@ -75,28 +76,27 @@ def test_cmd_codex_extract_mark_done_updates_latest_target(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    meta_dir = tmp_path / ".claude" / "transcripts" / "s1"
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    metadata = meta_dir / "metadata.json"
-    metadata.write_text(
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    codex_jsonl = session_dir / "rollout-2026-02-20T08-33-13-s1.jsonl"
+    codex_jsonl.write_text(
         json.dumps(
             {
-                "session_id": "s1",
-                "project_path": "/tmp/project",
-                "transcript_path": "/tmp/transcript.md",
-                "status": "pending_extraction",
+                "type": "session_meta",
+                "payload": {"id": "s1", "cwd": "/tmp/project"},
             }
         )
+        + "\n"
     )
-    latest = tmp_path / ".claude" / "transcripts" / "latest.json"
-    latest.parent.mkdir(parents=True, exist_ok=True)
-    latest.symlink_to(metadata)
 
     rc = cli._cmd_codex_extract(["--mark-done"])
     assert rc == 0
 
-    data = json.loads(metadata.read_text())
-    assert data["status"] == "extracted"
+    # Codex session JSONL has no latest.json metadata file to persist mark-done.
+    out = codex_jsonl.read_text()
+    assert '"id": "s1"' in out
 
 
 def test_cmd_codex_status_shows_pending_extraction(
@@ -105,16 +105,19 @@ def test_cmd_codex_status_shows_pending_extraction(
     capsys,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    latest = tmp_path / ".claude" / "transcripts" / "latest.json"
-    latest.parent.mkdir(parents=True, exist_ok=True)
-    latest.write_text(
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    codex_jsonl = session_dir / "rollout-2026-02-20T08-33-13-s1.jsonl"
+    codex_jsonl.write_text(
         json.dumps(
             {
-                "session_id": "s1",
-                "transcript_path": "/tmp/transcript.md",
-                "status": "pending_extraction",
+                "type": "session_meta",
+                "payload": {"id": "s1", "cwd": "/tmp/project"},
             }
         )
+        + "\n"
     )
 
     class _Resp:
@@ -132,6 +135,7 @@ def test_cmd_codex_status_shows_pending_extraction(
     out = capsys.readouterr().out
     assert "pending_extraction" in out
     assert "simba codex-extract" in out
+    assert "transcript source: codex" in out
 
 
 def test_cmd_codex_finalize_runs_signal_and_reflection(
@@ -184,3 +188,202 @@ def test_cmd_codex_recall_prints_memories(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "recall: 1 memories" in out
     assert "Use uv run for CLI" in out
+
+
+def test_memory_store_allows_content_above_200_when_under_config_limit(
+    monkeypatch,
+    capsys,
+) -> None:
+    import httpx
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(cli, "_memory_max_content_length", lambda: 1000)
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "stored", "id": "mem_abc"}
+
+    captured: dict[str, object] = {}
+
+    def _fake_post(url: str, json=None, timeout: float = 0.0):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    long_content = "x" * 300
+    rc = cli._memory_store(
+        [
+            "--type",
+            "GOTCHA",
+            "--content",
+            long_content,
+            "--context",
+            "ctx",
+            "--confidence",
+            "0.9",
+        ]
+    )
+    assert rc == 0
+    assert captured["json"]["content"] == long_content
+    out = capsys.readouterr().out
+    assert "stored:" in out
+
+
+def test_memory_store_rejects_content_above_config_limit(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(cli, "_memory_max_content_length", lambda: 250)
+    long_content = "x" * 251
+    rc = cli._memory_store(
+        [
+            "--type",
+            "GOTCHA",
+            "--content",
+            long_content,
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "exceeds 250 chars" in err
+
+
+def test_latest_transcript_metadata_prefers_codex_sessions(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    codex_jsonl = session_dir / "rollout-2026-02-20T08-33-13-abc123.jsonl"
+    codex_jsonl.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "abc123", "cwd": "/tmp/codex-project"},
+            }
+        )
+        + "\n"
+    )
+
+    claude_latest = tmp_path / ".claude" / "transcripts" / "latest.json"
+    claude_latest.parent.mkdir(parents=True, exist_ok=True)
+    claude_latest.write_text(
+        json.dumps(
+            {
+                "session_id": "claude-session",
+                "project_path": "/tmp/claude-project",
+                "transcript_path": "/tmp/claude.md",
+                "status": "pending_extraction",
+            }
+        )
+    )
+
+    meta = cli._latest_transcript_metadata()
+    assert meta is not None
+    assert meta["source"] == "codex"
+    assert meta["session_id"] == "abc123"
+    assert meta["project_path"] == "/tmp/codex-project"
+    assert meta["transcript_path"] == str(codex_jsonl)
+
+
+def test_codex_extract_does_not_fallback_to_claude_metadata(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    codex_home.mkdir(parents=True, exist_ok=True)
+
+    claude_latest = tmp_path / ".claude" / "transcripts" / "latest.json"
+    claude_latest.parent.mkdir(parents=True, exist_ok=True)
+    claude_latest.write_text(
+        json.dumps(
+            {
+                "session_id": "claude-session",
+                "project_path": "/tmp/claude-project",
+                "transcript_path": "/tmp/claude.md",
+                "status": "pending_extraction",
+            }
+        )
+    )
+
+    rc = cli._cmd_codex_extract([])
+    assert rc == 1
+
+
+def test_cmd_codex_extract_uses_codex_session_path(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    codex_jsonl = session_dir / "rollout-2026-02-20T08-33-13-abc123.jsonl"
+    codex_jsonl.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "abc123", "cwd": "/tmp/codex-project"},
+            }
+        )
+        + "\n"
+    )
+
+    rc = cli._cmd_codex_extract([])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert str(codex_jsonl) in out
+    assert 'session-source "abc123"' in out
+
+
+def test_latest_codex_transcript_uses_rollout_filename_timestamp(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    older = session_dir / "rollout-2026-02-20T08-33-13-old111.jsonl"
+    newer = session_dir / "rollout-2026-02-20T19-40-53-new222.jsonl"
+    older.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "old111", "cwd": "/tmp/codex-project"},
+            }
+        )
+        + "\n"
+    )
+    newer.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "new222", "cwd": "/tmp/codex-project"},
+            }
+        )
+        + "\n"
+    )
+    # Invert mtimes to ensure filename timestamp, not mtime, drives selection.
+    os.utime(older, (2_000_000_000, 2_000_000_000))  # newer mtime
+    os.utime(newer, (1_000_000_000, 1_000_000_000))  # older mtime
+
+    meta = cli._latest_codex_transcript_metadata()
+    assert meta is not None
+    assert meta["session_id"] == "new222"
+    assert meta["transcript_path"] == str(newer)
