@@ -1,9 +1,7 @@
 ---
 name: memories-sanitize
 description: Review recent memories and remove invalid or misleading ones from the semantic memory database
-disable-model-invocation: true
-context: fork
-allowed-tools: Read, Bash(curl *)
+allowed-tools: Bash(simba *)
 ---
 
 # Memory Sanitization Procedure
@@ -12,19 +10,19 @@ Review memories and identify those that are **invalid**, **misleading**, or **ou
 
 ## Step 1: List Memories
 
-Query the daemon to get all memories:
+List all memories:
 
 ```bash
-curl -s http://localhost:8741/list
+simba memory list
 ```
 
-This returns JSON with all memories including:
-- `id` - Memory ID (e.g., `mem_abc123`)
-- `type` - GOTCHA, WORKING_SOLUTION, PATTERN, DECISION, FAILURE, PREFERENCE
-- `content` - The learning content
-- `context` - Additional context
-- `confidence` - Confidence score (0-1)
-- `createdAt` - ISO timestamp
+Or filter by type:
+
+```bash
+simba memory list --type GOTCHA
+```
+
+Each memory shows: id, type, confidence, and content.
 
 ## Step 2: Identify Invalid Memories
 
@@ -51,7 +49,7 @@ Review each memory and mark as INVALID if it:
 For each invalid memory, delete it:
 
 ```bash
-curl -s -X DELETE http://localhost:8741/memory/<MEMORY_ID>
+simba memory delete <MEMORY_ID>
 ```
 
 ## Step 4: Add Corrected Memories (Optional)
@@ -59,14 +57,7 @@ curl -s -X DELETE http://localhost:8741/memory/<MEMORY_ID>
 If an invalid memory should be replaced with a correct version:
 
 ```bash
-curl -s -X POST http://localhost:8741/store \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "WORKING_SOLUTION",
-    "content": "<CORRECT_LEARNING>",
-    "context": "<CONTEXT>",
-    "confidence": 0.95
-  }'
+simba memory store --type WORKING_SOLUTION --content "<CORRECT_LEARNING>" --context "<CONTEXT>" --confidence 0.95
 ```
 
 ## Memory Types Reference
