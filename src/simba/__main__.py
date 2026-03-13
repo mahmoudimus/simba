@@ -976,10 +976,11 @@ def _memory_recall(args: list[str]) -> int:
 
     print(f"{len(memories)} memories:")
     for m in memories:
+        mid = m.get("id", "?")
         mtype = m.get("type", "UNKNOWN")
         sim = m.get("similarity", 0.0)
         content = str(m.get("content", "")).strip()
-        print(f"  [{mtype}] ({sim:.2f}) {content}")
+        print(f"  {mid} [{mtype}] ({sim:.2f}) {content}")
     return 0
 
 
