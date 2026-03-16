@@ -25,7 +25,7 @@ class HooksConfig:
     min_similarity: float = 0.35
     thinking_chars: int = 1500
     dedup_ttl: int = 60
-    context_low_bytes: int = 4_000_000
+    context_low_bytes: int = 20_000_000
 
     # Tool rules (auto-learning from failures)
     rule_check_enabled: bool = True
