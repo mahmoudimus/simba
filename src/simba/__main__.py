@@ -620,7 +620,10 @@ def _cmd_codex_extract(args: list[str]) -> int:
         print("Use this prompt with Codex (or the `memories-learn` skill):")
         print("---")
         print(
-            f"Read transcript `{transcript}` and extract 5-15 high-value learnings. "
+            f"Read transcript `{transcript}` and extract as many "
+            "high-value learnings. As you go through each learning, "
+            "semantically cluster them and see if similar learnings "
+            "can be coalesced into just one learning. "
             "Store each learning to semantic memory using:"
         )
         print(
