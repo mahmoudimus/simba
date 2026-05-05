@@ -247,7 +247,9 @@ def main(hook_input: dict) -> str:
 
 
     if not parts:
-        return json.dumps({"hookSpecificOutput": {}})
+        return json.dumps(
+            {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+        )
 
     combined = "\n\n".join(parts)
     tokens = len(combined) // 4
