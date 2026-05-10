@@ -18,6 +18,7 @@ import pathlib
 import time
 
 import simba.config
+import simba.hooks._io
 import simba.hooks._memory_client
 import simba.hooks._truth_client
 
@@ -247,16 +248,9 @@ def main(hook_input: dict) -> str:
 
 
     if not parts:
-        return json.dumps(
-            {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
-        )
+        return simba.hooks._io.empty("PreToolUse")
 
     combined = "\n\n".join(parts)
     tokens = len(combined) // 4
     combined += f"\n[simba: ~{tokens} tokens injected]"
-    return json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "additionalContext": combined,
-        }
-    })
+    return simba.hooks._io.context("PreToolUse", combined)

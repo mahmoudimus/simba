@@ -47,6 +47,10 @@ _HOOK_EVENTS = {
     "PostToolUse": "simba.hooks.post_tool_use",
     "PreCompact": "simba.hooks.pre_compact",
     "Stop": "simba.hooks.stop",
+    # Codex-only: emitted just before Codex prompts for approval.
+    # Claude Code never invokes this event, so registering it here is
+    # harmless for Claude installs.
+    "PermissionRequest": "simba.hooks.permission_request",
 }
 
 _HOOK_TIMEOUTS = {
@@ -56,7 +60,29 @@ _HOOK_TIMEOUTS = {
     "PostToolUse": 5000,
     "PreCompact": 5000,
     "Stop": 5000,
+    "PermissionRequest": 3000,
 }
+
+# Subset of _HOOK_EVENTS that Claude Code understands.  PermissionRequest
+# is Codex-only and must not appear in Claude's settings.json.
+_CLAUDE_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PreCompact",
+    "Stop",
+)
+
+# Subset that Codex understands.  Codex has no PreCompact event.
+_CODEX_HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "PermissionRequest",
+)
 
 _GLOBAL_SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
@@ -70,9 +96,9 @@ def _codex_home() -> pathlib.Path:
 
 
 def _build_hooks_config() -> dict:
-    """Build the hooks section for settings.json."""
+    """Build the hooks section for Claude Code's settings.json."""
     hooks: dict = {}
-    for event in _HOOK_EVENTS:
+    for event in _CLAUDE_HOOK_EVENTS:
         timeout = _HOOK_TIMEOUTS[event]
         hooks[event] = [
             {

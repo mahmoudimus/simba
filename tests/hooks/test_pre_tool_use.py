@@ -13,7 +13,7 @@ import simba.hooks.pre_tool_use
 class TestPreToolUseHook:
     def test_skips_unsupported_tools(self):
         result = json.loads(simba.hooks.pre_tool_use.main({"tool_name": "Write"}))
-        assert result["hookSpecificOutput"] == {}
+        assert result["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
 
     def test_skips_missing_transcript(self, tmp_path):
         result = json.loads(
@@ -24,7 +24,7 @@ class TestPreToolUseHook:
                 }
             )
         )
-        assert result["hookSpecificOutput"] == {}
+        assert result["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
 
     def test_returns_memories_for_valid_tool(self, tmp_path):
         # Create transcript with thinking block
@@ -85,7 +85,7 @@ class TestPreToolUseHook:
                     }
                 )
             )
-        assert result["hookSpecificOutput"] == {}
+        assert result["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
 
     def test_passes_project_path(self, tmp_path):
         transcript = tmp_path / "transcript.jsonl"

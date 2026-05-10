@@ -57,7 +57,8 @@ uv run ruff check --fix src/      # Auto-fix lint
 <!-- BEGIN SIMBA:workflow -->
 ## Workflow
 
-- 6 active hooks: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, Stop
+- 6 Claude Code hooks: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, Stop
+- Codex hooks (`.codex/hooks.json`): same set minus PreCompact, plus PermissionRequest
 - Daemon auto-starts on SessionStart (polls 15x at 300ms intervals)
 - PreCompact exports transcripts to ~/.claude/transcripts/{sessionId}/
 - Guardian extracts SIMBA:core blocks and re-injects on every prompt
