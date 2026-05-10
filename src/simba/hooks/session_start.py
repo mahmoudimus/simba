@@ -15,6 +15,7 @@ import httpx
 
 import simba.config
 import simba.db
+import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
@@ -174,10 +175,4 @@ def main(hook_input: dict) -> str:
             parts.append(extraction)
 
     combined = "\n\n".join(parts)
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": combined,
-        }
-    }
-    return json.dumps(output)
+    return simba.hooks._io.context("SessionStart", combined)

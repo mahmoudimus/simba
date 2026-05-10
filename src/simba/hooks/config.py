@@ -33,6 +33,13 @@ class HooksConfig:
     rule_max_per_session: int = 10
     auto_learn_from_failures: bool = True
 
+    # PermissionRequest (Codex-only) — deny when a TOOL_RULE matches
+    # the proposed call above ``permission_deny_similarity``.  Weaker
+    # matches fall through to Codex's normal approval prompt.
+    permission_check_enabled: bool = True
+    permission_min_similarity: float = 0.6
+    permission_deny_similarity: float = 0.78
+
     # memories-learn skill dispatch mode
     # False (default): dispatch synchronously, Claude waits for extraction to complete
     # True: dispatch in background, Claude continues immediately

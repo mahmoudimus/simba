@@ -15,6 +15,7 @@ import re
 import time
 
 import simba.config
+import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.activity_tracker
 
@@ -169,9 +170,7 @@ def main(hook_input: dict) -> str:
     cwd = pathlib.Path(cwd_str) if cwd_str else pathlib.Path.cwd()
 
     if not tool_name:
-        return json.dumps(
-            {"hookSpecificOutput": {"hookEventName": "PostToolUse"}}
-        )
+        return simba.hooks._io.empty("PostToolUse")
 
     # --- Activity tracking (existing behavior) ---
     detail = ""
@@ -198,6 +197,4 @@ def main(hook_input: dict) -> str:
             if failure:
                 _store_failure_rule(failure, str(cwd))
 
-    return json.dumps(
-        {"hookSpecificOutput": {"hookEventName": "PostToolUse"}}
-    )
+    return simba.hooks._io.empty("PostToolUse")
