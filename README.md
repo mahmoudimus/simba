@@ -49,9 +49,39 @@ simba install --global    # Register hooks + skills globally (~/.claude/)
 simba install --remove    # Remove hooks and skills
 ```
 
-## Codex Skill
+## Codex Support
 
-This repo now includes a Codex-native skill (`simba-onboard`) and an installer command:
+Simba ships both Codex-native skills and a full Codex hook integration.
+
+### Hooks
+
+`.codex/hooks.json` registers the same handlers Claude Code uses, so memory
+recall, rule reinforcement, and TOOL_RULE checks all fire under Codex too.
+Codex's event set differs slightly: there is no `PreCompact`, but there is a
+`PermissionRequest` event that Claude Code doesn't expose.
+
+| Event | Claude Code | Codex |
+|-------|-------------|-------|
+| SessionStart | ✓ | ✓ |
+| UserPromptSubmit | ✓ | ✓ |
+| PreToolUse | ✓ | ✓ |
+| PostToolUse | ✓ | ✓ |
+| Stop | ✓ | ✓ |
+| PreCompact | ✓ | — |
+| PermissionRequest | — | ✓ |
+
+Enable in `~/.codex/config.toml`:
+
+```toml
+[features]
+codex_hooks = true
+```
+
+Then trust the project so Codex loads `.codex/hooks.json`. Hooks invoke the
+same `simba hook <Event>` dispatcher used by Claude Code; no extra install
+step is needed beyond having `simba` on `PATH`.
+
+### Skills + CLI
 
 ```bash
 simba codex-install           # Install bundled Codex skills to $CODEX_HOME/skills
@@ -163,6 +193,7 @@ Simba hooks into six Claude Code lifecycle events to provide persistent context 
 | **PostToolUse** | Track file reads, edits, searches, and commands in an activity log |
 | **PreCompact** | Export transcript to disk before context compaction |
 | **Stop** | Check for rule compliance signal, capture errors from final transcript |
+| **PermissionRequest** *(Codex only)* | Deny Bash/`apply_patch`/MCP calls that match a high-confidence TOOL_RULE memory |
 
 ## Memory Daemon
 
@@ -284,7 +315,7 @@ simba orchestration agents --update
 
 ## Context-Low Early Warning
 
-The PreToolUse hook monitors the session transcript file size. When it exceeds a configurable threshold (default 4 MB), it injects a one-time `<context-low-warning>` into Claude's context recommending that it summarize its current work state before auto-compact triggers.
+The PreToolUse hook monitors the session transcript file size. When it exceeds a configurable threshold (`hooks.context_low_bytes`, default 20 MB to suit 1M-context sessions), it injects a one-time `<context-low-warning>` into Claude's context recommending that it summarize its current work state before auto-compact triggers.
 
 This gives Claude time to document progress, pending tasks, and branch context so the pre-compact transcript export captures a clean snapshot for learning extraction.
 
@@ -472,7 +503,7 @@ cd simba
 uv sync
 
 # Run tests
-uv run pytest                     # all tests (~516)
+uv run pytest                     # all tests (~620)
 uv run pytest -x                  # stop on first failure
 uv run pytest -k "test_name"      # specific test
 
@@ -537,7 +568,7 @@ simba config show                              # Dump full effective config
 | Section | Config Class | Key Fields |
 |---------|-------------|------------|
 | `memory` | `MemoryConfig` | port, min_similarity, max_results, sync_interval, ... |
-| `hooks` | `HooksConfig` | health_timeout, daemon_port, context_low_bytes, ... |
+| `hooks` | `HooksConfig` | health_timeout, daemon_port, context_low_bytes, permission_deny_similarity, ... |
 | `sync` | `SyncConfig` | daemon_url, batch_limit, retry_count, default_interval, ... |
 | `search` | `SearchConfig` | max_context_tokens, min_query_length, memory_token_budget, ... |
 
