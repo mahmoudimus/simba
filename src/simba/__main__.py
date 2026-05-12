@@ -87,6 +87,50 @@ _CODEX_HOOK_EVENTS = (
 _GLOBAL_SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
 
+_CODEX_HOOKS_FLAG = "codex_hooks"
+
+
+def _ensure_codex_feature_flag(*, remove: bool = False) -> str:
+    """Toggle ``[features] codex_hooks`` in ``<CODEX_HOME>/config.toml``.
+
+    Returns one of:
+      - ``"added"`` (newly set to true)
+      - ``"already-set"`` (was already true; no write)
+      - ``"removed"`` (flag deleted)
+      - ``"not-present"`` (remove called but flag wasn't set)
+
+    The file (and any missing parent dirs) is created if absent.
+    """
+    import tomllib
+
+    import tomli_w
+
+    config_path = _codex_home() / "config.toml"
+    data: dict = {}
+    if config_path.exists():
+        try:
+            data = tomllib.loads(config_path.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
+            data = {}
+
+    features = data.setdefault("features", {})
+    if remove:
+        if features.pop(_CODEX_HOOKS_FLAG, None) is None:
+            return "not-present"
+        if not features:
+            data.pop("features", None)
+        status = "removed"
+    else:
+        if features.get(_CODEX_HOOKS_FLAG) is True:
+            return "already-set"
+        features[_CODEX_HOOKS_FLAG] = True
+        status = "added"
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_bytes(tomli_w.dumps(data).encode())
+    return status
+
+
 def _codex_home() -> pathlib.Path:
     """Return CODEX_HOME (or ~/.codex)."""
     env_home = os.environ.get("CODEX_HOME")
@@ -503,15 +547,19 @@ def _cmd_install(args: list[str]) -> int:
 
 
 def _cmd_codex_install(args: list[str]) -> int:
-    """Install or remove bundled skills for Codex."""
+    """Install or remove bundled skills + hook feature flag for Codex."""
     remove = "--remove" in args
     skills_dir = _codex_home() / "skills"
+    config_path = _codex_home() / "config.toml"
 
     if remove:
         removed = _remove_codex_skills(skills_dir)
         print(f"Codex skills removed from {skills_dir}")
         if removed:
             print(f"  {removed} skill(s) removed")
+        flag_status = _ensure_codex_feature_flag(remove=True)
+        if flag_status == "removed":
+            print(f"  [features] codex_hooks removed from {config_path}")
         return 0
 
     skills_dir.mkdir(parents=True, exist_ok=True)
@@ -519,6 +567,11 @@ def _cmd_codex_install(args: list[str]) -> int:
     print(f"Codex skills installed in {skills_dir}")
     if installed:
         print(f"  {installed} skill(s) installed")
+    flag_status = _ensure_codex_feature_flag()
+    if flag_status == "added":
+        print(f"  [features] codex_hooks = true set in {config_path}")
+    elif flag_status == "already-set":
+        print(f"  [features] codex_hooks = true already set in {config_path}")
     return 0
 
 
