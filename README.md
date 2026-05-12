@@ -70,16 +70,17 @@ Codex's event set differs slightly: there is no `PreCompact`, but there is a
 | PreCompact | ✓ | — |
 | PermissionRequest | — | ✓ |
 
-Enable in `~/.codex/config.toml`:
+Run `simba codex-install` to set up everything Codex needs:
 
-```toml
-[features]
-codex_hooks = true
+```bash
+simba codex-install           # Installs Codex skills + sets [features] codex_hooks = true
+simba codex-install --remove  # Removes both skills and the feature flag
 ```
 
-Then trust the project so Codex loads `.codex/hooks.json`. Hooks invoke the
-same `simba hook <Event>` dispatcher used by Claude Code; no extra install
-step is needed beyond having `simba` on `PATH`.
+The first time you open a Codex session in a project that ships `.codex/hooks.json`,
+Codex will prompt you to trust it — accept so hooks load. The hooks invoke
+the same `simba hook <Event>` dispatcher used by Claude Code; no extra step
+is needed beyond having `simba` on `PATH`.
 
 ### Skills + CLI
 
@@ -503,7 +504,7 @@ cd simba
 uv sync
 
 # Run tests
-uv run pytest                     # all tests (~620)
+uv run pytest                     # all tests (~625)
 uv run pytest -x                  # stop on first failure
 uv run pytest -k "test_name"      # specific test
 
