@@ -158,6 +158,53 @@ def _build_hooks_config() -> dict:
     return hooks
 
 
+# Matchers used in per-project .codex/hooks.json
+_CODEX_TOOL_MATCHER = "Bash|apply_patch|Edit|Write"
+_CODEX_SESSION_MATCHER = "startup|resume|clear"
+
+
+def _build_codex_hooks_config() -> dict:
+    """Build the hooks dict for a per-project .codex/hooks.json."""
+    hooks: dict = {}
+    for event in _CODEX_HOOK_EVENTS:
+        timeout_ms = _HOOK_TIMEOUTS[event]
+        timeout_s = timeout_ms // 1000
+        entry: dict = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"simba hook {event}",
+                    "timeout": timeout_s,
+                }
+            ]
+        }
+        if event == "SessionStart":
+            entry["matcher"] = _CODEX_SESSION_MATCHER
+        elif event in ("PreToolUse", "PostToolUse", "PermissionRequest"):
+            entry["matcher"] = _CODEX_TOOL_MATCHER
+        # UserPromptSubmit and Stop: no matcher (Codex ignores it anyway)
+        hooks[event] = [entry]
+    return {"hooks": hooks}
+
+
+def _write_codex_project_hooks(
+    project_dir: pathlib.Path, *, remove: bool = False
+) -> bool:
+    """Write or remove .codex/hooks.json in ``project_dir``.
+
+    Returns True if a change was made.
+    """
+    hooks_path = project_dir / ".codex" / "hooks.json"
+    if remove:
+        if hooks_path.exists():
+            hooks_path.unlink()
+            return True
+        return False
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    hooks_path.write_text(json.dumps(_build_codex_hooks_config(), indent=2) + "\n")
+    return True
+
+
 def _latest_codex_transcript_metadata() -> dict[str, Any] | None:
     """Build transcript metadata from the newest Codex session JSONL."""
     sessions_dir = _codex_home() / "sessions"
@@ -512,6 +559,8 @@ def _cmd_install(args: list[str]) -> int:
 
     _SIMBA_PERMISSION = "Bash(simba:*)"
 
+    project_dir = pathlib.Path.cwd()
+
     if remove:
         if "hooks" in settings:
             del settings["hooks"]
@@ -526,6 +575,8 @@ def _cmd_install(args: list[str]) -> int:
         removed = _remove_skills(skills_dir)
         if removed:
             print(f"  {removed} skill(s) removed")
+        if not is_global and _write_codex_project_hooks(project_dir, remove=True):
+            print(f"  Codex hooks removed from {project_dir / '.codex' / 'hooks.json'}")
         return 0
 
     settings["hooks"] = _build_hooks_config()
@@ -536,12 +587,18 @@ def _cmd_install(args: list[str]) -> int:
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     scope = "global" if is_global else "project"
     print(f"Simba hooks registered ({scope}) in {settings_path}")
-    print(f"  {len(_HOOK_EVENTS)} hooks: {', '.join(_HOOK_EVENTS)}")
+    hooks_list = ", ".join(_CLAUDE_HOOK_EVENTS)
+    print(f"  {len(_CLAUDE_HOOK_EVENTS)} Claude hooks: {hooks_list}")
     print(f"  permission granted: {_SIMBA_PERMISSION}")
 
     skill_count = _install_skills(skills_dir)
     if skill_count:
         print(f"  {skill_count} skill(s) installed")
+
+    if not is_global:
+        _write_codex_project_hooks(project_dir)
+        codex_hooks_path = project_dir / ".codex" / "hooks.json"
+        print(f"  {len(_CODEX_HOOK_EVENTS)} Codex hooks written to {codex_hooks_path}")
 
     return 0
 

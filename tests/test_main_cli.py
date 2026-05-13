@@ -473,3 +473,69 @@ def test_latest_codex_transcript_uses_rollout_filename_timestamp(
     assert meta is not None
     assert meta["session_id"] == "new222"
     assert meta["transcript_path"] == str(newer)
+
+
+class TestCodexProjectHooks:
+    def test_write_creates_hooks_json(self, tmp_path: pathlib.Path) -> None:
+        cli._write_codex_project_hooks(tmp_path)
+        hooks_path = tmp_path / ".codex" / "hooks.json"
+        assert hooks_path.exists()
+        data = json.loads(hooks_path.read_text())
+        assert set(data["hooks"]) == set(cli._CODEX_HOOK_EVENTS)
+
+    def test_write_has_correct_matchers(self, tmp_path: pathlib.Path) -> None:
+        cli._write_codex_project_hooks(tmp_path)
+        data = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+        hooks = data["hooks"]
+        assert hooks["SessionStart"][0]["matcher"] == cli._CODEX_SESSION_MATCHER
+        assert hooks["PreToolUse"][0]["matcher"] == cli._CODEX_TOOL_MATCHER
+        assert hooks["PermissionRequest"][0]["matcher"] == cli._CODEX_TOOL_MATCHER
+        assert "matcher" not in hooks["UserPromptSubmit"][0]
+        assert "matcher" not in hooks["Stop"][0]
+
+    def test_write_timeouts_are_seconds(self, tmp_path: pathlib.Path) -> None:
+        cli._write_codex_project_hooks(tmp_path)
+        data = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+        for entries in data["hooks"].values():
+            for entry in entries:
+                for h in entry["hooks"]:
+                    assert h["timeout"] < 100, f"timeout looks like ms: {h}"
+
+    def test_remove_deletes_file(self, tmp_path: pathlib.Path) -> None:
+        cli._write_codex_project_hooks(tmp_path)
+        changed = cli._write_codex_project_hooks(tmp_path, remove=True)
+        assert changed
+        assert not (tmp_path / ".codex" / "hooks.json").exists()
+
+    def test_remove_missing_file_returns_false(self, tmp_path: pathlib.Path) -> None:
+        changed = cli._write_codex_project_hooks(tmp_path, remove=True)
+        assert not changed
+
+    def test_install_writes_codex_hooks(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        cli._cmd_install([])
+        assert (tmp_path / ".codex" / "hooks.json").exists()
+
+    def test_install_remove_deletes_codex_hooks(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        monkeypatch.setattr(cli, "_remove_skills", lambda d: 0)
+        cli._cmd_install([])
+        assert (tmp_path / ".codex" / "hooks.json").exists()
+        cli._cmd_install(["--remove"])
+        assert not (tmp_path / ".codex" / "hooks.json").exists()
+
+    def test_install_global_does_not_write_codex_hooks(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        global_settings = tmp_path / ".claude" / "settings.json"
+        monkeypatch.setattr(cli, "_GLOBAL_SETTINGS", global_settings)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        cli._cmd_install(["--global"])
+        assert not (tmp_path / ".codex" / "hooks.json").exists()
