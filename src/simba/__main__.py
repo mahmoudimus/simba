@@ -91,32 +91,37 @@ _CODEX_HOOKS_FLAG = "hooks"
 _CODEX_HOOKS_FLAG_LEGACY = "codex_hooks"
 
 
-def _ensure_codex_feature_flag(*, remove: bool = False) -> str:
-    """Toggle ``[features] hooks`` in ``<CODEX_HOME>/config.toml``.
+def _apply_codex_feature_flag(
+    config_path: pathlib.Path,
+    *,
+    remove: bool = False,
+    create_if_missing: bool = True,
+) -> str:
+    """Toggle ``[features] hooks`` in a Codex ``config.toml``.
 
     Returns one of:
       - ``"added"`` (newly set to true)
       - ``"already-set"`` (was already true; no write)
       - ``"migrated"`` (renamed legacy ``codex_hooks`` to ``hooks``)
       - ``"removed"`` (flag deleted)
-      - ``"not-present"`` (remove called but flag wasn't set)
+      - ``"not-present"`` (remove called or file missing and not creating)
 
-    Codex deprecated ``codex_hooks`` in favor of ``hooks``; if the old
-    key exists it is removed in both install and ``--remove`` modes.
-
-    The file (and any missing parent dirs) is created if absent.
+    When ``create_if_missing`` is false and the file doesn't exist, this
+    returns ``"not-present"`` without creating anything — used for the
+    project-local config which only needs migration, not creation.
     """
     import tomllib
 
     import tomli_w
 
-    config_path = _codex_home() / "config.toml"
     data: dict = {}
     if config_path.exists():
         try:
             data = tomllib.loads(config_path.read_text())
         except (OSError, tomllib.TOMLDecodeError):
             data = {}
+    elif not create_if_missing:
+        return "not-present"
 
     features = data.setdefault("features", {})
     had_legacy = features.pop(_CODEX_HOOKS_FLAG_LEGACY, None) is not None
@@ -137,6 +142,26 @@ def _ensure_codex_feature_flag(*, remove: bool = False) -> str:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_bytes(tomli_w.dumps(data).encode())
     return status
+
+
+def _ensure_codex_feature_flag(*, remove: bool = False) -> str:
+    """Toggle ``[features] hooks`` in ``<CODEX_HOME>/config.toml``.
+
+    Codex deprecated ``codex_hooks`` in favor of ``hooks``; if the old
+    key exists it is removed in both install and ``--remove`` modes.
+    """
+    return _apply_codex_feature_flag(_codex_home() / "config.toml", remove=remove)
+
+
+def _migrate_project_codex_features(project_dir: pathlib.Path) -> str:
+    """Rename legacy ``codex_hooks`` to ``hooks`` in ``<project>/.codex/config.toml``.
+
+    No-op if the file doesn't exist — we never create a project-local
+    config.toml, only migrate one if the user already has it.
+    """
+    return _apply_codex_feature_flag(
+        project_dir / ".codex" / "config.toml", create_if_missing=False
+    )
 
 
 def _codex_home() -> pathlib.Path:
@@ -607,6 +632,10 @@ def _cmd_install(args: list[str]) -> int:
         _write_codex_project_hooks(project_dir)
         codex_hooks_path = project_dir / ".codex" / "hooks.json"
         print(f"  {len(_CODEX_HOOK_EVENTS)} Codex hooks written to {codex_hooks_path}")
+        project_flag = _migrate_project_codex_features(project_dir)
+        if project_flag == "migrated":
+            local_cfg = project_dir / ".codex" / "config.toml"
+            print(f"  [features] codex_hooks -> hooks migrated in {local_cfg}")
 
     return 0
 

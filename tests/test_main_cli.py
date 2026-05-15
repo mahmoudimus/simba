@@ -577,3 +577,34 @@ class TestCodexProjectHooks:
         monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
         cli._cmd_install(["--global"])
         assert not (tmp_path / ".codex" / "hooks.json").exists()
+
+    def test_install_migrates_project_local_codex_config(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        import tomllib
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        project_cfg = tmp_path / ".codex" / "config.toml"
+        project_cfg.parent.mkdir(parents=True)
+        project_cfg.write_text("[features]\ncodex_hooks = true\n")
+        cli._cmd_install([])
+        cfg = tomllib.loads(project_cfg.read_text())
+        assert cfg["features"] == {"hooks": True}
+
+    def test_install_no_op_when_local_codex_config_absent(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        cli._cmd_install([])
+        assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_apply_codex_feature_flag_skips_when_create_disabled(
+    tmp_path: pathlib.Path,
+) -> None:
+    missing = tmp_path / "nonexistent" / "config.toml"
+    status = cli._apply_codex_feature_flag(missing, create_if_missing=False)
+    assert status == "not-present"
+    assert not missing.exists()
