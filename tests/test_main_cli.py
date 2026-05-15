@@ -83,7 +83,7 @@ def test_ensure_codex_feature_flag_creates_file(
 
     assert status == "added"
     cfg = tomllib.loads((codex_home / "config.toml").read_text())
-    assert cfg == {"features": {"codex_hooks": True}}
+    assert cfg == {"features": {"hooks": True}}
 
 
 def test_ensure_codex_feature_flag_preserves_existing(
@@ -104,7 +104,7 @@ def test_ensure_codex_feature_flag_preserves_existing(
     assert status == "added"
     cfg = tomllib.loads(config_path.read_text())
     assert cfg["model"] == "gpt-5.5"
-    assert cfg["features"] == {"multi_agent": True, "codex_hooks": True}
+    assert cfg["features"] == {"multi_agent": True, "hooks": True}
 
 
 def test_ensure_codex_feature_flag_idempotent(
@@ -113,7 +113,7 @@ def test_ensure_codex_feature_flag_idempotent(
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
-        "[features]\ncodex_hooks = true\n"
+        "[features]\nhooks = true\n"
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
@@ -129,7 +129,7 @@ def test_ensure_codex_feature_flag_remove(
     codex_home.mkdir()
     config_path = codex_home / "config.toml"
     config_path.write_text(
-        "[features]\nmulti_agent = true\ncodex_hooks = true\n"
+        "[features]\nmulti_agent = true\nhooks = true\n"
     )
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
@@ -148,11 +148,49 @@ def test_ensure_codex_feature_flag_remove_drops_empty_table(
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     config_path = codex_home / "config.toml"
-    config_path.write_text("[features]\ncodex_hooks = true\n")
+    config_path.write_text("[features]\nhooks = true\n")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     cli._ensure_codex_feature_flag(remove=True)
 
+    cfg = tomllib.loads(config_path.read_text())
+    assert "features" not in cfg
+
+
+def test_ensure_codex_feature_flag_migrates_legacy_key(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import tomllib
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_path = codex_home / "config.toml"
+    config_path.write_text(
+        "[features]\nmulti_agent = true\ncodex_hooks = true\n"
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    status = cli._ensure_codex_feature_flag()
+
+    assert status == "migrated"
+    cfg = tomllib.loads(config_path.read_text())
+    assert cfg["features"] == {"multi_agent": True, "hooks": True}
+
+
+def test_ensure_codex_feature_flag_remove_clears_legacy_key(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import tomllib
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_path = codex_home / "config.toml"
+    config_path.write_text("[features]\ncodex_hooks = true\n")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    status = cli._ensure_codex_feature_flag(remove=True)
+
+    assert status == "removed"
     cfg = tomllib.loads(config_path.read_text())
     assert "features" not in cfg
 

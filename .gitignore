@@ -29,3 +29,5 @@ src/simba/memory/data/
 
 # OS
 .DS_Store
+.claude
+docs/
