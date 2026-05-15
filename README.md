@@ -73,7 +73,8 @@ Codex's event set differs slightly: there is no `PreCompact`, but there is a
 Run `simba codex-install` to set up everything Codex needs:
 
 ```bash
-simba codex-install           # Installs Codex skills + sets [features] codex_hooks = true
+simba codex-install           # Installs Codex skills + sets [features] hooks = true
+                              # (also migrates the deprecated codex_hooks key)
 simba codex-install --remove  # Removes both skills and the feature flag
 ```
 
