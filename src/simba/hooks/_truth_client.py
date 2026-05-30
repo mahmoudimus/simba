@@ -7,6 +7,7 @@ alongside recalled memories.
 
 from __future__ import annotations
 
+import pathlib
 import re
 
 # Common English stop words to filter out during keyword extraction.
@@ -111,12 +112,18 @@ def extract_keywords(text: str, max_keywords: int = 3) -> list[str]:
     return keywords
 
 
-def query_truth_db(query_text: str) -> str:
+def query_truth_db(
+    query_text: str,
+    project_path: str | None = None,
+    cwd: str | None = None,
+) -> str:
     """Query the truth DB for facts relevant to query_text.
 
-    Extracts keywords, searches proven_facts by subject, and returns
-    a ``<proven-facts>`` XML block.  Returns ``""`` if no facts found
-    or if the DB is unavailable.
+    Extracts keywords, searches proven_facts by subject *scoped to the current
+    project*, and returns a ``<proven-facts>`` XML block.  Returns ``""`` if no
+    facts found or if the DB is unavailable.  ``cwd`` selects which repo's
+    ``.simba`` DB to open; ``project_path`` (defaulting to that repo's stable
+    id) prevents cross-project facts from leaking into the injection.
     """
     keywords = extract_keywords(query_text, max_keywords=3)
     if not keywords:
@@ -125,20 +132,25 @@ def query_truth_db(query_text: str) -> str:
     try:
         import simba.db
 
-        conn = simba.db.get_connection()
+        conn = simba.db.get_connection(pathlib.Path(cwd) if cwd else None)
         if conn is None:
             return ""
+        if project_path is None:
+            project_path = simba.db.resolve_project_id(
+                pathlib.Path(cwd) if cwd else None
+            )
     except Exception:
         return ""
 
     try:
         cursor = conn.cursor()
-        # Search for facts where subject matches any keyword (case-insensitive).
+        # Subject matches any keyword (case-insensitive), scoped to project.
         placeholders = " OR ".join(["subject LIKE ?"] * len(keywords))
         params = [f"%{kw}%" for kw in keywords]
+        params.append(project_path)
         sql = (
             "SELECT subject, predicate, object, proof"
-            f" FROM proven_facts WHERE {placeholders}"
+            f" FROM proven_facts WHERE ({placeholders}) AND project_path = ?"
         )
         rows = cursor.execute(sql, params).fetchall()
 

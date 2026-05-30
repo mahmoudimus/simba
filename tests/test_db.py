@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import sqlite3
 
 import pytest
 
+import simba.config
 import simba.db
 
 
@@ -25,6 +27,48 @@ class TestFindRepoRoot:
     def test_returns_none_when_no_git(self, tmp_path: pathlib.Path) -> None:
         result = simba.db.find_repo_root(tmp_path)
         assert result is None
+
+
+class TestResolveProjectId:
+    @pytest.fixture(autouse=True)
+    def _isolate_global_config(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            simba.config, "_global_path", lambda: tmp_path / "global.toml"
+        )
+
+    def test_generates_and_persists(self, tmp_path: pathlib.Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+
+        pid = simba.db.resolve_project_id(repo)
+        assert pid
+
+        # Persisted locally → a second resolve returns the same id.
+        assert simba.db.resolve_project_id(repo) == pid
+        local = repo / ".simba" / "config.toml"
+        assert local.exists()
+        assert pid in local.read_text()
+
+    def test_respects_configured_id(self, tmp_path: pathlib.Path) -> None:
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        simba.config.set_value(
+            "project", "project_id", "custom-id", scope="local", root=repo
+        )
+        assert simba.db.resolve_project_id(repo) == "custom-id"
+
+    def test_stable_across_folder_move(self, tmp_path: pathlib.Path) -> None:
+        # `mv` carries .simba/config.toml with the repo → id survives, no
+        # manual step needed (the move concern that motivated this design).
+        old = tmp_path / "old"
+        (old / ".git").mkdir(parents=True)
+        pid = simba.db.resolve_project_id(old)
+
+        new = tmp_path / "new"
+        shutil.move(str(old), str(new))
+        assert simba.db.resolve_project_id(new) == pid
 
 
 class TestGetDbPath:

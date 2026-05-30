@@ -7,14 +7,33 @@ but shares the connection. Schema is initialized lazily on first connect.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import pathlib
 import sqlite3
+import uuid
 from typing import TYPE_CHECKING
+
+import simba.config
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
 
 _SCHEMA_INITIALIZERS: list[Callable[[sqlite3.Connection], None]] = []
+
+
+@simba.config.configurable("project")
+@dataclasses.dataclass
+class ProjectConfig:
+    """Project identity used to scope facts/memories to one repo.
+
+    ``project_id`` is a stable, opaque token written into the *local*
+    ``.simba/config.toml``.  Because that file lives inside the repo, it
+    travels with a plain ``mv`` of the folder, so the id survives a move.
+    Override it with ``simba config set project.project_id <id>`` (e.g. to
+    share an identity across working copies, or after wiping ``.simba/``).
+    """
+
+    project_id: str = ""
 
 
 def register_schema(init_fn: Callable[[sqlite3.Connection], None]) -> None:
@@ -76,6 +95,27 @@ def get_db(cwd: pathlib.Path | None = None) -> Generator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+def resolve_project_id(cwd: pathlib.Path | None = None) -> str:
+    """Return the stable project id for the repo containing *cwd*.
+
+    Reads ``project.project_id`` from config (scoped to the repo root that
+    owns the ``.simba/`` DB).  If unset, generates a uuid and persists it to
+    the *local* config so it stays stable across folder moves.  Persisting is
+    best-effort: a read-only filesystem never breaks fact lookup.
+    """
+    root = get_db_path(cwd).parent.parent
+    cfg = simba.config.load("project", root=root)
+    if cfg.project_id:
+        return cfg.project_id
+
+    new_id = uuid.uuid4().hex
+    with contextlib.suppress(Exception):
+        simba.config.set_value(
+            "project", "project_id", new_id, scope="local", root=root
+        )
+    return new_id
 
 
 def get_connection(cwd: pathlib.Path | None = None) -> sqlite3.Connection | None:
