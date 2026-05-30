@@ -32,6 +32,13 @@ _ERROR_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# "Not found" errors that are normal for read-only discovery probes — a
+# narrower subset of _ERROR_PATTERNS.  (NB: "command not found" is a real
+# missing-binary mistake and is intentionally excluded here.)
+_NOT_FOUND_RE = re.compile(
+    r"No such file or directory|FileNotFoundError", re.IGNORECASE
+)
+
 # Patterns to normalize commands for generalization.
 _NORMALIZE_PATTERNS = [
     # Replace absolute paths with /PATH/
@@ -68,6 +75,21 @@ def _extract_error_line(text: str) -> str:
         if _ERROR_PATTERNS.search(line):
             return line[:200]
     return text.split("\n")[-1].strip()[:200] if text else ""
+
+
+def _leading_verb(command: str) -> str:
+    """Return the leading command verb, skipping ``VAR=val`` env assignments.
+
+    ``/usr/bin/find`` collapses to ``find``.  Only inspects the first segment,
+    so a probe buried in a ``&&`` chain is not detected (acceptable: the common
+    case is a direct ``ls``/``bfs``/``find`` probe).
+    """
+    for tok in command.strip().split():
+        name = tok.split("=", 1)[0]
+        if "=" in tok and name.isidentifier():
+            continue  # leading environment assignment, e.g. FOO=bar
+        return tok.rsplit("/", 1)[-1]
+    return ""
 
 
 def _normalize_command(command: str) -> str:
@@ -107,9 +129,20 @@ def _save_rule_dedup(error_hash: str) -> None:
 
 
 def _detect_failure(
-    tool_name: str, tool_input: dict, tool_response: dict
+    tool_name: str,
+    tool_input: dict,
+    tool_response: dict,
+    *,
+    skip_probe_not_found: bool = False,
+    probe_verbs: frozenset[str] = frozenset(),
 ) -> dict | None:
-    """Return failure info if the tool call failed, else None."""
+    """Return failure info if the tool call failed, else None.
+
+    When ``skip_probe_not_found`` is set, a "no such file" error from a
+    read-only probe command (leading verb in ``probe_verbs``) is treated as a
+    normal discovery miss and not learned.  Other errors (permission denied,
+    import errors, ...) are still learned regardless of the verb.
+    """
     if tool_name == "Bash":
         # tool_response may have stdout/stderr or a single output field
         stdout = tool_response.get("stdout", "")
@@ -117,12 +150,22 @@ def _detect_failure(
         output = tool_response.get("output", "")
         combined = output or f"{stdout}\n{stderr}"
 
-        if _has_error_pattern(combined):
-            return {
-                "tool": tool_name,
-                "command": tool_input.get("command", "")[:200],
-                "error": _extract_error_line(combined),
-            }
+        if not _has_error_pattern(combined):
+            return None
+
+        command = tool_input.get("command", "")
+        if (
+            skip_probe_not_found
+            and _NOT_FOUND_RE.search(combined)
+            and _leading_verb(command) in probe_verbs
+        ):
+            return None
+
+        return {
+            "tool": tool_name,
+            "command": command[:200],
+            "error": _extract_error_line(combined),
+        }
     return None
 
 
@@ -193,7 +236,18 @@ def main(hook_input: dict) -> str:
     cfg = _hooks_cfg()
     if cfg.auto_learn_from_failures and tool_response:
         with contextlib.suppress(Exception):
-            failure = _detect_failure(tool_name, tool_input, tool_response)
+            probe_verbs = frozenset(
+                v.strip()
+                for v in cfg.learn_probe_commands.split(",")
+                if v.strip()
+            )
+            failure = _detect_failure(
+                tool_name,
+                tool_input,
+                tool_response,
+                skip_probe_not_found=cfg.learn_skip_probe_not_found,
+                probe_verbs=probe_verbs,
+            )
             if failure:
                 _store_failure_rule(failure, str(cwd))
 

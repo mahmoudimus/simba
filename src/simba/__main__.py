@@ -971,6 +971,7 @@ Subcommands:
     recall   Recall memories for a query
     list     List all memories
     delete   Delete a memory by ID
+    prune    Bulk-delete memories by age / confidence / type
     update   Update memory metadata
 
 store options:
@@ -993,6 +994,12 @@ list options:
 
 delete:
     simba memory delete <memory_id>
+
+prune options (at least one filter required):
+    --type TYPE            Only prune this memory type (e.g. TOOL_RULE)
+    --older-than DURATION  Prune entries older than 14d / 48h / 2w / 30m
+    --max-confidence FLOAT Only prune entries at or below this confidence
+    --dry-run              Show what would be pruned without deleting
 
 update:
     simba memory update <memory_id> [--project-path PATH] [--session-source ID]
@@ -1041,6 +1048,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_list(rest)
     elif subcmd == "delete":
         return _memory_delete(rest)
+    elif subcmd == "prune":
+        return _memory_prune(rest)
     elif subcmd == "update":
         return _memory_update(rest)
     else:
@@ -1235,6 +1244,134 @@ def _memory_delete(args: list[str]) -> int:
         return 1
 
     print(f"deleted: {body.get('id', memory_id)}")
+    return 0
+
+
+def _parse_duration_seconds(raw: str) -> int | None:
+    """Parse a duration like ``14d``, ``48h``, ``2w``, ``30m`` (bare int = days)."""
+    raw = raw.strip().lower()
+    if not raw:
+        return None
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if raw[-1] in units:
+        try:
+            value = float(raw[:-1])
+        except ValueError:
+            return None
+        return int(value * units[raw[-1]])
+    try:
+        return int(float(raw) * 86400)  # bare number = days
+    except ValueError:
+        return None
+
+
+def _memory_age_seconds(created_at: str | None, now: float) -> float | None:
+    """Age in seconds of an ISO ``...Z`` timestamp, or None if unparseable."""
+    if not created_at:
+        return None
+    import calendar
+    import time
+
+    try:
+        parsed = time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return None
+    return now - calendar.timegm(parsed)
+
+
+def _memory_prune(args: list[str]) -> int:
+    """Prune memories matching age / confidence / type filters."""
+    import time
+
+    import httpx
+
+    import simba.hooks._memory_client
+
+    mtype = _parse_opt_value(args, "--type")
+    older_than = _parse_opt_value(args, "--older-than")
+    max_conf_raw = _parse_opt_value(args, "--max-confidence")
+    dry_run = "--dry-run" in args
+
+    if not mtype and older_than is None and max_conf_raw is None:
+        print(
+            "Error: prune requires at least one filter "
+            "(--type, --older-than, or --max-confidence)",
+            file=sys.stderr,
+        )
+        return 1
+
+    max_age_seconds = None
+    if older_than is not None:
+        max_age_seconds = _parse_duration_seconds(older_than)
+        if max_age_seconds is None:
+            print(
+                f"Error: invalid --older-than '{older_than}' "
+                "(use e.g. 14d, 48h, 2w, 30m)",
+                file=sys.stderr,
+            )
+            return 1
+
+    max_conf = None
+    if max_conf_raw is not None:
+        try:
+            max_conf = float(max_conf_raw)
+        except ValueError:
+            print(
+                f"Error: --max-confidence must be a number, got '{max_conf_raw}'",
+                file=sys.stderr,
+            )
+            return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    params: dict = {"limit": 1_000_000}
+    if mtype:
+        params["type"] = mtype
+    try:
+        resp = httpx.get(f"{url}/list", params=params, timeout=30.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    now = time.time()
+    matched = []
+    for m in body.get("memories", []):
+        if max_age_seconds is not None:
+            age = _memory_age_seconds(m.get("createdAt"), now)
+            if age is None or age < max_age_seconds:
+                continue
+        if max_conf is not None and m.get("confidence", 0) > max_conf:
+            continue
+        matched.append(m)
+
+    if not matched:
+        print("no memories matched prune criteria")
+        return 0
+
+    deleted = 0
+    for m in matched:
+        mid = m.get("id", "?")
+        mt = m.get("type", "?")
+        content = str(m.get("content", "")).strip()[:80]
+        if dry_run:
+            print(f"  [dry-run] {mid} [{mt}] {content}")
+            continue
+        try:
+            dresp = httpx.delete(f"{url}/memory/{mid}", timeout=10.0)
+            dresp.raise_for_status()
+            deleted += 1
+            print(f"  deleted {mid} [{mt}] {content}")
+        except httpx.HTTPError as exc:
+            print(f"  failed {mid}: {exc}", file=sys.stderr)
+
+    if dry_run:
+        print(f"dry-run: {len(matched)} memories would be pruned (no changes made)")
+    else:
+        print(f"pruned {deleted}/{len(matched)} memories")
     return 0
 
 

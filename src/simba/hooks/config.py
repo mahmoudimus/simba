@@ -32,6 +32,16 @@ class HooksConfig:
     rule_min_similarity: float = 0.6
     rule_max_per_session: int = 10
     auto_learn_from_failures: bool = True
+    # Recency gate: drop TOOL_RULE recall matches older than this many days
+    # (0 disables the gate).  Stale "no such file" probes age out of warnings.
+    rule_max_age_days: int = 14
+    # Don't auto-learn "no such file" failures from read-only probe commands —
+    # a discovery miss (ls/bfs/find on a guessed path) isn't a mistake to warn
+    # about.  Comma-separated leading verbs treated as probes.
+    learn_skip_probe_not_found: bool = True
+    learn_probe_commands: str = (
+        "ls,bfs,find,fd,tree,stat,test,realpath,readlink,which,type,file"
+    )
 
     # PermissionRequest (Codex-only) — deny when a TOOL_RULE matches
     # the proposed call above ``permission_deny_similarity``.  Weaker

@@ -11,6 +11,7 @@ Pipeline (in order):
 
 from __future__ import annotations
 
+import calendar
 import contextlib
 import hashlib
 import json
@@ -145,6 +146,22 @@ def _check_context_low(transcript_path: pathlib.Path) -> str | None:
     )
 
 
+def _within_max_age(created_at: str | None, max_age_days: int) -> bool:
+    """True if *created_at* (ISO ``...Z``) is within ``max_age_days`` of now.
+
+    Missing or unparseable timestamps are treated as fresh (kept) so we never
+    silently drop a rule just because it lacks a timestamp.
+    """
+    if not created_at:
+        return True
+    try:
+        parsed = time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return True
+    age_seconds = time.time() - calendar.timegm(parsed)
+    return age_seconds <= max_age_days * 86400
+
+
 def _check_tool_rules(
     tool_name: str, tool_input: dict, cwd_str: str | None
 ) -> str | None:
@@ -173,6 +190,16 @@ def _check_tool_rules(
     )
     if not memories:
         return None
+
+    # Recency gate: stale rules (e.g. a "no such file" probe recorded weeks ago
+    # against a since-moved path) age out of the warning injection.
+    max_age_days = getattr(cfg, "rule_max_age_days", 0)
+    if max_age_days and max_age_days > 0:
+        memories = [
+            m for m in memories if _within_max_age(m.get("createdAt"), max_age_days)
+        ]
+        if not memories:
+            return None
 
     lines = ["<tool-rule-warning>"]
     for m in memories:
