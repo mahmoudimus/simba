@@ -70,49 +70,73 @@ class TestQueryTruthDb:
     def test_returns_empty_when_no_facts_found(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.execute(
-            "CREATE TABLE proven_facts "
-            "(subject TEXT, predicate TEXT, object TEXT, proof TEXT)"
+            "CREATE TABLE proven_facts (subject TEXT, predicate TEXT, "
+            "object TEXT, proof TEXT, project_path TEXT NOT NULL)"
         )
         with unittest.mock.patch("simba.db.get_connection", return_value=conn):
-            result = simba.hooks._truth_client.query_truth_db("simba database")
+            result = simba.hooks._truth_client.query_truth_db(
+                "simba database", project_path="proj-1"
+            )
         assert result == ""
 
     def test_returns_xml_block_with_matching_facts(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.execute(
-            "CREATE TABLE proven_facts "
-            "(subject TEXT, predicate TEXT, object TEXT, proof TEXT)"
+            "CREATE TABLE proven_facts (subject TEXT, predicate TEXT, "
+            "object TEXT, proof TEXT, project_path TEXT NOT NULL)"
         )
         conn.execute(
-            "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
-            ("simba.db", "uses", "sqlite3", "direct import in db.py"),
+            "INSERT INTO proven_facts VALUES (?, ?, ?, ?, ?)",
+            ("simba.db", "uses", "sqlite3", "direct import in db.py", "proj-1"),
         )
         conn.commit()
         with unittest.mock.patch("simba.db.get_connection", return_value=conn):
-            result = simba.hooks._truth_client.query_truth_db("simba database module")
+            result = simba.hooks._truth_client.query_truth_db(
+                "simba database module", project_path="proj-1"
+            )
         assert "<proven-facts>" in result
         assert "</proven-facts>" in result
         assert "simba.db" in result
         assert "sqlite3" in result
         assert "direct import in db.py" in result
 
-    def test_multiple_facts_returned(self) -> None:
+    def test_scopes_to_project_path(self) -> None:
+        # A fact from another project must not leak into this project's query.
         conn = sqlite3.connect(":memory:")
         conn.execute(
-            "CREATE TABLE proven_facts "
-            "(subject TEXT, predicate TEXT, object TEXT, proof TEXT)"
+            "CREATE TABLE proven_facts (subject TEXT, predicate TEXT, "
+            "object TEXT, proof TEXT, project_path TEXT NOT NULL)"
         )
         conn.execute(
-            "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
-            ("simba.db", "uses", "sqlite3", "import in db.py"),
-        )
-        conn.execute(
-            "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
-            ("simba.memory", "uses", "lancedb", "import in server.py"),
+            "INSERT INTO proven_facts VALUES (?, ?, ?, ?, ?)",
+            ("simba.db", "uses", "sqlite3", "in db.py", "other-project"),
         )
         conn.commit()
         with unittest.mock.patch("simba.db.get_connection", return_value=conn):
-            result = simba.hooks._truth_client.query_truth_db("simba memory database")
+            result = simba.hooks._truth_client.query_truth_db(
+                "simba database module", project_path="this-project"
+            )
+        assert result == ""
+
+    def test_multiple_facts_returned(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE proven_facts (subject TEXT, predicate TEXT, "
+            "object TEXT, proof TEXT, project_path TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO proven_facts VALUES (?, ?, ?, ?, ?)",
+            ("simba.db", "uses", "sqlite3", "import in db.py", "proj-1"),
+        )
+        conn.execute(
+            "INSERT INTO proven_facts VALUES (?, ?, ?, ?, ?)",
+            ("simba.memory", "uses", "lancedb", "import in server.py", "proj-1"),
+        )
+        conn.commit()
+        with unittest.mock.patch("simba.db.get_connection", return_value=conn):
+            result = simba.hooks._truth_client.query_truth_db(
+                "simba memory database", project_path="proj-1"
+            )
         assert result.count("<fact ") == 2
 
     def test_graceful_on_db_exception(self) -> None:

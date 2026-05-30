@@ -215,15 +215,15 @@ def _check_tool_rules(
 
 
 def _check_truth_constraints(
-    tool_name: str, tool_input: dict
+    tool_name: str, tool_input: dict, cwd_str: str | None = None
 ) -> str | None:
-    """Check truth DB for facts relevant to this tool call."""
+    """Check truth DB for facts relevant to this tool call (project-scoped)."""
     if tool_name != "Bash":
         return None
     command = tool_input.get("command", "")
     if not command:
         return None
-    return simba.hooks._truth_client.query_truth_db(command) or None
+    return simba.hooks._truth_client.query_truth_db(command, cwd=cwd_str) or None
 
 
 def main(hook_input: dict) -> str:
@@ -247,7 +247,7 @@ def main(hook_input: dict) -> str:
         if rule_warning:
             parts.append(rule_warning)
 
-        truth_warning = _check_truth_constraints(tool_name, tool_input)
+        truth_warning = _check_truth_constraints(tool_name, tool_input, cwd_str)
         if truth_warning:
             parts.append(truth_warning)
 

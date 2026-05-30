@@ -448,7 +448,7 @@ class TestCheckTruthConstraints:
     def test_no_facts_returns_none(self, monkeypatch):
         monkeypatch.setattr(
             "simba.hooks._truth_client.query_truth_db",
-            lambda text: "",
+            lambda *a, **k: "",
         )
         result = pre_hook._check_truth_constraints("Bash", {"command": "ls"})
         assert result is None
@@ -456,7 +456,7 @@ class TestCheckTruthConstraints:
     def test_facts_returned(self, monkeypatch):
         monkeypatch.setattr(
             "simba.hooks._truth_client.query_truth_db",
-            lambda text: "<proven-facts><fact>test</fact></proven-facts>",
+            lambda *a, **k: "<proven-facts><fact>test</fact></proven-facts>",
         )
         result = pre_hook._check_truth_constraints(
             "Bash", {"command": "pytest d810"}
@@ -480,7 +480,7 @@ class TestPreToolUseMain:
         )
         monkeypatch.setattr(
             "simba.hooks._truth_client.query_truth_db",
-            lambda text: "",
+            lambda *a, **k: "",
         )
         result = json.loads(pre_hook.main({
             "tool_name": "Bash",
