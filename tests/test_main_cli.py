@@ -319,6 +319,7 @@ def test_memory_store_allows_content_above_200_when_under_config_limit(
     capsys,
 ) -> None:
     import httpx
+
     import simba.hooks._memory_client
 
     monkeypatch.setattr(cli, "_memory_max_content_length", lambda: 1000)
@@ -376,6 +377,196 @@ def test_memory_store_rejects_content_above_config_limit(
     assert rc == 1
     err = capsys.readouterr().err
     assert "exceeds 250 chars" in err
+
+
+# ---------- memory prune ----------
+
+
+def test_parse_duration_seconds_units() -> None:
+    assert cli._parse_duration_seconds("14d") == 14 * 86400
+    assert cli._parse_duration_seconds("48h") == 48 * 3600
+    assert cli._parse_duration_seconds("2w") == 2 * 604800
+    assert cli._parse_duration_seconds("30m") == 30 * 60
+    assert cli._parse_duration_seconds("45s") == 45
+    assert cli._parse_duration_seconds("7") == 7 * 86400  # bare number = days
+
+
+def test_parse_duration_seconds_invalid() -> None:
+    assert cli._parse_duration_seconds("") is None
+    assert cli._parse_duration_seconds("abc") is None
+    assert cli._parse_duration_seconds("xd") is None
+
+
+def test_memory_prune_requires_a_filter(capsys) -> None:
+    rc = cli._memory_prune([])
+    assert rc == 1
+    assert "requires at least one filter" in capsys.readouterr().err
+
+
+def test_memory_prune_invalid_older_than(capsys) -> None:
+    rc = cli._memory_prune(["--older-than", "bogus"])
+    assert rc == 1
+    assert "invalid --older-than" in capsys.readouterr().err
+
+
+def test_memory_prune_deletes_only_old_matches(monkeypatch, capsys) -> None:
+    import time
+
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400))
+    recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
+    listing = {
+        "memories": [
+            {
+                "id": "mem_old",
+                "type": "TOOL_RULE",
+                "content": "stale",
+                "confidence": 0.85,
+                "createdAt": old,
+            },
+            {
+                "id": "mem_new",
+                "type": "TOOL_RULE",
+                "content": "fresh",
+                "confidence": 0.85,
+                "createdAt": recent,
+            },
+        ]
+    }
+
+    class _ListResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return listing
+
+    captured: dict[str, object] = {}
+
+    def _fake_get(url, params=None, timeout=0.0):
+        captured["params"] = params
+        return _ListResp()
+
+    deleted: list[str] = []
+
+    class _DelResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "deleted"}
+
+    def _fake_delete(url, timeout=0.0):
+        deleted.append(url)
+        return _DelResp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    monkeypatch.setattr(httpx, "delete", _fake_delete)
+
+    rc = cli._memory_prune(["--type", "TOOL_RULE", "--older-than", "14d"])
+    assert rc == 0
+    assert len(deleted) == 1
+    assert "mem_old" in deleted[0]
+    assert captured["params"]["type"] == "TOOL_RULE"
+    assert "pruned 1/1" in capsys.readouterr().out
+
+
+def test_memory_prune_dry_run_deletes_nothing(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    listing = {
+        "memories": [
+            {
+                "id": "mem_a",
+                "type": "TOOL_RULE",
+                "content": "x",
+                "confidence": 0.85,
+                "createdAt": None,
+            }
+        ]
+    }
+
+    class _ListResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return listing
+
+    called = {"deleted": False}
+
+    def _no_delete(*a, **k):
+        called["deleted"] = True
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _ListResp())
+    monkeypatch.setattr(httpx, "delete", _no_delete)
+
+    rc = cli._memory_prune(["--type", "TOOL_RULE", "--dry-run"])
+    assert rc == 0
+    assert called["deleted"] is False
+    assert "dry-run" in capsys.readouterr().out
+
+
+def test_memory_prune_max_confidence_filter(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    listing = {
+        "memories": [
+            {
+                "id": "mem_lo",
+                "type": "TOOL_RULE",
+                "content": "lo",
+                "confidence": 0.85,
+                "createdAt": None,
+            },
+            {
+                "id": "mem_hi",
+                "type": "DECISION",
+                "content": "hi",
+                "confidence": 0.97,
+                "createdAt": None,
+            },
+        ]
+    }
+
+    class _ListResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return listing
+
+    deleted: list[str] = []
+
+    class _DelResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {}
+
+    def _fake_delete(url, timeout=0.0):
+        deleted.append(url)
+        return _DelResp()
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _ListResp())
+    monkeypatch.setattr(httpx, "delete", _fake_delete)
+
+    rc = cli._memory_prune(["--max-confidence", "0.9"])
+    assert rc == 0
+    assert len(deleted) == 1
+    assert "mem_lo" in deleted[0]
 
 
 def test_latest_transcript_metadata_prefers_codex_sessions(

@@ -7,11 +7,10 @@ memory client filters, and the rules CLI.
 from __future__ import annotations
 
 import json
-import pathlib
+import time
 
 import simba.hooks.post_tool_use as post_hook
 import simba.hooks.pre_tool_use as pre_hook
-
 
 # ---------- PostToolUse: error detection ----------
 
@@ -138,6 +137,99 @@ class TestDetectFailure:
         assert result is None
 
 
+class TestLeadingVerb:
+    def test_simple_command(self):
+        assert post_hook._leading_verb("ls -la /x") == "ls"
+
+    def test_skips_env_assignment(self):
+        assert post_hook._leading_verb("FOO=bar ls x") == "ls"
+
+    def test_strips_path_prefix(self):
+        assert post_hook._leading_verb("/usr/bin/find . -name x") == "find"
+
+    def test_empty(self):
+        assert post_hook._leading_verb("") == ""
+
+    def test_only_env_assignment(self):
+        assert post_hook._leading_verb("FOO=bar") == ""
+
+
+class TestProbeNotFoundSkipping:
+    _PROBES = frozenset({"ls", "bfs", "find", "stat"})
+
+    def test_skips_ls_no_such_file(self):
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "ls src/d810/families/flow_automaton"},
+            {
+                "stderr": (
+                    "ls: src/d810/families/flow_automaton: "
+                    "No such file or directory"
+                )
+            },
+            skip_probe_not_found=True,
+            probe_verbs=self._PROBES,
+        )
+        assert result is None
+
+    def test_skips_bfs_no_such_file(self):
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "bfs src/d810/recon"},
+            {"stderr": "bfs: 'src/d810/recon': No such file or directory"},
+            skip_probe_not_found=True,
+            probe_verbs=self._PROBES,
+        )
+        assert result is None
+
+    def test_does_not_skip_when_disabled(self):
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "ls missing"},
+            {"stderr": "ls: missing: No such file or directory"},
+            skip_probe_not_found=False,
+            probe_verbs=self._PROBES,
+        )
+        assert result is not None
+
+    def test_does_not_skip_non_probe_command(self):
+        # python failing with FileNotFoundError is a real mistake worth learning.
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "python3 build.py"},
+            {
+                "output": (
+                    "FileNotFoundError: [Errno 2] No such file or "
+                    "directory: 'config.yml'"
+                )
+            },
+            skip_probe_not_found=True,
+            probe_verbs=self._PROBES,
+        )
+        assert result is not None
+
+    def test_does_not_skip_probe_with_other_error(self):
+        # ls hitting a permission error IS worth learning.
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "ls /root/secret"},
+            {"stderr": "ls: /root/secret: Permission denied"},
+            skip_probe_not_found=True,
+            probe_verbs=self._PROBES,
+        )
+        assert result is not None
+
+    def test_skips_path_prefixed_probe(self):
+        result = post_hook._detect_failure(
+            "Bash",
+            {"command": "/usr/bin/find . -name nope"},
+            {"stderr": "find: './nope': No such file or directory"},
+            skip_probe_not_found=True,
+            probe_verbs=self._PROBES,
+        )
+        assert result is None
+
+
 class TestRuleDedup:
     def test_dedup_round_trip(self, tmp_path, monkeypatch):
         cache = tmp_path / "dedup.json"
@@ -236,6 +328,109 @@ class TestCheckToolRules:
         assert "tool-rule-warning" in result
         assert "ImportError" in result
         assert "pytest instead" in result
+
+
+class TestToolRuleRecencyGate:
+    """Stale TOOL_RULE matches age out of the warning injection (gate B)."""
+
+    @staticmethod
+    def _cfg(max_age_days):
+        class FakeCfg:
+            rule_check_enabled = True
+            rule_min_similarity = 0.6
+            rule_max_age_days = max_age_days
+
+        return FakeCfg()
+
+    @staticmethod
+    def _iso(days_ago):
+        return time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days_ago * 86400)
+        )
+
+    def test_drops_stale_rule(self, monkeypatch):
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: self._cfg(14))
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories",
+            lambda *a, **kw: [
+                {
+                    "content": "Bash: ls: No such file or directory",
+                    "context": "{}",
+                    "createdAt": self._iso(30),
+                    "similarity": 0.8,
+                }
+            ],
+        )
+        result = pre_hook._check_tool_rules("Bash", {"command": "ls x"}, "/tmp")
+        assert result is None
+
+    def test_keeps_fresh_rule(self, monkeypatch):
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: self._cfg(14))
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories",
+            lambda *a, **kw: [
+                {
+                    "content": "Bash: real recent rule",
+                    "context": json.dumps({"correction": "do X"}),
+                    "createdAt": self._iso(1),
+                    "similarity": 0.8,
+                }
+            ],
+        )
+        result = pre_hook._check_tool_rules("Bash", {"command": "ls x"}, "/tmp")
+        assert result is not None
+        assert "real recent rule" in result
+
+    def test_gate_disabled_keeps_ancient_rule(self, monkeypatch):
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: self._cfg(0))
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories",
+            lambda *a, **kw: [
+                {
+                    "content": "Bash: ancient rule",
+                    "context": json.dumps({"correction": "x"}),
+                    "createdAt": self._iso(365),
+                    "similarity": 0.8,
+                }
+            ],
+        )
+        result = pre_hook._check_tool_rules("Bash", {"command": "ls x"}, "/tmp")
+        assert result is not None
+
+    def test_missing_created_at_is_kept(self, monkeypatch):
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: self._cfg(14))
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories",
+            lambda *a, **kw: [
+                {
+                    "content": "Bash: rule without timestamp",
+                    "context": json.dumps({"correction": "x"}),
+                    "similarity": 0.8,
+                }
+            ],
+        )
+        result = pre_hook._check_tool_rules("Bash", {"command": "ls x"}, "/tmp")
+        assert result is not None
+
+
+class TestWithinMaxAge:
+    def test_recent_within_age(self):
+        recent = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400)
+        )
+        assert pre_hook._within_max_age(recent, 14) is True
+
+    def test_old_outside_age(self):
+        old = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400)
+        )
+        assert pre_hook._within_max_age(old, 14) is False
+
+    def test_missing_timestamp_kept(self):
+        assert pre_hook._within_max_age(None, 14) is True
+
+    def test_unparseable_timestamp_kept(self):
+        assert pre_hook._within_max_age("not-a-date", 14) is True
 
 
 # ---------- PreToolUse: truth constraints ----------
