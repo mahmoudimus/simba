@@ -23,5 +23,15 @@ class RlmConfig:
     # UserPromptSubmit: passively inject navigable transcript pointers so the
     # agent knows it can rlm_grep/rlm_peek them. Off by default (opt-in).
     inject_pointers: bool = False
-    # inert seam: "claude" (tools-only). Autonomous LLM engine deferred.
-    engine: str = "claude"
+    # Autonomous engine (opt-in): "claude" = none (agent-driven default).
+    engine: str = "claude"  # claude | claude-cli | api | local-gguf
+    engine_model: str = "haiku"  # cheap by default; never opus
+    engine_base_url: str = ""  # OpenAI/Anthropic-compatible endpoint or proxy
+    engine_api_key_env: str = "ANTHROPIC_API_KEY"  # env var holding the key
+    engine_allowed_tools: str = (
+        "mcp__neuron__rlm_recall,mcp__neuron__rlm_grep,"
+        "mcp__neuron__rlm_peek,mcp__neuron__rlm_window,Bash"
+    )
+    engine_max_turns: int = 12  # cli cost cap
+    engine_max_pointers: int = 5  # transcripts digested per run
+    engine_min_new_exchanges: int = 20  # rate-limit: min messages before a digest fires

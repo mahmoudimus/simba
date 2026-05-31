@@ -20,3 +20,15 @@ def test_defaults():
     assert cfg.transcript_source == "md"
     assert cfg.default_max_pointers == 5
     assert cfg.engine == "claude"
+
+
+def test_engine_defaults():
+    cfg = simba.config.load("rlm")
+    assert cfg.engine == "claude"
+    assert cfg.engine_model == "haiku"
+    assert cfg.engine_base_url == ""
+    assert cfg.engine_api_key_env == "ANTHROPIC_API_KEY"
+    assert "mcp__neuron__rlm_grep" in cfg.engine_allowed_tools
+    assert cfg.engine_max_turns == 12
+    assert cfg.engine_max_pointers == 5
+    assert cfg.engine_min_new_exchanges == 20
