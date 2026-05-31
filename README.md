@@ -2,7 +2,13 @@
 
 > *"Remember who you are."* — Mufasa
 
-A unified Claude Code plugin that combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), and project-aware search into a single Python package, with Codex skill support for onboarding workflows.
+[![CI](https://github.com/mahmoudimus/simba/actions/workflows/ci.yml/badge.svg)](https://github.com/mahmoudimus/simba/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Runtimes: Claude Code + Codex](https://img.shields.io/badge/runtimes-Claude%20Code%20%2B%20Codex-8a2be2.svg)](#codex-support)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A unified memory + reasoning plugin for **Claude Code _and_ Codex**. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills for **both** runtimes.
 
 ## Quick Start
 
@@ -185,7 +191,7 @@ Per-project is the default. Use global when you want simba active in every Claud
 
 ## What It Does
 
-Simba hooks into six Claude Code lifecycle events to provide persistent context across sessions:
+Simba hooks into the Claude Code **and** Codex lifecycle events to provide persistent context across sessions (see [Codex Support](#codex-support) for the Codex event mapping):
 
 | Hook | Purpose |
 |------|---------|
@@ -247,7 +253,7 @@ simba neuron install
 
 ### MCP Tools
 
-Neuron exposes 4 tools via the Model Context Protocol:
+Neuron exposes 4 verification tools via the Model Context Protocol (plus 6 RLM recall tools — see [RLM](#rlm--lossless-transcript-recall) below):
 
 | Tool | Purpose |
 |------|---------|
@@ -264,6 +270,34 @@ A local SQLite database (`.simba/simba.db`, `proven_facts` table) that stores pr
 # Run the MCP server directly
 simba neuron run --root-dir .
 ```
+
+## RLM — Lossless Transcript Recall
+
+Simba implements the **Recursive Language Model (RLM)** paradigm ([Zhang et al., arXiv:2512.24601](https://arxiv.org/abs/2512.24601)): rather than cramming a long context into the model, the full text is treated as *external data the agent navigates with code* — `grep`/`peek`/`window` over it, recursing into only the relevant slices.
+
+Simba already exports every session's **full transcript** on `PreCompact` (to `~/.claude/transcripts/{id}/`). Normally those are mined once for ≤200-char memories and then sit idle. RLM turns them into a **queryable, lossless store**: a normal vector recall becomes a *pointer* into the full transcript (every memory carries its `sessionSource`), and the agent navigates the original text to reconstruct exactly what happened — no information loss from summarization.
+
+**How it works (Claude drives the recursion):**
+
+1. `rlm_recall("what did we decide about X")` → project-scoped vector recall returns **pointers** `{snippet, transcript_id, similarity, available}`.
+2. `rlm_grep(transcript_id, "X")` → matches with line numbers + char offsets.
+3. `rlm_peek` / `rlm_window` → read the exact region losslessly; repeat across regions/transcripts as needed.
+
+Simba itself runs **no LLM** — it exposes navigation primitives as MCP tools on the [Neuron](#neuron--neuro-symbolic-logic-server) server and the agent already in the loop performs the recursion. (A `rlm.engine` config seam is reserved for an optional autonomous engine later.)
+
+### RLM MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `rlm_recall` | Find transcripts relevant to a query (project-scoped); returns navigable pointers |
+| `rlm_grep` | Regex-search a transcript; returns matches with line numbers + char offsets |
+| `rlm_peek` | Return an exact character range of a transcript |
+| `rlm_window` | Return transcript text within ±radius chars of an offset (expand a grep hit) |
+| `rlm_head` / `rlm_tail` | Return the first / last N lines of a transcript |
+
+Recall is **project-scoped** (it reuses the leak-free LanceDB recall), so a transcript from another repo never surfaces. Configure via `simba config` (`rlm` section): `max_search_matches`, `regex_timeout_seconds`, `lru_documents`, `transcript_source`, `default_max_pointers`.
+
+> **Roadmap:** This is layers 1–2 (navigation primitives + lossless transcript recall). Planned: L3 smarter retrieval (query decomposition + re-rank) and L4 procedural memory (`Experience` records).
 
 ## Orchestration — Agent Dispatch Server
 
