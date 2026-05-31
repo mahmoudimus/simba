@@ -77,13 +77,3 @@ def complete(
         conn.commit()
 
 
-def mark_error(
-    transcript_id: str, project_path: str, *, cwd: pathlib.Path | None = None
-) -> None:
-    with simba.db.get_db(cwd) as conn:
-        conn.execute(
-            "UPDATE rlm_jobs SET status='error', finished_at=? "
-            "WHERE transcript_id=? AND project_path=?",
-            (_now(), transcript_id, project_path),
-        )
-        conn.commit()

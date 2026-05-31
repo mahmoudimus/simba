@@ -202,3 +202,24 @@ class TestRlmDigestTrigger:
 
         monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
         pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=5)  # < 20 -> skip
+
+    def test_no_dispatch_when_already_claimed(self, monkeypatch):
+        import simba.config
+        import simba.hooks.pre_compact as pc
+        import simba.rlm.engine
+        import simba.rlm.jobs
+
+        monkeypatch.setattr(
+            simba.config, "load",
+            lambda section, *a, **k: type("C", (), {
+                "engine": "claude-cli", "engine_min_new_exchanges": 20
+            })(),
+        )
+
+        class _Engine:
+            def digest(self, *a, **k):
+                raise AssertionError("should not dispatch when already claimed")
+
+        monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+        monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: False)
+        pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=40)  # claim False -> skip

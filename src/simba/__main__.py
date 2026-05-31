@@ -1534,6 +1534,7 @@ def _cmd_db(args: list[str]) -> int:
     # Ensure all schemas are registered by importing modules
     import simba.neuron.truth
     import simba.orchestration.agents
+    import simba.rlm.jobs
     import simba.search.activity_tracker
     import simba.search.project_memory
     import simba.tailor.hook
@@ -1987,9 +1988,35 @@ def _cmd_rule(args: list[str]) -> int:
 
 def _cmd_rlm(args: list[str]) -> int:
     """RLM autonomous engine commands."""
-    if not args or args[0] != "digest":
-        print("Usage: simba rlm digest <transcript_id|--latest>", file=sys.stderr)
+    if not args or args[0] not in ("digest", "complete"):
+        print(
+            "Usage: simba rlm digest <transcript_id|--latest>\n"
+            "       simba rlm complete <transcript_id> [--stored N]",
+            file=sys.stderr,
+        )
         return 1
+
+    if args[0] == "complete":
+        crest = args[1:]
+        if not crest:
+            print(
+                "Usage: simba rlm complete <transcript_id> [--stored N]",
+                file=sys.stderr,
+            )
+            return 1
+        tid = crest[0]
+        n_stored = 0
+        if "--stored" in crest:
+            i = crest.index("--stored")
+            if i + 1 < len(crest):
+                try:
+                    n_stored = int(crest[i + 1])
+                except ValueError:
+                    n_stored = 0
+        import simba.rlm.jobs
+        simba.rlm.jobs.complete(tid, str(pathlib.Path.cwd()), n_stored)
+        print(f"marked complete: {tid} (stored {n_stored})")
+        return 0
 
     rest = args[1:]
     transcript_id = rest[0] if rest else ""

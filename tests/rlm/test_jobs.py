@@ -38,11 +38,3 @@ def test_complete_updates_status():
     assert row["n_stored"] == 7
 
 
-def test_mark_error():
-    jobs.claim("t1", "/p", "claude-cli")
-    jobs.mark_error("t1", "/p")
-    with simba.db.get_db() as conn:
-        row = conn.execute(
-            "SELECT status FROM rlm_jobs WHERE transcript_id='t1'"
-        ).fetchone()
-    assert row["status"] == "error"

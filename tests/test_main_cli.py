@@ -397,6 +397,20 @@ def test_parse_duration_seconds_invalid() -> None:
     assert cli._parse_duration_seconds("xd") is None
 
 
+def test_rlm_complete_marks_done(monkeypatch, capsys):
+    import simba.rlm.jobs
+
+    calls = {}
+    monkeypatch.setattr(
+        simba.rlm.jobs, "complete",
+        lambda tid, project, n, **k: calls.update(tid=tid, n=n),
+    )
+    rc = cli._cmd_rlm(["complete", "sess-1", "--stored", "5"])
+    assert rc == 0
+    assert calls == {"tid": "sess-1", "n": 5}
+    assert "complete" in capsys.readouterr().out.lower()
+
+
 def test_memory_prune_requires_a_filter(capsys) -> None:
     rc = cli._memory_prune([])
     assert rc == 1

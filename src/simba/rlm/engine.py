@@ -28,7 +28,7 @@ _DIGEST_PROMPT = (
     "--context <details> --project-path '{cwd}' --session-source '{tid}'\n"
     "TYPE is one of WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, "
     "PREFERENCE. Store 5-15 high-value, specific learnings; skip generic "
-    "knowledge."
+    "knowledge. When finished, run: simba rlm complete '{tid}' --stored <count>."
 )
 
 
@@ -64,6 +64,7 @@ class ClaudeCliEngine:
         subprocess.Popen(
             self._argv(prompt),
             env=self._env(),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
