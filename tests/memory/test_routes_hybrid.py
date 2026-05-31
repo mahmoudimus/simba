@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pathlib
-
 import httpx
 import pytest
 import pytest_asyncio
