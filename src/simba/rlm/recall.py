@@ -23,24 +23,18 @@ class Pointer:
         return dataclasses.asdict(self)
 
 
-def route(query, cwd, *, max_pointers=None, provider=None):
-    """Return candidate transcript pointers for *query*, scoped to *cwd*."""
+def pointers_from_memories(memories, cwd, *, provider=None):
+    """Turn recalled memory dicts into transcript pointers (no recall I/O).
+
+    Lets a caller that already has recall results (e.g. the UserPromptSubmit
+    hook) build pointers without issuing a second recall.
+    """
     import simba.config
-    import simba.hooks._memory_client
     import simba.rlm.config  # ensures the "rlm" section is registered
     import simba.rlm.transcripts
 
-    cfg = simba.config.load("rlm")
-    if max_pointers is None:
-        max_pointers = cfg.default_max_pointers
     if provider is None:
-        provider = simba.rlm.transcripts.TranscriptProvider(cfg)
-
-    memories: list[dict] = []
-    with contextlib.suppress(Exception):
-        memories = simba.hooks._memory_client.recall_memories(
-            query, project_path=cwd, max_results=max_pointers
-        )
+        provider = simba.rlm.transcripts.TranscriptProvider(simba.config.load("rlm"))
 
     pointers: list[Pointer] = []
     for m in memories:
@@ -55,3 +49,21 @@ def route(query, cwd, *, max_pointers=None, provider=None):
             )
         )
     return pointers
+
+
+def route(query, cwd, *, max_pointers=None, provider=None):
+    """Recall for *query* (project-scoped to *cwd*) and return transcript pointers."""
+    import simba.config
+    import simba.hooks._memory_client
+    import simba.rlm.config  # ensures the "rlm" section is registered
+
+    cfg = simba.config.load("rlm")
+    if max_pointers is None:
+        max_pointers = cfg.default_max_pointers
+
+    memories: list[dict] = []
+    with contextlib.suppress(Exception):
+        memories = simba.hooks._memory_client.recall_memories(
+            query, project_path=cwd, max_results=max_pointers
+        )
+    return pointers_from_memories(memories, cwd, provider=provider)

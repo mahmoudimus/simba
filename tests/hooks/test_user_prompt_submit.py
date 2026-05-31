@@ -137,7 +137,9 @@ class TestRlmPointerInjection:
         monkeypatch.setattr(
             "simba.config.load", lambda section, *a, **k: self._Cfg(False)
         )
-        out = simba.hooks.user_prompt_submit._rlm_pointer_context("a prompt", "/p")
+        out = simba.hooks.user_prompt_submit._rlm_pointer_context(
+            [{"content": "x"}], "/p"
+        )
         assert out == ""
 
     def test_on_surfaces_only_available(self, monkeypatch):
@@ -147,13 +149,15 @@ class TestRlmPointerInjection:
             "simba.config.load", lambda section, *a, **k: self._Cfg(True)
         )
         monkeypatch.setattr(
-            "simba.rlm.recall.route",
-            lambda q, cwd, **k: [
+            "simba.rlm.recall.pointers_from_memories",
+            lambda mems, cwd, **k: [
                 rlm_recall.Pointer("decided X", "sid-1", "/p", 0.8, True),
                 rlm_recall.Pointer("no transcript", None, "/p", 0.7, False),
             ],
         )
-        out = simba.hooks.user_prompt_submit._rlm_pointer_context("a prompt", "/p")
+        out = simba.hooks.user_prompt_submit._rlm_pointer_context(
+            [{"content": "x"}], "/p"
+        )
         assert "<rlm-pointers>" in out
         assert "sid-1" in out
         assert "no transcript" not in out  # unavailable filtered out
@@ -162,6 +166,10 @@ class TestRlmPointerInjection:
         monkeypatch.setattr(
             "simba.config.load", lambda section, *a, **k: self._Cfg(True)
         )
-        monkeypatch.setattr("simba.rlm.recall.route", lambda q, cwd, **k: [])
-        out = simba.hooks.user_prompt_submit._rlm_pointer_context("a prompt", "/p")
+        monkeypatch.setattr(
+            "simba.rlm.recall.pointers_from_memories", lambda mems, cwd, **k: []
+        )
+        out = simba.hooks.user_prompt_submit._rlm_pointer_context(
+            [{"content": "x"}], "/p"
+        )
         assert out == ""

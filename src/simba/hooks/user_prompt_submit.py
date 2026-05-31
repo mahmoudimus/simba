@@ -16,11 +16,12 @@ import simba.hooks._memory_client
 import simba.search.rag_context
 
 
-def _rlm_pointer_context(prompt: str, cwd_str: str | None) -> str:
+def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
     """Return an <rlm-pointers> block when rlm.inject_pointers is enabled.
 
-    Surfaces navigable transcripts (project-scoped) so the agent knows it can
-    rlm_grep/rlm_peek them for lossless detail. Never raises into the hook.
+    Reuses the memories already recalled this turn (no second recall) and
+    surfaces navigable transcripts so the agent knows it can rlm_grep/rlm_peek
+    them for lossless detail. Never raises into the hook.
     """
     import simba.config
     import simba.rlm.config  # registers the "rlm" section
@@ -28,7 +29,8 @@ def _rlm_pointer_context(prompt: str, cwd_str: str | None) -> str:
 
     if not simba.config.load("rlm").inject_pointers:
         return ""
-    nav = [p for p in simba.rlm.recall.route(prompt, cwd_str) if p.available]
+    pointers = simba.rlm.recall.pointers_from_memories(memories, cwd_str)
+    nav = [p for p in pointers if p.available]
     if not nav:
         return ""
     lines = [
@@ -59,6 +61,7 @@ def main(hook_input: dict) -> str:
         parts.append(core_blocks)
 
     # 2. Memory: recall relevant memories using prompt
+    memories: list[dict] = []
     if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
         project_path = str(cwd) if cwd_str else None
         memories = simba.hooks._memory_client.recall_memories(
@@ -80,9 +83,9 @@ def main(hook_input: dict) -> str:
             pass
 
     # 4. RLM: surface navigable transcript pointers (opt-in via rlm.inject_pointers)
-    if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
+    if memories:
         with contextlib.suppress(Exception):
-            rlm_ctx = _rlm_pointer_context(prompt, cwd_str)
+            rlm_ctx = _rlm_pointer_context(memories, cwd_str)
             if rlm_ctx:
                 parts.append(rlm_ctx)
 

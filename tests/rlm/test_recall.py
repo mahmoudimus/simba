@@ -73,3 +73,17 @@ def test_pointer_to_dict(monkeypatch):
         "snippet": "c", "transcript_id": "s1", "project_path": "/p",
         "similarity": 0.9, "available": True,
     }
+
+
+def test_pointers_from_memories_builds_pointers():
+    ps = recall.pointers_from_memories(
+        [
+            {"content": "c", "sessionSource": "s1",
+             "projectPath": "/p", "similarity": 0.9},
+            {"content": "no ss", "similarity": 0.5},
+        ],
+        "/p",
+        provider=_FakeProvider({"s1"}),
+    )
+    assert ps[0].transcript_id == "s1" and ps[0].available is True
+    assert ps[1].transcript_id is None and ps[1].available is False
