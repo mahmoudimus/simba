@@ -49,8 +49,17 @@ async def search_memories(
     min_similarity: float,
     max_results: int,
     filters: dict[str, typing.Any] | None = None,
+    *,
+    include_global: bool = False,
 ) -> list[dict[str, typing.Any]]:
-    """Search memories by vector similarity."""
+    """Search memories by vector similarity.
+
+    When ``filters['projectPath']`` is set, results are scoped to that
+    project: memories tagged with a *different* project are dropped, and
+    untagged (global / project-less) memories are dropped too unless
+    ``include_global`` is True.  This prevents cross-project leakage on the
+    common case of memories stored without a project.
+    """
     if filters is None:
         filters = {}
 
@@ -80,12 +89,14 @@ async def search_memories(
                 continue
 
             filter_project = filters.get("projectPath")
-            if (
-                filter_project
-                and r.get("projectPath")
-                and r["projectPath"] != filter_project
-            ):
-                continue
+            if filter_project:
+                rp = r.get("projectPath")
+                if not rp:
+                    # Untagged/global memory — surface only when allowed.
+                    if not include_global:
+                        continue
+                elif rp != filter_project:
+                    continue
 
             memories.append({**r, "similarity": similarity})
 
