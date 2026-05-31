@@ -12,31 +12,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import simba.kg.store
-import simba.neuron.truth
 import simba.neuron.verify
 
 mcp = FastMCP("Neuron")
-
-
-# --- Truth DB tools ---
-
-
-@mcp.tool()
-def truth_add(subject: str, predicate: str, object: str, proof: str) -> str:
-    """Records a proven fact into the Truth DB.
-
-    Use this ONLY when a verifier (Z3/Datalog) has proven a hypothesis.
-    """
-    return simba.neuron.truth.truth_add(subject, predicate, object, proof)
-
-
-@mcp.tool()
-def truth_query(subject: str | None = None, predicate: str | None = None) -> str:
-    """Queries the Truth DB for existing proven facts.
-
-    Use this BEFORE assuming capabilities or behavior about the codebase.
-    """
-    return simba.neuron.truth.truth_query(subject, predicate)
 
 
 # --- Knowledge-graph tools ---

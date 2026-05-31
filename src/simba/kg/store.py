@@ -59,16 +59,37 @@ END;
 """
 
 
+def backup_and_drop_proven_facts(conn: sqlite3.Connection) -> None:
+    """Retire the legacy ``proven_facts`` table, preserving its rows once.
+
+    The temporal ``kg_edges`` store supersedes ``proven_facts``.  On first
+    connect we rename any surviving ``proven_facts`` to ``proven_facts_bak``
+    (dropping any prior ``proven_facts_bak`` first) so its rows stay available
+    for later re-analysis, and drop the even-older ``proven_facts_legacy`` if
+    present.  Idempotent: a no-op once ``proven_facts`` is gone.
+    """
+    has_proven = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='proven_facts'"
+    ).fetchone()
+    if has_proven:
+        conn.execute("DROP TABLE IF EXISTS proven_facts_bak")
+        conn.execute("ALTER TABLE proven_facts RENAME TO proven_facts_bak")
+    conn.execute("DROP TABLE IF EXISTS proven_facts_legacy")
+    conn.commit()
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create ``kg_edges`` plus its FTS5 mirror and sync triggers.
 
     Core table/indexes are always created; the FTS5 virtual table and its
     triggers are installed only when the SQLite build supports FTS5 (otherwise
-    ``kg_query`` falls back to non-FTS filtering).
+    ``kg_query`` falls back to non-FTS filtering).  The legacy ``proven_facts``
+    table is retired here so the migration runs once on first connect.
     """
     conn.executescript(_SCHEMA_BASE_SQL)
     with contextlib.suppress(sqlite3.OperationalError):
         conn.executescript(_SCHEMA_FTS_SQL)
+    backup_and_drop_proven_facts(conn)
 
 
 simba.db.register_schema(_init_schema)

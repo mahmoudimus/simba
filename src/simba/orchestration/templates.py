@@ -31,7 +31,7 @@ Since you may be running asynchronously via `dispatch_agent`:
 **PROJECT CONTEXT:**
 - Architecture: `.claude/knowledge/developer_guide.md`
 - Issue Tracking: `tk` (tickets) - NOT markdown TODOs
-- Truth DB: Query facts via `truth_query(subject=...)`
+- Knowledge Graph: Query facts via `kg_query(subject=...)`
 """,
     "search_tools": """
 **SEARCH TOOLS (use these, not grep/find):**
@@ -41,8 +41,8 @@ Since you may be running asynchronously via `dispatch_agent`:
 - `kit usages . "Symbol"` - Find references
 """,
     "neuron_tools": """
-- `truth_query(subject, predicate)` - Query proven facts from Truth DB
-- `truth_add(subject, predicate, object, proof)` - Record proven fact
+- `kg_query(subject, predicate)` - Query facts from the knowledge graph
+- `kg_add(subject, predicate, object, proof)` - Record a fact edge
 - `verify_z3(python_script)` - Execute Z3 proof script
 - `analyze_datalog(datalog_code, facts_dir)` - Run Souffle analysis
 - `dispatch_agent(agent_name, ticket_id, instructions)` - Launch async subagent
@@ -90,18 +90,18 @@ You are the **Hub** of an agent orchestration system.
 """,
     "prime_directive": """
 1. **Delegate First:** If a task requires reading file content or running commands, dispatch a Subagent.
-2. **Epistemic Check:** Before assuming a fact, query the Truth DB.
+2. **Epistemic Check:** Before assuming a fact, query the knowledge graph.
 3. **No Wall of Text:** Never allow a tool to dump >50 lines of code/logs into your context.
 """,
     "epistemic_protocol": """
 **Never guess.**
 
 1. **DOUBT:** "I think X supports Y..." -> **STOP.**
-2. **QUERY:** `truth_query(subject="X")`
+2. **QUERY:** `kg_query(subject="X")`
 3. **PROVE:** If missing, delegate to `@verifier`.
-4. **COMMIT:** `truth_add(...)` with proof.
+4. **COMMIT:** `kg_add(...)` with proof.
 
-Facts are stored in `.simba/simba.db` (`proven_facts` table).
+Facts are stored in `.simba/simba.db` (`kg_edges` table).
 """,
     "tickets_workflow": """
 Use `tk` to manage the work queue.
@@ -114,7 +114,7 @@ Use `tk` to manage the work queue.
     "grounding_workflow": """
 Before planning complex changes, verify assumptions.
 
-- **Query:** `truth_query(subject="...")`
+- **Query:** `kg_query(subject="...")`
 - **Verify:** If unsure, delegate to `@verifier`.
 """,
     "nav_tools": """
@@ -131,7 +131,7 @@ AGENT_TEMPLATES: dict[str, str] = {
 ---
 name: verifier
 description: Uses Z3 Theorem Prover to detect logical contradictions or prove code equivalence.
-tools: [Read, Write, Edit, Bash, Grep, Glob, mcp__neuron__truth_add, mcp__neuron__verify_z3]
+tools: [Read, Write, Edit, Bash, Grep, Glob, mcp__neuron__kg_add, mcp__neuron__verify_z3]
 ---
 You are a Formal Verification Engineer. You do not argue; you calculate.
 
@@ -141,7 +141,7 @@ You are a Formal Verification Engineer. You do not argue; you calculate.
 2. Construct a Python Z3 script (do not write to file, keep in memory).
 3. Call tool `verify_z3(python_script=...)`.
 4. If output contains "PROVEN":
-   - Call tool `truth_add(subject=..., predicate="is_equivalent", object=..., proof="z3_verified")`.
+   - Call tool `kg_add(subject=..., predicate="is_equivalent", object=..., proof="z3_verified")`.
 
 **USE CASE 1: CONTRADICTION DETECTION**
 If the Orchestrator is confused about conflicting requirements:
@@ -204,7 +204,7 @@ Your goal is to answer questions about code structure, reachability, and depende
 ---
 name: researcher
 description: Codebase researcher - explores patterns, documents findings, and gathers context without modifying code
-tools: [Read, Grep, Glob, Bash, mcp__neuron__truth_query, mcp__cclsp__find_definition, mcp__cclsp__find_references]
+tools: [Read, Grep, Glob, Bash, mcp__neuron__kg_query, mcp__cclsp__find_definition, mcp__cclsp__find_references]
 ---
 
 You are a Researcher. You explore, document, and report. You do NOT modify code.
@@ -225,7 +225,7 @@ You are a Researcher. You explore, document, and report. You do NOT modify code.
 ---
 name: implementer
 description: Implementation specialist - executes plans, writes code, runs tests, reports results
-tools: [Read, Write, Edit, Grep, Glob, Bash, mcp__neuron__truth_query, mcp__cclsp__find_definition, mcp__cclsp__find_references]
+tools: [Read, Write, Edit, Grep, Glob, Bash, mcp__neuron__kg_query, mcp__cclsp__find_definition, mcp__cclsp__find_references]
 ---
 
 You are an Implementer. You execute plans precisely. You do NOT make architectural decisions.

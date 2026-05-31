@@ -64,7 +64,7 @@ def _store_fact(
     *,
     cwd: str,
 ) -> str:
-    """Store a fact triple via simba.neuron.truth."""
+    """Store a fact triple into the sync proven_facts table."""
     import simba.db
 
     with simba.db.get_db(Path(cwd)) as conn:
@@ -98,7 +98,7 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
     instructions = (
         "Extract (subject, predicate, object) fact triples from "
         "these memories. For each fact, call "
-        "truth_add(subject, predicate, object, "
+        "kg_add(subject, predicate, object, "
         'proof="researcher_extracted").\n\n'
         f"Memories:\n{memory_text}"
     )

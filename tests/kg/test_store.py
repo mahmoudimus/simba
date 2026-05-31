@@ -9,6 +9,7 @@ import pytest
 
 import simba.db
 from simba.kg import kg_add, kg_invalidate, kg_query
+from simba.kg.store import backup_and_drop_proven_facts
 
 
 @pytest.fixture(autouse=True)
@@ -146,6 +147,55 @@ class TestKgTriggerSync:
         finally:
             conn.close()
         assert count == 1
+
+
+class TestProvenFactsMigration:
+    def test_proven_facts_backed_up_and_dropped_on_connect(self) -> None:
+        # Pre-create a legacy 4-col proven_facts table with a row.
+        db_path = simba.db.get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE proven_facts (subject TEXT, predicate TEXT, "
+            "object TEXT, proof TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
+            ("old", "fact", "value", "legacy"),
+        )
+        conn.commit()
+        conn.close()
+
+        # Opening via get_db runs the kg schema initializer → migration.
+        with simba.db.get_db():
+            pass
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            tables = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "proven_facts" not in tables
+            assert "proven_facts_bak" in tables
+            rows = conn.execute("SELECT * FROM proven_facts_bak").fetchall()
+            assert [tuple(r) for r in rows] == [("old", "fact", "value", "legacy")]
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_already_gone(self) -> None:
+        # No proven_facts table exists → migration is a no-op.
+        with simba.db.get_db() as conn:
+            backup_and_drop_proven_facts(conn)
+            tables = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "proven_facts" not in tables
 
 
 class TestKgProjectScoping:
