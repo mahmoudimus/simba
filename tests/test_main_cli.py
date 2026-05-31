@@ -799,3 +799,47 @@ def test_apply_codex_feature_flag_skips_when_create_disabled(
     status = cli._apply_codex_feature_flag(missing, create_if_missing=False)
     assert status == "not-present"
     assert not missing.exists()
+
+
+def test_rlm_digest_dispatches(monkeypatch, capsys):
+    import simba.rlm.engine
+    import simba.rlm.jobs
+
+    dispatched = {}
+
+    class _Engine:
+        def digest(self, tid, query, *, cwd):
+            dispatched["tid"] = tid
+            dispatched["cwd"] = cwd
+
+    monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+    monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: True)
+
+    rc = cli._cmd_rlm(["digest", "sess-1"])
+    assert rc == 0
+    assert dispatched["tid"] == "sess-1"
+    assert "dispatched" in capsys.readouterr().out
+
+
+def test_rlm_digest_no_engine(monkeypatch, capsys):
+    import simba.rlm.engine
+
+    monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: None)
+    rc = cli._cmd_rlm(["digest", "sess-1"])
+    assert rc == 1
+    assert "engine" in capsys.readouterr().out.lower()
+
+
+def test_rlm_digest_dedup_skips(monkeypatch, capsys):
+    import simba.rlm.engine
+    import simba.rlm.jobs
+
+    class _Engine:
+        def digest(self, tid, query, *, cwd):
+            raise AssertionError("should not dispatch when already claimed")
+
+    monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+    monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: False)
+    rc = cli._cmd_rlm(["digest", "sess-1"])
+    assert rc == 0
+    assert "already" in capsys.readouterr().out.lower()

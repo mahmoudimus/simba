@@ -26,6 +26,7 @@ Usage:
     simba config <cmd>     Unified configuration (get/set/list/show)
     simba markers <cmd>    Discover, audit, and update SIMBA markers
     simba rule <cmd>       Manage tool rules (auto-learned + manual)
+    simba rlm <cmd>        RLM autonomous engine commands (digest)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -1984,6 +1985,50 @@ def _cmd_rule(args: list[str]) -> int:
     return simba.rules_cli.main(args)
 
 
+def _cmd_rlm(args: list[str]) -> int:
+    """RLM autonomous engine commands."""
+    if not args or args[0] != "digest":
+        print("Usage: simba rlm digest <transcript_id|--latest>", file=sys.stderr)
+        return 1
+
+    rest = args[1:]
+    transcript_id = rest[0] if rest else ""
+    if transcript_id in ("", "--latest"):
+        transcripts = pathlib.Path.home() / ".claude" / "transcripts"
+        dirs = (
+            [d for d in transcripts.iterdir() if d.is_dir()]
+            if transcripts.is_dir()
+            else []
+        )
+        if not dirs:
+            print("no transcripts found", file=sys.stderr)
+            return 1
+        transcript_id = max(dirs, key=lambda d: d.stat().st_mtime).name
+
+    import simba.config
+    import simba.rlm.config  # registers "rlm"
+    import simba.rlm.engine
+    import simba.rlm.jobs
+
+    cfg = simba.config.load("rlm")
+    engine = simba.rlm.engine.get_engine(cfg)
+    if engine is None:
+        print(
+            f"rlm.engine='{cfg.engine}' has no autonomous engine; "
+            "set it to claude-cli (simba config set rlm.engine claude-cli)"
+        )
+        return 1
+
+    project = str(pathlib.Path.cwd())
+    if not simba.rlm.jobs.claim(transcript_id, project, cfg.engine):
+        print(f"already digested/running: {transcript_id}")
+        return 0
+
+    engine.digest(transcript_id, "", cwd=project)
+    print(f"digest dispatched for {transcript_id} via {cfg.engine}")
+    return 0
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -2029,6 +2074,8 @@ def main() -> None:
         sys.exit(_cmd_markers(rest))
     elif cmd == "rule":
         sys.exit(_cmd_rule(rest))
+    elif cmd == "rlm":
+        sys.exit(_cmd_rlm(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:
