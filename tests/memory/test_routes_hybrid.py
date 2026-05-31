@@ -124,3 +124,23 @@ class TestHybridDisabled:
         )
         assert resp.status_code == 200
         assert len(resp.json()["memories"]) >= 1
+
+
+class TestReindex:
+    @pytest.mark.asyncio
+    async def test_reindex_rebuilds_from_lancedb(self, hybrid_client) -> None:
+        ac, fts_path, _ = hybrid_client
+        await _store(ac, "reindexable nu memory content")
+        # Simulate drift by wiping the mirror out of band.
+        conn = fts.connect(fts_path)
+        try:
+            conn.execute("DELETE FROM memory_fts")
+            conn.commit()
+        finally:
+            conn.close()
+        assert _mirror_count(fts_path) == 0
+
+        resp = await ac.post("/reindex")
+        assert resp.status_code == 200
+        assert resp.json()["indexed"] == 1
+        assert _mirror_count(fts_path) == 1

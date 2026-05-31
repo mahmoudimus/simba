@@ -973,6 +973,7 @@ Subcommands:
     delete   Delete a memory by ID
     prune    Bulk-delete memories by age / confidence / type
     update   Update memory metadata
+    reindex  Rebuild the hybrid-recall FTS keyword mirror from LanceDB
 
 store options:
     --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
@@ -1052,10 +1053,37 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_prune(rest)
     elif subcmd == "update":
         return _memory_update(rest)
+    elif subcmd == "reindex":
+        return _memory_reindex(rest)
     else:
         print(f"Unknown memory subcommand: {subcmd}")
         print(_MEMORY_USAGE)
         return 1
+
+
+def _memory_reindex(args: list[str]) -> int:
+    """Force a rebuild of the hybrid-recall FTS keyword mirror from LanceDB."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(f"{url}/reindex", timeout=60.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    if body.get("status") == "no_mirror":
+        print("no FTS mirror configured (hybrid recall disabled?)")
+        return 0
+    print(f"reindexed: {body.get('indexed', 0)} memories")
+    return 0
 
 
 def _memory_store(args: list[str]) -> int:

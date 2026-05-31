@@ -428,6 +428,28 @@ async def trigger_sync(request: fastapi.Request) -> dict:
     return {"status": "triggered", "cycle": scheduler.cycle_count + 1}
 
 
+@router.post("/reindex")
+async def reindex(request: fastapi.Request) -> dict:
+    """Force a full rebuild of the FTS keyword mirror from LanceDB."""
+    table = request.app.state.table
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if not fts_path:
+        return {"status": "no_mirror"}
+
+    rows = await table.query().to_list()
+    non_system = [r for r in rows if r.get("type") != "SYSTEM"]
+
+    def _rebuild() -> int:
+        conn = simba.memory.fts.connect(fts_path)
+        try:
+            return simba.memory.fts.rebuild(conn, non_system)
+        finally:
+            conn.close()
+
+    indexed = await asyncio.to_thread(_rebuild)
+    return {"status": "reindexed", "indexed": indexed}
+
+
 class PatchRequest(pydantic.BaseModel):
     """Partial update to a memory record."""
 
