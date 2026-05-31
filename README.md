@@ -283,7 +283,7 @@ Simba already exports every session's **full transcript** on `PreCompact` (to `~
 2. `rlm_grep(transcript_id, "X")` → matches with line numbers + char offsets.
 3. `rlm_peek` / `rlm_window` → read the exact region losslessly; repeat across regions/transcripts as needed.
 
-Simba itself runs **no LLM** — it exposes navigation primitives as MCP tools on the [Neuron](#neuron--neuro-symbolic-logic-server) server and the agent already in the loop performs the recursion. (A `rlm.engine` config seam is reserved for an optional autonomous engine later.)
+By default Simba runs **no LLM** — it exposes navigation primitives as MCP tools on the [Neuron](#neuron--neuro-symbolic-logic-server) server and the agent already in the loop performs the recursion. An **opt-in autonomous engine** (`rlm.engine`) can also run it without any agent present — see [below](#autonomous-engine-opt-in).
 
 ### RLM MCP Tools
 
@@ -297,7 +297,22 @@ Simba itself runs **no LLM** — it exposes navigation primitives as MCP tools o
 
 Recall is **project-scoped** (it reuses the leak-free LanceDB recall), so a transcript from another repo never surfaces. Configure via `simba config` (`rlm` section): `max_search_matches`, `regex_timeout_seconds`, `lru_documents`, `transcript_source`, `default_max_pointers`.
 
-> **Roadmap:** This is layers 1–2 (navigation primitives + lossless transcript recall). Planned: L3 smarter retrieval (query decomposition + re-rank) and L4 procedural memory (`Experience` records).
+### Autonomous engine (opt-in)
+
+By default RLM is **agent-driven** and passive injection is off. Two opt-in knobs:
+
+- **Passive pointers** — `simba config set rlm.inject_pointers true` makes `UserPromptSubmit` surface navigable transcripts (an `<rlm-pointers>` block) every turn, so the agent knows it can go lossless.
+- **Autonomous engine** — `simba config set rlm.engine claude-cli` lets Simba run the recursion itself in **agentless** contexts. After a session compacts (`PreCompact`), it spawns a **detached, cheap** `claude -p` (default `--model haiku`, never Opus) that navigates the transcript via the `rlm_*` tools and stores memories. Default `rlm.engine=claude` ⇒ off (zero extra cost).
+
+```bash
+simba config set rlm.engine claude-cli   # opt in (default model: haiku)
+simba rlm digest --latest                # manual one-shot on the newest transcript
+simba rlm complete <id> --stored N       # the spawned agent calls this to close its job
+```
+
+Guardrails: opt-in, cheap-by-default, **detached** (never blocks a hook), rate-limited (`engine_min_new_exchanges`), and deduped via the `rlm_jobs` table. Point it at a cheaper backend (DeepSeek/OpenRouter/local) with `engine_base_url` + `engine_api_key_env`.
+
+> **Roadmap:** Layers 1–2 (navigation + lossless recall) and the autonomous engine **Phase 1 (`claude-cli`)** are implemented. Planned: engine phases **`api`** (OpenAI-compatible / DeepSeek) and **`local-gguf`** (offline); **L3** hybrid BM25+vector recall; **L4** temporal entity-relationship knowledge graph.
 
 ## Orchestration — Agent Dispatch Server
 
