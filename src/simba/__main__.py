@@ -590,7 +590,7 @@ def _cmd_install(args: list[str]) -> int:
     else:
         skills_dir = pathlib.Path.cwd() / ".claude" / "skills"
 
-    _SIMBA_PERMISSION = "Bash(simba:*)"
+    simba_permission = "Bash(simba:*)"
 
     project_dir = pathlib.Path.cwd()
 
@@ -599,8 +599,8 @@ def _cmd_install(args: list[str]) -> int:
             del settings["hooks"]
         perms = settings.get("permissions", {})
         allow = perms.get("allow", [])
-        if _SIMBA_PERMISSION in allow:
-            allow.remove(_SIMBA_PERMISSION)
+        if simba_permission in allow:
+            allow.remove(simba_permission)
             perms["allow"] = allow
             settings["permissions"] = perms
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -615,14 +615,14 @@ def _cmd_install(args: list[str]) -> int:
     settings["hooks"] = _build_hooks_config()
     perms = settings.setdefault("permissions", {})
     allow = perms.setdefault("allow", [])
-    if _SIMBA_PERMISSION not in allow:
-        allow.append(_SIMBA_PERMISSION)
+    if simba_permission not in allow:
+        allow.append(simba_permission)
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     scope = "global" if is_global else "project"
     print(f"Simba hooks registered ({scope}) in {settings_path}")
     hooks_list = ", ".join(_CLAUDE_HOOK_EVENTS)
     print(f"  {len(_CLAUDE_HOOK_EVENTS)} Claude hooks: {hooks_list}")
-    print(f"  permission granted: {_SIMBA_PERMISSION}")
+    print(f"  permission granted: {simba_permission}")
 
     skill_count = _install_skills(skills_dir)
     if skill_count:
@@ -759,7 +759,9 @@ def _cmd_codex_extract(args: list[str]) -> int:
         learnings = _extract_learnings(text, max_items=15)
         if not learnings:
             print("No candidate learnings found heuristically.")
-            print("Fallback: run `simba codex-extract` without --run for manual prompt.")
+            print(
+                "Fallback: run `simba codex-extract` without --run for manual prompt."
+            )
             return 1
 
         daemon = "http://localhost:8741"
@@ -1093,7 +1095,10 @@ def _memory_store(args: list[str]) -> int:
     try:
         confidence = float(confidence_raw) if confidence_raw else 0.85
     except ValueError:
-        print(f"Error: --confidence must be a float, got '{confidence_raw}'", file=sys.stderr)
+        print(
+            f"Error: --confidence must be a float, got '{confidence_raw}'",
+            file=sys.stderr,
+        )
         return 1
 
     payload: dict = {
@@ -1122,7 +1127,10 @@ def _memory_store(args: list[str]) -> int:
     if status == "stored":
         print(f"stored: {body.get('id', '?')}")
     elif status == "duplicate":
-        print(f"duplicate: existing={body.get('existing_id', '?')} similarity={body.get('similarity', 0):.2f}")
+        print(
+            f"duplicate: existing={body.get('existing_id', '?')} "
+            f"similarity={body.get('similarity', 0):.2f}"
+        )
     else:
         print(f"status: {status}")
     return 0
@@ -1136,7 +1144,7 @@ def _memory_recall(args: list[str]) -> int:
     # Query is everything that isn't a --flag or its value
     skip_next = False
     query_parts: list[str] = []
-    for i, tok in enumerate(args):
+    for tok in args:
         if skip_next:
             skip_next = False
             continue
@@ -1147,7 +1155,10 @@ def _memory_recall(args: list[str]) -> int:
     query = " ".join(query_parts).strip()
 
     if not query:
-        print("Usage: simba memory recall [--limit N] [--project-path P] <query text>", file=sys.stderr)
+        print(
+            "Usage: simba memory recall [--limit N] [--project-path P] <query text>",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -1158,7 +1169,9 @@ def _memory_recall(args: list[str]) -> int:
 
     import simba.hooks._memory_client
 
-    memories = simba.hooks._memory_client.recall_memories(query, project_path=project_path, max_results=limit)
+    memories = simba.hooks._memory_client.recall_memories(
+        query, project_path=project_path, max_results=limit
+    )
     if not memories:
         print("no memories found")
         return 0
@@ -1203,7 +1216,10 @@ def _memory_list(args: list[str]) -> int:
         try:
             memories = memories[: int(limit_raw)]
         except ValueError:
-            print(f"Error: --limit must be an integer, got '{limit_raw}'", file=sys.stderr)
+            print(
+                f"Error: --limit must be an integer, got '{limit_raw}'",
+                file=sys.stderr,
+            )
             return 1
 
     if not memories:
@@ -1382,7 +1398,11 @@ def _memory_update(args: list[str]) -> int:
     import simba.hooks._memory_client
 
     if not args or args[0].startswith("--"):
-        print("Usage: simba memory update <memory_id> [--project-path PATH] [--session-source ID]", file=sys.stderr)
+        print(
+            "Usage: simba memory update <memory_id> "
+            "[--project-path PATH] [--session-source ID]",
+            file=sys.stderr,
+        )
         return 1
 
     memory_id = args[0]
@@ -1391,7 +1411,10 @@ def _memory_update(args: list[str]) -> int:
     session_source = _parse_opt_value(rest, "--session-source")
 
     if project_path is None and session_source is None:
-        print("Error: at least one of --project-path or --session-source is required", file=sys.stderr)
+        print(
+            "Error: at least one of --project-path or --session-source is required",
+            file=sys.stderr,
+        )
         return 1
 
     payload: dict = {}
