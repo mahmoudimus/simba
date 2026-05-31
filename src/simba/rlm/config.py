@@ -20,5 +20,8 @@ class RlmConfig:
     transcript_source: str = "md"  # "md" | "jsonl"
     # recall.py — router
     default_max_pointers: int = 5
+    # UserPromptSubmit: passively inject navigable transcript pointers so the
+    # agent knows it can rlm_grep/rlm_peek them. Off by default (opt-in).
+    inject_pointers: bool = False
     # inert seam: "claude" (tools-only). Autonomous LLM engine deferred.
     engine: str = "claude"

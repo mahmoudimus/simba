@@ -6,6 +6,7 @@ queries memory daemon for relevant memories, outputs combined context.
 
 from __future__ import annotations
 
+import contextlib
 import pathlib
 import sys
 
@@ -13,6 +14,31 @@ import simba.guardian.extract_core
 import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.rag_context
+
+
+def _rlm_pointer_context(prompt: str, cwd_str: str | None) -> str:
+    """Return an <rlm-pointers> block when rlm.inject_pointers is enabled.
+
+    Surfaces navigable transcripts (project-scoped) so the agent knows it can
+    rlm_grep/rlm_peek them for lossless detail. Never raises into the hook.
+    """
+    import simba.config
+    import simba.rlm.config  # registers the "rlm" section
+    import simba.rlm.recall
+
+    if not simba.config.load("rlm").inject_pointers:
+        return ""
+    nav = [p for p in simba.rlm.recall.route(prompt, cwd_str) if p.available]
+    if not nav:
+        return ""
+    lines = [
+        "<rlm-pointers>",
+        "Lossless transcripts available — call rlm_grep/rlm_peek on these ids "
+        "if the recalled snippets aren't enough:",
+    ]
+    lines += [f"  - {p.transcript_id} :: {p.snippet[:70]}" for p in nav[:3]]
+    lines.append("</rlm-pointers>")
+    return "\n".join(lines)
 
 _MIN_PROMPT_LENGTH = 10
 _MIN_SIMILARITY = 0.45
@@ -52,6 +78,13 @@ def main(hook_input: dict) -> str:
                 parts.append(search_ctx)
         except Exception:
             pass
+
+    # 4. RLM: surface navigable transcript pointers (opt-in via rlm.inject_pointers)
+    if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
+        with contextlib.suppress(Exception):
+            rlm_ctx = _rlm_pointer_context(prompt, cwd_str)
+            if rlm_ctx:
+                parts.append(rlm_ctx)
 
     combined = "\n\n".join(parts)
     if combined:
