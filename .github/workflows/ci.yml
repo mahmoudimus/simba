@@ -27,13 +27,19 @@ jobs:
               with:
                   persist-credentials: false
 
+            # Install uv via its script — NOT astral-sh/setup-uv, whose
+            # post-action cleanup step failed the job (even with caching off).
             - name: Install uv
-              uses: astral-sh/setup-uv@v5
-              with:
-                  python-version: "3.13"
+              run: |
+                  curl -LsSf https://astral.sh/uv/install.sh | sh
+                  echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+            # Prefer the prebuilt llama-cpp-python CPU wheel to skip the slow
+            # source build (falls back to building if no matching wheel exists).
             - name: Install dependencies
-              run: uv sync
+              env:
+                  UV_EXTRA_INDEX_URL: https://abetlen.github.io/llama-cpp-python/whl/cpu
+              run: uv sync --python 3.13
 
             - name: Lint (ruff)
               run: uv run ruff check src/ tests/
