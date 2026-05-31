@@ -96,8 +96,11 @@ def upsert(conn: sqlite3.Connection, memory: dict[str, typing.Any]) -> None:
     ``SYSTEM`` memories and rows without an id are skipped.
     """
     mid = memory.get("id") or memory.get("memory_id")
-    if mid:
-        conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (mid,))
+    if not mid:
+        return
+    # DELETE-then-insert: also purges the row if the memory became SYSTEM
+    # (then _insert is a no-op), keeping the mirror free of SYSTEM rows.
+    conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (mid,))
     _insert(conn, memory)
     conn.commit()
 
