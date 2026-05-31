@@ -22,6 +22,11 @@ def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
     Reuses the memories already recalled this turn (no second recall) and
     surfaces navigable transcripts so the agent knows it can rlm_grep/rlm_peek
     them for lossless detail. Never raises into the hook.
+
+    TODO(rlm): reusing the turn's recall (top-N at the hook's higher similarity
+    bar) makes the nudge sparse — it only fires when a top hit is navigable. To
+    surface pointers more reliably, do a dedicated wider route() here (top-5 at
+    ~0.35) at the cost of one extra recall per prompt. Deferred.
     """
     import simba.config
     import simba.rlm.config  # registers the "rlm" section
