@@ -157,6 +157,34 @@ class TestRecallEndpoint:
         assert "mem_test1" in ids
 
     @pytest.mark.asyncio
+    async def test_recall_includes_session_source(self, async_client, lance_table):
+        """/recall must return sessionSource so RLM can resolve a transcript."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "mem_ss",
+                    "type": "GOTCHA",
+                    "content": "from a session",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-123",
+                    "projectPath": "/p",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                }
+            ]
+        )
+        resp = await async_client.post(
+            "/recall", json={"query": "test", "projectPath": "/p"}
+        )
+        mems = resp.json()["memories"]
+        assert any(m.get("sessionSource") == "sess-123" for m in mems)
+
+    @pytest.mark.asyncio
     async def test_recall_with_project_path_filters(self, async_client, lance_table):
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await lance_table.add(
