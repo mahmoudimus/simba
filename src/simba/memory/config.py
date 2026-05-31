@@ -25,6 +25,11 @@ class MemoryConfig:
     embed_url: str = ""
     min_similarity: float = 0.35
     max_results: int = 3
+    # Cross-project recall: when a query specifies projectPath, untagged
+    # (global / project-less) memories are excluded by default so one repo's
+    # memories never leak into another's recall.  Set true to also surface
+    # project-less memories in scoped recall.
+    recall_include_global: bool = False
     duplicate_threshold: float = 0.92
     max_content_length: int = 1000
     auto_start: bool = True

@@ -245,6 +245,85 @@ class TestRecallEndpoint:
         assert "mem_b" in ids
 
     @pytest.mark.asyncio
+    async def test_recall_with_project_excludes_global(
+        self, async_client, lance_table
+    ):
+        """A project-scoped query must NOT return untagged/global memories."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "mem_scoped",
+                    "type": "GOTCHA",
+                    "content": "project A memory",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "/path/to/project-a",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+                {
+                    "id": "mem_global",
+                    "type": "GOTCHA",
+                    "content": "untagged global memory",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+            ]
+        )
+        resp = await async_client.post(
+            "/recall",
+            json={"query": "test", "projectPath": "/path/to/project-a"},
+        )
+        ids = [m["id"] for m in resp.json()["memories"]]
+        assert "mem_scoped" in ids
+        assert "mem_global" not in ids  # no leak from untagged memories
+
+    @pytest.mark.asyncio
+    async def test_recall_include_global_opt_in(self, async_client, lance_table):
+        """includeGlobal=true surfaces untagged memories in scoped recall."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "mem_global",
+                    "type": "GOTCHA",
+                    "content": "untagged global memory",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+            ]
+        )
+        resp = await async_client.post(
+            "/recall",
+            json={
+                "query": "test",
+                "projectPath": "/path/to/project-a",
+                "includeGlobal": True,
+            },
+        )
+        ids = [m["id"] for m in resp.json()["memories"]]
+        assert "mem_global" in ids
+
+    @pytest.mark.asyncio
     async def test_recall_requires_query(self, async_client):
         resp = await async_client.post("/recall", json={})
         assert resp.status_code == 422

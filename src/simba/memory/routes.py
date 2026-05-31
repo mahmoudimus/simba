@@ -83,6 +83,7 @@ class RecallRequest(pydantic.BaseModel):
     min_similarity: float | None = pydantic.Field(default=None, alias="minSimilarity")
     max_results: int | None = pydantic.Field(default=None, alias="maxResults")
     project_path: str | None = pydantic.Field(default=None, alias="projectPath")
+    include_global: bool | None = pydantic.Field(default=None, alias="includeGlobal")
     filters: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
 
 
@@ -202,8 +203,13 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if body.project_path:
         filters["projectPath"] = body.project_path
 
+    include_global = (
+        body.include_global
+        if body.include_global is not None
+        else config.recall_include_global
+    )
     memories = await simba.memory.vector_db.search_memories(
-        table, embedding, min_sim, max_res, filters
+        table, embedding, min_sim, max_res, filters, include_global=include_global
     )
 
     results = [
