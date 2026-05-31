@@ -114,6 +114,29 @@ def _parse_transcript_to_markdown(lines: list[str]) -> tuple[str, int]:
     return "\n\n".join(md_parts), msg_count
 
 
+def _maybe_dispatch_rlm_digest(session_id: str, cwd: str, msg_count: int) -> None:
+    """Opt-in: dispatch the autonomous RLM engine to digest this transcript.
+
+    No-op unless rlm.engine != 'claude'. Rate-limited by msg_count and deduped
+    via rlm_jobs. The engine runs detached, so this never blocks the hook.
+    """
+    import simba.config
+    import simba.rlm.config  # registers the "rlm" section
+    import simba.rlm.engine
+    import simba.rlm.jobs
+
+    cfg = simba.config.load("rlm")
+    engine = simba.rlm.engine.get_engine(cfg)
+    if engine is None:
+        return
+    if msg_count < cfg.engine_min_new_exchanges:
+        return
+    project = cwd or str(pathlib.Path.cwd())
+    if not simba.rlm.jobs.claim(session_id, project, cfg.engine):
+        return
+    engine.digest(session_id, "", cwd=project)
+
+
 def main(hook_input: dict) -> str:
     """Run the PreCompact hook pipeline. Returns JSON output string."""
     session_id = hook_input.get("session_id") or hook_input.get("sessionId") or ""
@@ -174,5 +197,9 @@ def main(hook_input: dict) -> str:
     # Log to stderr
     print(f"[pre-compact] Exported transcript ({msg_count} messages)", file=sys.stderr)
     print(f"[pre-compact] Transcript: {dest_md}", file=sys.stderr)
+
+    # 5. Autonomous RLM digest (opt-in via rlm.engine; detached, never blocks)
+    with contextlib.suppress(Exception):
+        _maybe_dispatch_rlm_digest(session_id, cwd_str, msg_count)
 
     return json.dumps({"suppressOutput": True})
