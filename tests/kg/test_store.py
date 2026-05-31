@@ -148,6 +148,43 @@ class TestKgTriggerSync:
             conn.close()
         assert count == 1
 
+    def test_fts_purged_after_delete(self) -> None:
+        kg_add("deletable_subject", "rel", "obj", "proof", project_path="proj-1")
+        db_path = simba.db.get_db_path()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("DELETE FROM kg_edges WHERE subject='deletable_subject'")
+            conn.commit()
+            count = conn.execute(
+                "SELECT COUNT(*) FROM kg_edges_fts WHERE kg_edges_fts MATCH 'deletable'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0  # the _ad trigger purged the stale FTS row
+
+    def test_fts_swapped_after_update(self) -> None:
+        kg_add("oldsubject_xyz", "rel", "obj", "proof", project_path="proj-1")
+        db_path = simba.db.get_db_path()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE kg_edges SET subject='newsubject_xyz' "
+                "WHERE subject='oldsubject_xyz'"
+            )
+            conn.commit()
+            old = conn.execute(
+                "SELECT COUNT(*) FROM kg_edges_fts "
+                "WHERE kg_edges_fts MATCH 'oldsubject'"
+            ).fetchone()[0]
+            new = conn.execute(
+                "SELECT COUNT(*) FROM kg_edges_fts "
+                "WHERE kg_edges_fts MATCH 'newsubject'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert old == 0  # _au trigger removed the old content
+        assert new == 1  # …and indexed the new content
+
 
 class TestProvenFactsMigration:
     def test_proven_facts_backed_up_and_dropped_on_connect(self) -> None:

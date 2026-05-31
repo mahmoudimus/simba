@@ -9,6 +9,7 @@ can ``rlm_peek`` the originating transcript span.
 
 from __future__ import annotations
 
+import pathlib
 import re
 
 # Common English stop words to filter out during keyword extraction.
@@ -137,9 +138,16 @@ def query_kg(
 
     try:
         import simba.config
+        import simba.db
         import simba.kg.config  # registers the "kg" config section
         import simba.kg.store
 
+        # Always scope to a project (same id kg_add stores under) — never leak
+        # another repo's facts into this one's injection.
+        if project_path is None:
+            project_path = simba.db.resolve_project_id(
+                pathlib.Path(cwd) if cwd else None
+            )
         cfg = simba.config.load("kg")
         rows = simba.kg.store.kg_query(
             query=fts_query,

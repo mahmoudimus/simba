@@ -125,3 +125,43 @@ class TestQueryKg:
         monkeypatch.setattr("simba.kg.store.kg_query", boom)
         result = simba.hooks._kg_client.query_kg("simba test")
         assert result == ""
+
+
+class TestQueryKgProjectScoping:
+    """Regression guard: query_kg must always scope kg_query to a project.
+
+    Passing ``project_path=None`` straight through to ``kg_query`` would leak
+    another repo's facts into this repo's injection — so when no project_path
+    is given, query_kg resolves the current repo's stable id and forwards it.
+    """
+
+    def test_resolves_project_path_when_none(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_query(*a, **k):
+            captured.update(k)
+            return []
+
+        monkeypatch.setattr("simba.kg.store.kg_query", fake_query)
+        monkeypatch.setattr(
+            "simba.db.resolve_project_id", lambda p=None: "proj-resolved"
+        )
+        simba.hooks._kg_client.query_kg("simba database module", cwd="/some/repo")
+        assert captured.get("project_path") == "proj-resolved"
+
+    def test_explicit_project_path_is_forwarded(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def fake_query(*a, **k):
+            captured.update(k)
+            return []
+
+        monkeypatch.setattr("simba.kg.store.kg_query", fake_query)
+        # An explicit project_path must win — resolve_project_id is not consulted.
+        monkeypatch.setattr(
+            "simba.db.resolve_project_id", lambda p=None: "should-not-be-used"
+        )
+        simba.hooks._kg_client.query_kg(
+            "simba database module", project_path="explicit-proj"
+        )
+        assert captured.get("project_path") == "explicit-proj"

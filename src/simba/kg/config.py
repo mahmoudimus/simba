@@ -11,7 +11,6 @@ import simba.config
 @simba.config.configurable("kg")
 @dataclasses.dataclass
 class KgConfig:
-    bm25_max_results: int = 10
     min_keyword_len: int = 2
     inject_max_facts: int = 3
     fts_tokenize: str = "trigram"
