@@ -18,6 +18,7 @@ Usage:
     simba memory list      List all memories (optional --type filter)
     simba memory delete    Delete a memory by ID
     simba memory update    Update memory metadata (--project-path, --session-source)
+    simba memory reindex   Rebuild the hybrid-recall BM25 keyword mirror
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
