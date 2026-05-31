@@ -66,6 +66,10 @@ def _hooks_cfg():
 # Lines that *mention* an error word but are source/doc, not an actual failure:
 # Python source (except/import/from/raise), REPL echoes, comments, and lines
 # carrying markdown backticks or a `->` arrow (risk-register / doc prose).
+# Keeping `raise` here means a real traceback's clean `ImportError: ...` line is
+# preferred over the preceding `raise ImportError(...)` source echo; the niche
+# cost is missing a bare shell `raise: command not found` (raise is not a real
+# command), which is an acceptable trade.
 _NOISE_LINE_RE = re.compile(r"^(#|>>>|\.\.\.|except\b|import\b|from\b|raise\b)")
 
 # Keys a Bash tool_response may use to report the process exit code.

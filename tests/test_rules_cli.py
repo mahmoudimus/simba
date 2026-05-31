@@ -32,6 +32,25 @@ def _patch_list(monkeypatch, memories):
     )
 
 
+class TestAddScoping:
+    def test_add_resolves_project_id(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            simba.db, "resolve_project_id", lambda p=None: "resolved-X"
+        )
+        sent: dict = {}
+
+        def _post(url, json=None, **k):
+            sent.update(json or {})
+            return _Resp({"status": "stored", "id": "m1"})
+
+        monkeypatch.setattr(rc.httpx, "post", _post)
+        rc.main(
+            ["add", "--tool", "Bash", "--correction", "do X", "--project", "/repo"]
+        )
+        # Stored under the resolved id (matcher recalls by the same), not /repo.
+        assert sent["projectPath"] == "resolved-X"
+
+
 class TestListScoping:
     def test_list_defaults_to_current_project(self, monkeypatch, capsys) -> None:
         monkeypatch.setattr(simba.db, "resolve_project_id", lambda p=None: "proj-A")

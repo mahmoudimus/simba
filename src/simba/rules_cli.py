@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
+import pathlib
 import re
 import sys
 import time
@@ -69,7 +70,11 @@ def _cmd_add(args: argparse.Namespace) -> int:
         "confidence": 0.95,
     }
     if args.project:
-        payload["projectPath"] = args.project
+        # Canonicalize to the same opaque id the learner stores and the matcher
+        # recalls by, so a manually-added rule is actually reachable at runtime.
+        payload["projectPath"] = simba.db.resolve_project_id(
+            pathlib.Path(args.project)
+        )
 
     try:
         resp = httpx.post(
