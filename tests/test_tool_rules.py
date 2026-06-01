@@ -50,9 +50,17 @@ class TestExtractErrorLine:
         result = post_hook._extract_error_line(output)
         assert "ImportError" in result
 
-    def test_fallback_to_last_line(self):
-        result = post_hook._extract_error_line("line1\nline2\nlast line")
-        assert result == "last line"
+    def test_no_error_line_returns_empty(self):
+        # No line matches an error pattern -> nothing worth learning (previously
+        # this fell back to the last line, which manufactured false-positive
+        # rules from non-error output).
+        assert post_hook._extract_error_line("line1\nline2\nlast line") == ""
+
+    def test_skips_source_and_doc_mentions(self):
+        # Lines that merely mention an error word but are source/comment/doc are
+        # skipped; only a genuine error line is returned.
+        text = "except ImportError:\n# handles ImportError\nImportError: boom"
+        assert post_hook._extract_error_line(text) == "ImportError: boom"
 
     def test_empty_string(self):
         assert post_hook._extract_error_line("") == ""
