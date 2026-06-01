@@ -1,8 +1,10 @@
-"""Truth DB client for hooks — keyword extraction and fact lookup.
+"""KG client for hooks — keyword extraction and knowledge-graph fact lookup.
 
-Queries the proven_facts table for facts relevant to the user's query.
-Used by user_prompt_submit and pre_tool_use hooks to inject proven facts
-alongside recalled memories.
+Queries the temporal ``kg_edges`` store (via :mod:`simba.kg.store`) for facts
+relevant to the user's query.  Used by the pre_tool_use hook to inject
+currently-valid graph facts alongside recalled memories.  Each emitted fact
+carries its source ``transcript_id``/``char_start`` (when present) so the agent
+can ``rlm_peek`` the originating transcript span.
 """
 
 from __future__ import annotations
@@ -112,61 +114,64 @@ def extract_keywords(text: str, max_keywords: int = 3) -> list[str]:
     return keywords
 
 
-def query_truth_db(
+def query_kg(
     query_text: str,
     project_path: str | None = None,
     cwd: str | None = None,
 ) -> str:
-    """Query the truth DB for facts relevant to query_text.
+    """Query the knowledge graph for facts relevant to ``query_text``.
 
-    Extracts keywords, searches proven_facts by subject *scoped to the current
-    project*, and returns a ``<proven-facts>`` XML block.  Returns ``""`` if no
-    facts found or if the DB is unavailable.  ``cwd`` selects which repo's
-    ``.simba`` DB to open; ``project_path`` (defaulting to that repo's stable
-    id) prevents cross-project facts from leaking into the injection.
+    Extracts keywords, joins them into a single FTS query string (the trigram
+    FTS index treats the space-separated terms with OR-friendly semantics), and
+    asks :func:`simba.kg.store.kg_query` for the top ``inject_max_facts``
+    currently-valid edges scoped to ``project_path``.  Returns a ``<kg-facts>``
+    XML block — one ``<fact subject=.. predicate=..>object</fact>`` per row,
+    carrying ``transcript_id``/``char_start`` attributes when present so the
+    agent can ``rlm_peek`` the source.  Returns ``""`` when there are no
+    keywords, no rows, or the DB is unavailable (never raises).
     """
     keywords = extract_keywords(query_text, max_keywords=3)
     if not keywords:
         return ""
 
-    try:
-        import simba.db
+    fts_query = " ".join(keywords)
 
-        conn = simba.db.get_connection(pathlib.Path(cwd) if cwd else None)
-        if conn is None:
-            return ""
+    try:
+        import simba.config
+        import simba.db
+        import simba.kg.config  # registers the "kg" config section
+        import simba.kg.store
+
+        # Always scope to a project (same id kg_add stores under) — never leak
+        # another repo's facts into this one's injection.
         if project_path is None:
             project_path = simba.db.resolve_project_id(
                 pathlib.Path(cwd) if cwd else None
             )
-    except Exception:
-        return ""
-
-    try:
-        cursor = conn.cursor()
-        # Subject matches any keyword (case-insensitive), scoped to project.
-        placeholders = " OR ".join(["subject LIKE ?"] * len(keywords))
-        params = [f"%{kw}%" for kw in keywords]
-        params.append(project_path)
-        sql = (
-            "SELECT subject, predicate, object, proof"
-            f" FROM proven_facts WHERE ({placeholders}) AND project_path = ?"
+        cfg = simba.config.load("kg")
+        rows = simba.kg.store.kg_query(
+            query=fts_query,
+            project_path=project_path,
+            limit=cfg.inject_max_facts,
         )
-        rows = cursor.execute(sql, params).fetchall()
-
-        if not rows:
-            return ""
-
-        lines = ["<proven-facts>"]
-        for row in rows:
-            subject, predicate, obj, proof = row
-            lines.append(f'  <fact subject="{subject}" predicate="{predicate}">')
-            lines.append(f"    {obj}")
-            lines.append(f"    <proof>{proof}</proof>")
-            lines.append("  </fact>")
-        lines.append("</proven-facts>")
-        return "\n".join(lines)
     except Exception:
         return ""
-    finally:
-        conn.close()
+
+    if not rows:
+        return ""
+
+    lines = ["<kg-facts>"]
+    for row in rows:
+        subject = row.get("subject", "")
+        predicate = row.get("predicate", "")
+        obj = row.get("object", "")
+        attrs = f'subject="{subject}" predicate="{predicate}"'
+        transcript_id = row.get("transcript_id")
+        if transcript_id is not None:
+            attrs += f' transcript_id="{transcript_id}"'
+        char_start = row.get("char_start")
+        if char_start is not None:
+            attrs += f' char_start="{char_start}"'
+        lines.append(f"  <fact {attrs}>{obj}</fact>")
+    lines.append("</kg-facts>")
+    return "\n".join(lines)

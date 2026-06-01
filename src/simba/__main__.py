@@ -1532,7 +1532,7 @@ def _cmd_db(args: list[str]) -> int:
     import simba.db
 
     # Ensure all schemas are registered by importing modules
-    import simba.neuron.truth
+    import simba.kg.store
     import simba.orchestration.agents
     import simba.rlm.jobs
     import simba.search.activity_tracker
@@ -1541,7 +1541,7 @@ def _cmd_db(args: list[str]) -> int:
 
     _use = (
         simba.orchestration.agents,
-        simba.neuron.truth,
+        simba.kg.store,
         simba.search.activity_tracker,
         simba.search.project_memory,
         simba.tailor.hook,
@@ -1667,7 +1667,7 @@ def _db_activities(cwd: pathlib.Path, limit: int) -> int:
 
 
 def _db_facts(cwd: pathlib.Path, limit: int) -> int:
-    """Print proven facts."""
+    """Print currently-valid knowledge-graph facts."""
     import simba.db
 
     conn = simba.db.get_connection(cwd)
@@ -1677,11 +1677,12 @@ def _db_facts(cwd: pathlib.Path, limit: int) -> int:
 
     try:
         rows = conn.execute(
-            "SELECT subject, predicate, object, proof FROM proven_facts LIMIT ?",
+            "SELECT subject, predicate, object, proof FROM kg_edges "
+            "WHERE valid_to IS NULL LIMIT ?",
             (limit,),
         ).fetchall()
         if not rows:
-            print("No proven facts recorded.")
+            print("No facts recorded.")
             return 0
 
         for row in rows:
@@ -1790,24 +1791,27 @@ def _db_migrate(cwd: pathlib.Path) -> int:
 
     migrated: dict[str, int] = {}
 
-    # 1. neuron/truth.db → proven_facts
+    # 1. neuron/truth.db → kg_edges (open edges)
     truth_db = simba_dir / "neuron" / "truth.db"
     if truth_db.exists():
+        import simba.kg.store
+
+        project_path = simba.db.resolve_project_id(cwd)
         src = sqlite3.connect(str(truth_db))
         try:
             rows = src.execute(
                 "SELECT subject, predicate, object, proof FROM facts"
             ).fetchall()
+            for subject, predicate, obj, proof in rows:
+                simba.kg.store.kg_add(
+                    subject,
+                    predicate,
+                    obj,
+                    proof,
+                    project_path=project_path,
+                )
             if rows:
-                with simba.db.get_db(cwd) as conn:
-                    conn.executemany(
-                        "INSERT OR IGNORE INTO proven_facts "
-                        "(subject, predicate, object, proof) "
-                        "VALUES (?, ?, ?, ?)",
-                        rows,
-                    )
-                    conn.commit()
-                migrated["proven_facts (from neuron/truth.db)"] = len(rows)
+                migrated["kg_edges (from neuron/truth.db)"] = len(rows)
         except sqlite3.OperationalError:
             pass
         finally:

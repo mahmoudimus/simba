@@ -7,24 +7,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import simba.kg.store
 from simba.sync.extractor import ExtractResult, run_extract
 from simba.sync.watermarks import _init_schema
 
 
 @pytest.fixture()
 def db_dir(tmp_path: Path) -> Path:
-    """Create a test DB with watermarks and proven_facts tables."""
+    """Create a test DB with watermarks and the kg_edges schema.
+
+    The extractor now stores facts into the temporal knowledge graph
+    (``kg_edges``) via :func:`simba.kg.store.kg_add`, so the test DB needs
+    the kg schema (table + FTS mirror + sync triggers) installed.
+    """
     simba_dir = tmp_path / ".simba"
     simba_dir.mkdir()
     db_path = simba_dir / "simba.db"
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     _init_schema(conn)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS proven_facts
-           (subject TEXT, predicate TEXT, object TEXT, proof TEXT,
-           UNIQUE(subject, predicate, object))"""
-    )
+    simba.kg.store._init_schema(conn)
     conn.commit()
     conn.close()
     return tmp_path
@@ -128,9 +130,9 @@ class TestRunExtract:
             result = run_extract(db_dir, dry_run=True)
         assert result.facts_extracted == 1
 
-        # Verify no facts were written to DB
+        # Verify no facts were written to the knowledge graph
         conn = sqlite3.connect(str(db_dir / ".simba" / "simba.db"))
-        count = conn.execute("SELECT COUNT(*) FROM proven_facts").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM kg_edges").fetchone()[0]
         conn.close()
         assert count == 0
 
