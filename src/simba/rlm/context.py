@@ -1,10 +1,3 @@
-"""RLMContext — programmatic navigation of large documents.
-
-Pared from rec-praxis-rlm's RLMContext: grep/peek/head/tail/window over text,
-ReDoS-guarded with a thread timeout.  No sandboxed code execution (dropped on
-purpose — Simba does not need that surface).
-"""
-
 from __future__ import annotations
 
 import dataclasses
