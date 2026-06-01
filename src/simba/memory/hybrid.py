@@ -25,6 +25,7 @@ def _from_vector(item: dict[str, typing.Any]) -> dict[str, typing.Any]:
         "confidence": item.get("confidence", 0.0),
         "createdAt": item.get("createdAt"),
         "projectPath": item.get("projectPath", ""),
+        "sessionSource": item.get("sessionSource", ""),
     }
 
 
