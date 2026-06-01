@@ -63,18 +63,55 @@ def _hooks_cfg():
     return simba.config.load("hooks")
 
 
+# Lines that *mention* an error word but are source/doc, not an actual failure:
+# Python source (except/import/from/raise), REPL echoes, comments, and lines
+# carrying markdown backticks or a `->` arrow (risk-register / doc prose).
+# Keeping `raise` here means a real traceback's clean `ImportError: ...` line is
+# preferred over the preceding `raise ImportError(...)` source echo; the niche
+# cost is missing a bare shell `raise: command not found` (raise is not a real
+# command), which is an acceptable trade.
+_NOISE_LINE_RE = re.compile(r"^(#|>>>|\.\.\.|except\b|import\b|from\b|raise\b)")
+
+# Keys a Bash tool_response may use to report the process exit code.
+_EXIT_CODE_KEYS = ("exit_code", "exitCode", "returncode", "return_code", "code")
+
+
 def _has_error_pattern(text: str) -> bool:
     """Check if text contains a recognizable error pattern."""
     return bool(_ERROR_PATTERNS.search(text))
 
 
+def _is_noise_line(line: str) -> bool:
+    """True if an error-word line is really source/doc, not a failure."""
+    s = line.strip()
+    if _NOISE_LINE_RE.match(s):
+        return True
+    return "`" in s or " -> " in s
+
+
+def _exit_code(tool_response: dict) -> int | None:
+    """Return the reported exit code, or None when the response omits one."""
+    for key in _EXIT_CODE_KEYS:
+        if key in tool_response:
+            try:
+                return int(tool_response[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _extract_error_line(text: str) -> str:
-    """Extract the first meaningful error line from output."""
+    """Return the first genuine error line, skipping source/doc mentions.
+
+    Only lines matching an error pattern are considered; noise lines (source,
+    comments, doc prose) are skipped.  Returns ``""`` when every error-word line
+    is noise — the caller treats that as "nothing worth learning".
+    """
     for line in text.split("\n"):
         line = line.strip()
-        if _ERROR_PATTERNS.search(line):
+        if _ERROR_PATTERNS.search(line) and not _is_noise_line(line):
             return line[:200]
-    return text.split("\n")[-1].strip()[:200] if text else ""
+    return ""
 
 
 def _leading_verb(command: str) -> str:
@@ -135,38 +172,60 @@ def _detect_failure(
     *,
     skip_probe_not_found: bool = False,
     probe_verbs: frozenset[str] = frozenset(),
+    reader_verbs: frozenset[str] = frozenset(),
+    require_nonzero_exit: bool = True,
 ) -> dict | None:
-    """Return failure info if the tool call failed, else None.
+    """Return failure info if the tool call genuinely failed, else None.
 
-    When ``skip_probe_not_found`` is set, a "no such file" error from a
-    read-only probe command (leading verb in ``probe_verbs``) is treated as a
-    normal discovery miss and not learned.  Other errors (permission denied,
-    import errors, ...) are still learned regardless of the verb.
+    Guards, in order:
+    - **Exit/stderr gate:** when the response reports an exit code, only a
+      non-zero one is a failure (``require_nonzero_exit``); when it omits one,
+      trust ``stderr`` only — stdout often merely *mentions* error words.
+    - **Reader/echo skip:** commands whose leading verb is in ``reader_verbs``
+      emit file/echoed content, so error words there are not their own failure.
+    - **Probe not-found skip:** a "no such file" from an ``ls``/``find``-style
+      probe (``probe_verbs``) is a normal discovery miss.
+    - **Line-shape:** the captured line must be a real error, not source/doc.
     """
-    if tool_name == "Bash":
-        # tool_response may have stdout/stderr or a single output field
-        stdout = tool_response.get("stdout", "")
-        stderr = tool_response.get("stderr", "")
-        output = tool_response.get("output", "")
-        combined = output or f"{stdout}\n{stderr}"
+    if tool_name != "Bash":
+        return None
 
-        if not _has_error_pattern(combined):
+    stdout = tool_response.get("stdout", "")
+    stderr = tool_response.get("stderr", "")
+    output = tool_response.get("output", "")
+
+    code = _exit_code(tool_response)
+    if code is not None:
+        if require_nonzero_exit and code == 0:
             return None
+        error_text = output or f"{stdout}\n{stderr}"
+    else:
+        # No exit code reported: trust stderr (fall back to a merged-only field).
+        error_text = stderr or (output if not stdout and not stderr else "")
 
-        command = tool_input.get("command", "")
-        if (
-            skip_probe_not_found
-            and _NOT_FOUND_RE.search(combined)
-            and _leading_verb(command) in probe_verbs
-        ):
-            return None
+    if not error_text or not _has_error_pattern(error_text):
+        return None
 
-        return {
-            "tool": tool_name,
-            "command": command[:200],
-            "error": _extract_error_line(combined),
-        }
-    return None
+    command = tool_input.get("command", "")
+    verb = _leading_verb(command)
+    if verb in reader_verbs:
+        return None
+    if (
+        skip_probe_not_found
+        and _NOT_FOUND_RE.search(error_text)
+        and verb in probe_verbs
+    ):
+        return None
+
+    error_line = _extract_error_line(error_text)
+    if not error_line:
+        return None
+
+    return {
+        "tool": tool_name,
+        "command": command[:200],
+        "error": error_line,
+    }
 
 
 def _store_failure_rule(failure: dict, cwd: str) -> None:
@@ -192,13 +251,18 @@ def _store_failure_rule(failure: dict, cwd: str) -> None:
         "correction": "",
     }
 
+    import simba.db
+
     simba.hooks._memory_client.store_memory(
         memory_type="TOOL_RULE",
         content=content,
         context=json.dumps(context_data),
         tags=[tool],
         confidence=0.85,
-        project_path=cwd,
+        # Opaque, worktree-robust project id (matches recall scoping) — never the
+        # raw cwd, so rules don't leak across projects and DO share across a
+        # repo's worktrees.
+        project_path=simba.db.resolve_project_id(pathlib.Path(cwd) if cwd else None),
     )
 
     _save_rule_dedup(error_hash)
@@ -241,12 +305,19 @@ def main(hook_input: dict) -> str:
                 for v in cfg.learn_probe_commands.split(",")
                 if v.strip()
             )
+            reader_verbs = frozenset(
+                v.strip()
+                for v in cfg.learn_reader_commands.split(",")
+                if v.strip()
+            )
             failure = _detect_failure(
                 tool_name,
                 tool_input,
                 tool_response,
                 skip_probe_not_found=cfg.learn_skip_probe_not_found,
                 probe_verbs=probe_verbs,
+                reader_verbs=reader_verbs,
+                require_nonzero_exit=cfg.learn_require_nonzero_exit,
             )
             if failure:
                 _store_failure_rule(failure, str(cwd))

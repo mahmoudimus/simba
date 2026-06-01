@@ -19,6 +19,7 @@ import pathlib
 import time
 
 import simba.config
+import simba.db
 import simba.hooks._io
 import simba.hooks._kg_client
 import simba.hooks._memory_client
@@ -181,9 +182,14 @@ def _check_tool_rules(
     if not query:
         return None
 
+    # Scope to the opaque, worktree-robust project id the learner stores under,
+    # so another repo's rules never surface here (and a repo's worktrees share).
+    project_id = simba.db.resolve_project_id(
+        pathlib.Path(cwd_str) if cwd_str else None
+    )
     memories = simba.hooks._memory_client.recall_memories(
         query,
-        project_path=cwd_str,
+        project_path=project_id,
         min_similarity=cfg.rule_min_similarity,
         max_results=2,
         filters={"types": ["TOOL_RULE"]},

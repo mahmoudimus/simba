@@ -42,6 +42,17 @@ class HooksConfig:
     learn_probe_commands: str = (
         "ls,bfs,find,fd,tree,stat,test,realpath,readlink,which,type,file"
     )
+    # Reader/echo commands emit file or echoed *content*, not their own failure —
+    # an error word in their output is almost always a false positive, so never
+    # auto-learn from them.  Comma-separated leading verbs.
+    learn_reader_commands: str = (
+        "grep,rg,ugrep,ag,ack,cat,bat,head,tail,less,more,sed,awk,"
+        "echo,printf,jq,yq,fd,xxd,strings"
+    )
+    # Only auto-learn a Bash failure when the command reported a non-zero exit
+    # code; when no exit code is reported, require the error on stderr (stdout
+    # often merely *mentions* error words, e.g. pytest collection notices).
+    learn_require_nonzero_exit: bool = True
 
     # PermissionRequest (Codex-only) — deny when a TOOL_RULE matches
     # the proposed call above ``permission_deny_similarity``.  Weaker
