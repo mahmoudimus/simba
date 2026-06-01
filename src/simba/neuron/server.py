@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -58,6 +59,69 @@ def analyze_datalog(datalog_code: str, facts_dir: str = ".") -> str:
     fact directory.
     """
     return simba.neuron.verify.analyze_datalog(datalog_code, facts_dir)
+
+
+# --- RLM lossless-recall tools ---
+
+
+@mcp.tool()
+def rlm_recall(query: str, max_pointers: int | None = None) -> str:
+    """Find transcripts relevant to a query (project-scoped). Returns pointers
+    {snippet, transcript_id, project_path, similarity, available} to navigate
+    with rlm_grep/rlm_peek/rlm_window."""
+    import simba.rlm.service
+
+    result = simba.rlm.service.get_service().recall(
+        query, cwd=os.getcwd(), max_pointers=max_pointers
+    )
+    return json.dumps(result)
+
+
+@mcp.tool()
+def rlm_grep(transcript_id: str, pattern: str, max_matches: int | None = None) -> str:
+    """Regex-search a transcript. Returns matches with line numbers and char
+    offsets (use the offsets with rlm_peek/rlm_window)."""
+    import simba.rlm.service
+
+    return json.dumps(
+        simba.rlm.service.get_service().grep(transcript_id, pattern, max_matches)
+    )
+
+
+@mcp.tool()
+def rlm_peek(transcript_id: str, start_char: int, end_char: int) -> str:
+    """Return the exact character range [start_char, end_char) of a transcript."""
+    import simba.rlm.service
+
+    return json.dumps(
+        simba.rlm.service.get_service().peek(transcript_id, start_char, end_char)
+    )
+
+
+@mcp.tool()
+def rlm_window(transcript_id: str, around_char: int, radius: int | None = None) -> str:
+    """Return transcript text within +/- radius chars of an offset (expand a hit)."""
+    import simba.rlm.service
+
+    return json.dumps(
+        simba.rlm.service.get_service().window(transcript_id, around_char, radius)
+    )
+
+
+@mcp.tool()
+def rlm_head(transcript_id: str, n_lines: int = 20) -> str:
+    """Return the first n_lines of a transcript."""
+    import simba.rlm.service
+
+    return json.dumps(simba.rlm.service.get_service().head(transcript_id, n_lines))
+
+
+@mcp.tool()
+def rlm_tail(transcript_id: str, n_lines: int = 20) -> str:
+    """Return the last n_lines of a transcript."""
+    import simba.rlm.service
+
+    return json.dumps(simba.rlm.service.get_service().tail(transcript_id, n_lines))
 
 
 # --- Server entry point ---

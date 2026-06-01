@@ -2,15 +2,14 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear",
         "hooks": [
           {
             "type": "command",
             "command": "simba hook SessionStart",
-            "timeout": 15,
-            "statusMessage": "Loading simba memory + project context"
+            "timeout": 15
           }
-        ]
+        ],
+        "matcher": "startup|resume|clear"
       }
     ],
     "UserPromptSubmit": [
@@ -26,40 +25,26 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|apply_patch|Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "simba hook PreToolUse",
-            "timeout": 5,
-            "statusMessage": "Checking simba TOOL_RULE memories"
+            "timeout": 5
           }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matcher": "Bash|apply_patch|Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "simba hook PermissionRequest",
-            "timeout": 3,
-            "statusMessage": "Checking simba denial rules"
-          }
-        ]
+        ],
+        "matcher": "Bash|apply_patch|Edit|Write"
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|apply_patch|Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "simba hook PostToolUse",
             "timeout": 5
           }
-        ]
+        ],
+        "matcher": "Bash|apply_patch|Edit|Write"
       }
     ],
     "Stop": [
@@ -71,6 +56,18 @@
             "timeout": 5
           }
         ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "simba hook PermissionRequest",
+            "timeout": 3
+          }
+        ],
+        "matcher": "Bash|apply_patch|Edit|Write"
       }
     ]
   }

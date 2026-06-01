@@ -27,6 +27,7 @@ def _ensure_registry() -> None:
     import simba.guardian.config
     import simba.hooks.config
     import simba.memory.config
+    import simba.rlm.config  # registers the "rlm" section
     import simba.search.config
     import simba.sync.config  # noqa: F401
 
