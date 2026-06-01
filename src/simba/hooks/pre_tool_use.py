@@ -20,8 +20,8 @@ import time
 
 import simba.config
 import simba.hooks._io
+import simba.hooks._kg_client
 import simba.hooks._memory_client
-import simba.hooks._truth_client
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
@@ -217,13 +217,13 @@ def _check_tool_rules(
 def _check_truth_constraints(
     tool_name: str, tool_input: dict, cwd_str: str | None = None
 ) -> str | None:
-    """Check truth DB for facts relevant to this tool call (project-scoped)."""
+    """Check the KG for facts relevant to this tool call (project-scoped)."""
     if tool_name != "Bash":
         return None
     command = tool_input.get("command", "")
     if not command:
         return None
-    return simba.hooks._truth_client.query_truth_db(command, cwd=cwd_str) or None
+    return simba.hooks._kg_client.query_kg(command, cwd=cwd_str) or None
 
 
 def main(hook_input: dict) -> str:

@@ -26,6 +26,7 @@ def _ensure_registry() -> None:
     import simba.db  # registers the "project" section
     import simba.guardian.config
     import simba.hooks.config
+    import simba.kg.config
     import simba.memory.config
     import simba.rlm.config  # registers the "rlm" section
     import simba.search.config

@@ -11,31 +11,70 @@ from mcp.server.fastmcp import FastMCP
 if TYPE_CHECKING:
     from pathlib import Path
 
-import simba.neuron.truth
+import simba.kg.store
 import simba.neuron.verify
 
 mcp = FastMCP("Neuron")
 
 
-# --- Truth DB tools ---
+# --- Knowledge-graph tools ---
 
 
 @mcp.tool()
-def truth_add(subject: str, predicate: str, object: str, proof: str) -> str:
-    """Records a proven fact into the Truth DB.
-
-    Use this ONLY when a verifier (Z3/Datalog) has proven a hypothesis.
-    """
-    return simba.neuron.truth.truth_add(subject, predicate, object, proof)
+def kg_add(
+    subject: str,
+    predicate: str,
+    object: str,
+    proof: str,
+    subject_type: str = "concept",
+    object_type: str = "concept",
+    transcript_id: str | None = None,
+    char_start: int | None = None,
+) -> str:
+    """Inserts an open temporal edge into the knowledge graph."""
+    return json.dumps(
+        simba.kg.store.kg_add(
+            subject,
+            predicate,
+            object,
+            proof,
+            subject_type=subject_type,
+            object_type=object_type,
+            transcript_id=transcript_id,
+            char_start=char_start,
+            project_path=None,
+        )
+    )
 
 
 @mcp.tool()
-def truth_query(subject: str | None = None, predicate: str | None = None) -> str:
-    """Queries the Truth DB for existing proven facts.
+def kg_query(
+    query: str | None = None,
+    subject: str | None = None,
+    predicate: str | None = None,
+    as_of: str | None = None,
+    include_expired: bool = False,
+    limit: int = 10,
+) -> str:
+    """Queries the knowledge graph with FTS ranking and temporal filters."""
+    return json.dumps(
+        simba.kg.store.kg_query(
+            query,
+            subject=subject,
+            predicate=predicate,
+            as_of=as_of,
+            include_expired=include_expired,
+            limit=limit,
+        )
+    )
 
-    Use this BEFORE assuming capabilities or behavior about the codebase.
-    """
-    return simba.neuron.truth.truth_query(subject, predicate)
+
+@mcp.tool()
+def kg_invalidate(subject: str, predicate: str, object: str) -> str:
+    """Closes every matching open edge and reports how many were closed."""
+    return json.dumps(
+        {"closed": simba.kg.store.kg_invalidate(subject, predicate, object)}
+    )
 
 
 # --- Verification tools ---

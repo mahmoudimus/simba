@@ -64,19 +64,18 @@ def _store_fact(
     *,
     cwd: str,
 ) -> str:
-    """Store a fact triple via simba.neuron.truth."""
+    """Store a fact triple into the knowledge graph (kg_edges)."""
     import simba.db
+    import simba.kg.store
 
-    with simba.db.get_db(Path(cwd)) as conn:
-        try:
-            conn.execute(
-                "INSERT INTO proven_facts VALUES (?, ?, ?, ?)",
-                (subject, predicate, obj, proof),
-            )
-            conn.commit()
-            return "ok"
-        except Exception:
-            return "duplicate"
+    result = simba.kg.store.kg_add(
+        subject,
+        predicate,
+        obj,
+        proof,
+        project_path=simba.db.resolve_project_id(Path(cwd)),
+    )
+    return "ok" if result == "added" else "duplicate"
 
 
 def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
@@ -98,7 +97,7 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
     instructions = (
         "Extract (subject, predicate, object) fact triples from "
         "these memories. For each fact, call "
-        "truth_add(subject, predicate, object, "
+        "kg_add(subject, predicate, object, "
         'proof="researcher_extracted").\n\n'
         f"Memories:\n{memory_text}"
     )
@@ -129,14 +128,7 @@ def run_extract(
     cwd_str = str(cwd_path)
     result = ExtractResult()
 
-    # Ensure proven_facts table exists
     with simba.db.get_db(cwd_path) as conn:
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS proven_facts
-               (subject TEXT, predicate TEXT, object TEXT, proof TEXT,
-               UNIQUE(subject, predicate, object))"""
-        )
-        conn.commit()
         watermark = get_watermark(conn, "memories", "facts")
 
     client = httpx.Client(base_url=daemon_url, timeout=10)
