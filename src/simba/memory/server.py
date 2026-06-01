@@ -23,6 +23,7 @@ import uvicorn
 import simba.memory.config
 import simba.memory.diagnostics
 import simba.memory.embeddings
+import simba.memory.fts
 import simba.memory.routes
 
 _DEFAULT_DB_DIR = ".simba/memory"
@@ -98,6 +99,7 @@ def create_app(
     app.state.start_time = time.time()
     app.state.table = None
     app.state.db_path = None
+    app.state.fts_path = None
     app.state.embed = None
     app.state.embed_query = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
@@ -158,6 +160,42 @@ async def init_database(
         )
 
     app.state.table = table
+
+    await init_fts_mirror(app, data_dir)
+
+
+async def init_fts_mirror(app: fastapi.FastAPI, data_dir: pathlib.Path) -> None:
+    """Create the FTS5 keyword mirror and reconcile it against LanceDB.
+
+    The mirror lives at ``<data_dir>/memory_fts.db`` so it travels with the
+    vectors.  On startup we rebuild it from LanceDB whenever the indexed count
+    diverges from the non-SYSTEM memory count — this backfills the existing
+    corpus on first run and heals any drift from best-effort writes.
+    """
+    config: simba.memory.config.MemoryConfig = app.state.config
+    logger = logging.getLogger("simba.memory")
+    fts_path = data_dir / simba.memory.fts.FTS_FILENAME
+    simba.memory.fts.init(fts_path, tokenize=config.fts_tokenize)
+    app.state.fts_path = str(fts_path)
+
+    try:
+        rows = await app.state.table.query().to_list()
+        non_system = [r for r in rows if r.get("type") != "SYSTEM"]
+
+        def _reconcile() -> int | None:
+            conn = simba.memory.fts.connect(fts_path)
+            try:
+                if simba.memory.fts.count(conn) != len(non_system):
+                    return simba.memory.fts.rebuild(conn, non_system)
+                return None
+            finally:
+                conn.close()
+
+        rebuilt = await asyncio.to_thread(_reconcile)
+        if rebuilt is not None:
+            logger.info("[fts] reconciled keyword mirror: %d rows indexed", rebuilt)
+    except Exception:
+        logger.debug("[fts] mirror reconcile failed", exc_info=True)
 
 
 async def init_embeddings(

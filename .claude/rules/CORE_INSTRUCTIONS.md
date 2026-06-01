@@ -49,7 +49,9 @@ uv run ruff check --fix src/      # Auto-fix lint
 - Memory daemon port: 8741 (configurable via `simba config set memory.port`)
 - Embedding model: nomic-embed-text-v1.5 Q4_K_M (~81MB GGUF, auto-downloaded)
 - DB path: `.simba/memory/memories.lance` (LanceDB)
+- Keyword mirror: `.simba/memory/memory_fts.db` (SQLite FTS5 bm25/trigram, derived)
 - Similarity: 0.35 min for recall, 0.92 for duplicate detection
+- Recall is hybrid: vector + BM25 fused via RRF (`memory.hybrid_enabled`, on by default)
 <!-- END SIMBA:environment -->
 
 ---

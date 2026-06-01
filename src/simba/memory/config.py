@@ -31,6 +31,13 @@ class MemoryConfig:
     diagnostics_after: int = 50
     sync_interval: int = 0
     shutdown_timeout: int = 10
+    # Hybrid recall (L3): a BM25 keyword arm fused with the vector arm via RRF.
+    hybrid_enabled: bool = True
+    rrf_k: int = 60
+    fts_candidate_pool: int = 20
+    fts_tokenize: str = "trigram"
+    vector_weight: float = 1.0
+    keyword_weight: float = 1.0
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
