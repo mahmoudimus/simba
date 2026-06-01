@@ -26,6 +26,7 @@ Usage:
     simba config <cmd>     Unified configuration (get/set/list/show)
     simba markers <cmd>    Discover, audit, and update SIMBA markers
     simba rule <cmd>       Manage tool rules (auto-learned + manual)
+    simba rlm <cmd>        RLM autonomous engine commands (digest)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -590,7 +591,7 @@ def _cmd_install(args: list[str]) -> int:
     else:
         skills_dir = pathlib.Path.cwd() / ".claude" / "skills"
 
-    _SIMBA_PERMISSION = "Bash(simba:*)"
+    simba_permission = "Bash(simba:*)"
 
     project_dir = pathlib.Path.cwd()
 
@@ -599,8 +600,8 @@ def _cmd_install(args: list[str]) -> int:
             del settings["hooks"]
         perms = settings.get("permissions", {})
         allow = perms.get("allow", [])
-        if _SIMBA_PERMISSION in allow:
-            allow.remove(_SIMBA_PERMISSION)
+        if simba_permission in allow:
+            allow.remove(simba_permission)
             perms["allow"] = allow
             settings["permissions"] = perms
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -615,14 +616,14 @@ def _cmd_install(args: list[str]) -> int:
     settings["hooks"] = _build_hooks_config()
     perms = settings.setdefault("permissions", {})
     allow = perms.setdefault("allow", [])
-    if _SIMBA_PERMISSION not in allow:
-        allow.append(_SIMBA_PERMISSION)
+    if simba_permission not in allow:
+        allow.append(simba_permission)
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     scope = "global" if is_global else "project"
     print(f"Simba hooks registered ({scope}) in {settings_path}")
     hooks_list = ", ".join(_CLAUDE_HOOK_EVENTS)
     print(f"  {len(_CLAUDE_HOOK_EVENTS)} Claude hooks: {hooks_list}")
-    print(f"  permission granted: {_SIMBA_PERMISSION}")
+    print(f"  permission granted: {simba_permission}")
 
     skill_count = _install_skills(skills_dir)
     if skill_count:
@@ -759,7 +760,9 @@ def _cmd_codex_extract(args: list[str]) -> int:
         learnings = _extract_learnings(text, max_items=15)
         if not learnings:
             print("No candidate learnings found heuristically.")
-            print("Fallback: run `simba codex-extract` without --run for manual prompt.")
+            print(
+                "Fallback: run `simba codex-extract` without --run for manual prompt."
+            )
             return 1
 
         daemon = "http://localhost:8741"
@@ -1093,7 +1096,10 @@ def _memory_store(args: list[str]) -> int:
     try:
         confidence = float(confidence_raw) if confidence_raw else 0.85
     except ValueError:
-        print(f"Error: --confidence must be a float, got '{confidence_raw}'", file=sys.stderr)
+        print(
+            f"Error: --confidence must be a float, got '{confidence_raw}'",
+            file=sys.stderr,
+        )
         return 1
 
     payload: dict = {
@@ -1122,7 +1128,10 @@ def _memory_store(args: list[str]) -> int:
     if status == "stored":
         print(f"stored: {body.get('id', '?')}")
     elif status == "duplicate":
-        print(f"duplicate: existing={body.get('existing_id', '?')} similarity={body.get('similarity', 0):.2f}")
+        print(
+            f"duplicate: existing={body.get('existing_id', '?')} "
+            f"similarity={body.get('similarity', 0):.2f}"
+        )
     else:
         print(f"status: {status}")
     return 0
@@ -1136,7 +1145,7 @@ def _memory_recall(args: list[str]) -> int:
     # Query is everything that isn't a --flag or its value
     skip_next = False
     query_parts: list[str] = []
-    for i, tok in enumerate(args):
+    for tok in args:
         if skip_next:
             skip_next = False
             continue
@@ -1147,7 +1156,10 @@ def _memory_recall(args: list[str]) -> int:
     query = " ".join(query_parts).strip()
 
     if not query:
-        print("Usage: simba memory recall [--limit N] [--project-path P] <query text>", file=sys.stderr)
+        print(
+            "Usage: simba memory recall [--limit N] [--project-path P] <query text>",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -1158,7 +1170,9 @@ def _memory_recall(args: list[str]) -> int:
 
     import simba.hooks._memory_client
 
-    memories = simba.hooks._memory_client.recall_memories(query, project_path=project_path, max_results=limit)
+    memories = simba.hooks._memory_client.recall_memories(
+        query, project_path=project_path, max_results=limit
+    )
     if not memories:
         print("no memories found")
         return 0
@@ -1203,7 +1217,10 @@ def _memory_list(args: list[str]) -> int:
         try:
             memories = memories[: int(limit_raw)]
         except ValueError:
-            print(f"Error: --limit must be an integer, got '{limit_raw}'", file=sys.stderr)
+            print(
+                f"Error: --limit must be an integer, got '{limit_raw}'",
+                file=sys.stderr,
+            )
             return 1
 
     if not memories:
@@ -1382,7 +1399,11 @@ def _memory_update(args: list[str]) -> int:
     import simba.hooks._memory_client
 
     if not args or args[0].startswith("--"):
-        print("Usage: simba memory update <memory_id> [--project-path PATH] [--session-source ID]", file=sys.stderr)
+        print(
+            "Usage: simba memory update <memory_id> "
+            "[--project-path PATH] [--session-source ID]",
+            file=sys.stderr,
+        )
         return 1
 
     memory_id = args[0]
@@ -1391,7 +1412,10 @@ def _memory_update(args: list[str]) -> int:
     session_source = _parse_opt_value(rest, "--session-source")
 
     if project_path is None and session_source is None:
-        print("Error: at least one of --project-path or --session-source is required", file=sys.stderr)
+        print(
+            "Error: at least one of --project-path or --session-source is required",
+            file=sys.stderr,
+        )
         return 1
 
     payload: dict = {}
@@ -1510,6 +1534,7 @@ def _cmd_db(args: list[str]) -> int:
     # Ensure all schemas are registered by importing modules
     import simba.neuron.truth
     import simba.orchestration.agents
+    import simba.rlm.jobs
     import simba.search.activity_tracker
     import simba.search.project_memory
     import simba.tailor.hook
@@ -1961,6 +1986,76 @@ def _cmd_rule(args: list[str]) -> int:
     return simba.rules_cli.main(args)
 
 
+def _cmd_rlm(args: list[str]) -> int:
+    """RLM autonomous engine commands."""
+    if not args or args[0] not in ("digest", "complete"):
+        print(
+            "Usage: simba rlm digest <transcript_id|--latest>\n"
+            "       simba rlm complete <transcript_id> [--stored N]",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args[0] == "complete":
+        crest = args[1:]
+        if not crest:
+            print(
+                "Usage: simba rlm complete <transcript_id> [--stored N]",
+                file=sys.stderr,
+            )
+            return 1
+        tid = crest[0]
+        n_stored = 0
+        if "--stored" in crest:
+            i = crest.index("--stored")
+            if i + 1 < len(crest):
+                try:
+                    n_stored = int(crest[i + 1])
+                except ValueError:
+                    n_stored = 0
+        import simba.rlm.jobs
+        simba.rlm.jobs.complete(tid, str(pathlib.Path.cwd()), n_stored)
+        print(f"marked complete: {tid} (stored {n_stored})")
+        return 0
+
+    rest = args[1:]
+    transcript_id = rest[0] if rest else ""
+    if transcript_id in ("", "--latest"):
+        transcripts = pathlib.Path.home() / ".claude" / "transcripts"
+        dirs = (
+            [d for d in transcripts.iterdir() if d.is_dir()]
+            if transcripts.is_dir()
+            else []
+        )
+        if not dirs:
+            print("no transcripts found", file=sys.stderr)
+            return 1
+        transcript_id = max(dirs, key=lambda d: d.stat().st_mtime).name
+
+    import simba.config
+    import simba.rlm.config  # registers "rlm"
+    import simba.rlm.engine
+    import simba.rlm.jobs
+
+    cfg = simba.config.load("rlm")
+    engine = simba.rlm.engine.get_engine(cfg)
+    if engine is None:
+        print(
+            f"rlm.engine='{cfg.engine}' has no autonomous engine; "
+            "set it to claude-cli (simba config set rlm.engine claude-cli)"
+        )
+        return 1
+
+    project = str(pathlib.Path.cwd())
+    if not simba.rlm.jobs.claim(transcript_id, project, cfg.engine):
+        print(f"already digested/running: {transcript_id}")
+        return 0
+
+    engine.digest(transcript_id, "", cwd=project)
+    print(f"digest dispatched for {transcript_id} via {cfg.engine}")
+    return 0
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -2006,6 +2101,8 @@ def main() -> None:
         sys.exit(_cmd_markers(rest))
     elif cmd == "rule":
         sys.exit(_cmd_rule(rest))
+    elif cmd == "rlm":
+        sys.exit(_cmd_rlm(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:

@@ -216,6 +216,11 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
+            **(
+                {"sessionSource": m["sessionSource"]}
+                if m.get("sessionSource")
+                else {}
+            ),
         }
         for m in memories
     ]

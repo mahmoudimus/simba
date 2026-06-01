@@ -138,3 +138,88 @@ class TestPreCompactMain:
             )
         )
         assert result.get("suppressOutput") is True
+
+
+class TestRlmDigestTrigger:
+    def test_no_dispatch_when_engine_claude(self, monkeypatch):
+        import simba.config
+        import simba.hooks.pre_compact as pc
+
+        monkeypatch.setattr(
+            simba.config, "load",
+            lambda section, *a, **k: type("C", (), {
+                "engine": "claude", "engine_min_new_exchanges": 1
+            })(),
+        )
+        called = {"n": 0}
+        import simba.rlm.engine
+        monkeypatch.setattr(
+            simba.rlm.engine, "get_engine",
+            lambda cfg: called.__setitem__("n", called["n"] + 1) or None,
+        )
+        pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=100)
+        # get_engine returned None -> no dispatch, no crash
+        assert called["n"] == 1
+
+    def test_dispatch_when_enabled_and_enough_messages(self, monkeypatch):
+        import simba.config
+        import simba.hooks.pre_compact as pc
+        import simba.rlm.engine
+        import simba.rlm.jobs
+
+        monkeypatch.setattr(
+            simba.config, "load",
+            lambda section, *a, **k: type("C", (), {
+                "engine": "claude-cli", "engine_min_new_exchanges": 20
+            })(),
+        )
+        dispatched = {}
+
+        class _Engine:
+            def digest(self, tid, query, *, cwd):
+                dispatched["tid"] = tid
+
+        monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+        monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: True)
+        pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=40)
+        assert dispatched["tid"] == "s1"
+
+    def test_no_dispatch_below_rate_limit(self, monkeypatch):
+        import simba.config
+        import simba.hooks.pre_compact as pc
+        import simba.rlm.engine
+
+        monkeypatch.setattr(
+            simba.config, "load",
+            lambda section, *a, **k: type("C", (), {
+                "engine": "claude-cli", "engine_min_new_exchanges": 20
+            })(),
+        )
+
+        class _Engine:
+            def digest(self, *a, **k):
+                raise AssertionError("should not dispatch below rate limit")
+
+        monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+        pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=5)  # < 20 -> skip
+
+    def test_no_dispatch_when_already_claimed(self, monkeypatch):
+        import simba.config
+        import simba.hooks.pre_compact as pc
+        import simba.rlm.engine
+        import simba.rlm.jobs
+
+        monkeypatch.setattr(
+            simba.config, "load",
+            lambda section, *a, **k: type("C", (), {
+                "engine": "claude-cli", "engine_min_new_exchanges": 20
+            })(),
+        )
+
+        class _Engine:
+            def digest(self, *a, **k):
+                raise AssertionError("should not dispatch when already claimed")
+
+        monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
+        monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: False)
+        pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=40)  # claim False -> skip

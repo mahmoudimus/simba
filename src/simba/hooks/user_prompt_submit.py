@@ -6,6 +6,7 @@ queries memory daemon for relevant memories, outputs combined context.
 
 from __future__ import annotations
 
+import contextlib
 import pathlib
 import sys
 
@@ -13,6 +14,38 @@ import simba.guardian.extract_core
 import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.rag_context
+
+
+def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
+    """Return an <rlm-pointers> block when rlm.inject_pointers is enabled.
+
+    Reuses the memories already recalled this turn (no second recall) and
+    surfaces navigable transcripts so the agent knows it can rlm_grep/rlm_peek
+    them for lossless detail. Never raises into the hook.
+
+    TODO(rlm): reusing the turn's recall (top-N at the hook's higher similarity
+    bar) makes the nudge sparse — it only fires when a top hit is navigable. To
+    surface pointers more reliably, do a dedicated wider route() here (top-5 at
+    ~0.35) at the cost of one extra recall per prompt. Deferred.
+    """
+    import simba.config
+    import simba.rlm.config  # registers the "rlm" section
+    import simba.rlm.recall
+
+    if not simba.config.load("rlm").inject_pointers:
+        return ""
+    pointers = simba.rlm.recall.pointers_from_memories(memories, cwd_str)
+    nav = [p for p in pointers if p.available]
+    if not nav:
+        return ""
+    lines = [
+        "<rlm-pointers>",
+        "Lossless transcripts available — call rlm_grep/rlm_peek on these ids "
+        "if the recalled snippets aren't enough:",
+    ]
+    lines += [f"  - {p.transcript_id} :: {p.snippet[:70]}" for p in nav[:3]]
+    lines.append("</rlm-pointers>")
+    return "\n".join(lines)
 
 _MIN_PROMPT_LENGTH = 10
 _MIN_SIMILARITY = 0.45
@@ -33,6 +66,7 @@ def main(hook_input: dict) -> str:
         parts.append(core_blocks)
 
     # 2. Memory: recall relevant memories using prompt
+    memories: list[dict] = []
     if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
         project_path = str(cwd) if cwd_str else None
         memories = simba.hooks._memory_client.recall_memories(
@@ -52,6 +86,13 @@ def main(hook_input: dict) -> str:
                 parts.append(search_ctx)
         except Exception:
             pass
+
+    # 4. RLM: surface navigable transcript pointers (opt-in via rlm.inject_pointers)
+    if memories:
+        with contextlib.suppress(Exception):
+            rlm_ctx = _rlm_pointer_context(memories, cwd_str)
+            if rlm_ctx:
+                parts.append(rlm_ctx)
 
     combined = "\n\n".join(parts)
     if combined:
