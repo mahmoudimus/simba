@@ -233,12 +233,40 @@ Works with llama-cpp-python server, vLLM, text-embeddings-inference, or any Open
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/store` | Store a typed memory with embedding |
-| POST | `/recall` | Semantic search over memories |
+| POST | `/recall` | Hybrid search over memories (vector + BM25, RRF-fused) |
 | POST | `/sync` | Trigger a one-off sync cycle (index + extract) |
+| POST | `/reindex` | Rebuild the BM25 keyword mirror from LanceDB |
 | GET | `/health` | Health check with model info |
 | GET | `/stats` | Memory count and database stats |
 | GET | `/list` | List all memories |
+| PATCH | `/memory/:id` | Update a memory's `projectPath` / `sessionSource` |
 | DELETE | `/memory/:id` | Delete a specific memory |
+
+### Hybrid recall (BM25 + vector)
+
+`/recall` fuses two arms with [Reciprocal Rank Fusion](https://en.wikipedia.org/wiki/Learning_to_rank) (RRF):
+
+- a **vector arm** — LanceDB cosine similarity (gated by `memory.min_similarity`), and
+- a **keyword arm** — a SQLite FTS5 `bm25`/`trigram` index that catches exact
+  identifiers and literal strings the embedding under-ranks. It is *not*
+  cosine-gated, so it also widens coverage.
+
+The keyword index is a **derived mirror** at `<db-path>/memory_fts.db`, kept in
+sync by the daemon on store/delete/patch and rebuilt from LanceDB on startup (or
+on demand via `simba memory reindex`). It is fully fail-safe: any keyword-arm
+error degrades recall to vector-only, and `memory.hybrid_enabled false` forces
+the pure-vector path. Scoping is strict — the keyword arm never surfaces another
+project's memories.
+
+```bash
+simba config set memory.hybrid_enabled true   # on by default
+simba config set memory.rrf_k 60              # RRF rank constant
+simba config set memory.fts_candidate_pool 20 # candidates pulled per arm
+simba config set memory.fts_tokenize trigram  # trigram | porter | unicode61
+simba config set memory.vector_weight 1.0     # RRF weight, vector arm
+simba config set memory.keyword_weight 1.0    # RRF weight, keyword arm
+simba memory reindex                          # rebuild the keyword mirror
+```
 
 ## Neuron — Neuro-Symbolic Logic Server
 

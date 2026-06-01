@@ -19,6 +19,8 @@ import starlette.middleware.base
 import starlette.requests
 import starlette.responses
 
+import simba.memory.fts
+import simba.memory.hybrid
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -27,6 +29,35 @@ router = fastapi.APIRouter()
 
 # Background tasks need a strong reference to avoid GC before completion.
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+# ── FTS keyword-mirror sync helpers (run in a worker thread via to_thread) ──
+# Per-call connections sidestep SQLite's thread-affinity. All mirror writes are
+# best-effort: failures are logged, never surfaced (startup reconcile heals).
+
+
+def _fts_upsert(fts_path: str, memory: dict[str, typing.Any]) -> None:
+    conn = simba.memory.fts.connect(fts_path)
+    try:
+        simba.memory.fts.upsert(conn, memory)
+    finally:
+        conn.close()
+
+
+def _fts_delete(fts_path: str, memory_id: str) -> None:
+    conn = simba.memory.fts.connect(fts_path)
+    try:
+        simba.memory.fts.delete(conn, memory_id)
+    finally:
+        conn.close()
+
+
+def _fts_set_project(fts_path: str, memory_id: str, project_path: str) -> None:
+    conn = simba.memory.fts.connect(fts_path)
+    try:
+        simba.memory.fts.set_project(conn, memory_id, project_path)
+    finally:
+        conn.close()
 
 
 class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
@@ -166,6 +197,25 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
         memory_id,
     )
 
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if fts_path:
+        try:
+            await asyncio.to_thread(
+                _fts_upsert,
+                fts_path,
+                {
+                    "id": memory_id,
+                    "type": body.type,
+                    "content": body.content,
+                    "context": body.context,
+                    "confidence": body.confidence,
+                    "createdAt": now,
+                    "projectPath": body.project_path,
+                },
+            )
+        except Exception:
+            logger.debug("[store] fts mirror upsert failed", exc_info=True)
+
     diag = getattr(request.app.state, "diagnostics", None)
     if diag is not None:
         diag.record_store(body.type, duplicate=False)
@@ -202,9 +252,22 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if body.project_path:
         filters["projectPath"] = body.project_path
 
-    memories = await simba.memory.vector_db.search_memories(
-        table, embedding, min_sim, max_res, filters
-    )
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if config.hybrid_enabled:
+        memories = await simba.memory.hybrid.hybrid_search(
+            table,
+            fts_path,
+            embedding,
+            body.query,
+            min_similarity=min_sim,
+            max_results=max_res,
+            filters=filters,
+            cfg=config,
+        )
+    else:
+        memories = await simba.memory.vector_db.search_memories(
+            table, embedding, min_sim, max_res, filters
+        )
 
     results = [
         {
@@ -370,6 +433,28 @@ async def trigger_sync(request: fastapi.Request) -> dict:
     return {"status": "triggered", "cycle": scheduler.cycle_count + 1}
 
 
+@router.post("/reindex")
+async def reindex(request: fastapi.Request) -> dict:
+    """Force a full rebuild of the FTS keyword mirror from LanceDB."""
+    table = request.app.state.table
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if not fts_path:
+        return {"status": "no_mirror"}
+
+    rows = await table.query().to_list()
+    non_system = [r for r in rows if r.get("type") != "SYSTEM"]
+
+    def _rebuild() -> int:
+        conn = simba.memory.fts.connect(fts_path)
+        try:
+            return simba.memory.fts.rebuild(conn, non_system)
+        finally:
+            conn.close()
+
+    indexed = await asyncio.to_thread(_rebuild)
+    return {"status": "reindexed", "indexed": indexed}
+
+
 class PatchRequest(pydantic.BaseModel):
     """Partial update to a memory record."""
 
@@ -390,6 +475,16 @@ async def patch_memory(
     if not updates:
         raise fastapi.HTTPException(status_code=400, detail="no fields to update")
     await table.update(updates=updates, where=f"id = '{memory_id}'")
+
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if fts_path and body.project_path is not None:
+        try:
+            await asyncio.to_thread(
+                _fts_set_project, fts_path, memory_id, body.project_path
+            )
+        except Exception:
+            logger.debug("[patch] fts mirror project update failed", exc_info=True)
+
     return {"status": "updated", "id": memory_id, "fields": list(updates.keys())}
 
 
@@ -397,4 +492,12 @@ async def patch_memory(
 async def delete_memory(memory_id: str, request: fastapi.Request) -> dict:
     table = request.app.state.table
     await table.delete(f"id = '{memory_id}'")
+
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if fts_path:
+        try:
+            await asyncio.to_thread(_fts_delete, fts_path, memory_id)
+        except Exception:
+            logger.debug("[delete] fts mirror delete failed", exc_info=True)
+
     return {"status": "deleted", "id": memory_id}
