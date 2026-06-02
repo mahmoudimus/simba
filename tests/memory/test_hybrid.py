@@ -160,7 +160,7 @@ class TestKeywordArmFocus:
 
     @staticmethod
     def _patch_arms(monkeypatch, captured: dict, *, vec=None):
-        def fake_search(conn, query, *, project_path=None, types=None, limit=20):
+        def fake_search(query, *, project_path=None, types=None, limit=20):
             captured["query"] = query
             captured["calls"] = captured.get("calls", 0) + 1
             return []
