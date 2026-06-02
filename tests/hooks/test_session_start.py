@@ -129,3 +129,7 @@ class TestSessionStartHook:
             )
         ctx = result["hookSpecificOutput"]["additionalContext"]
         assert "learning-extraction-required" in ctx
+        # Extraction-quality rules borrowed from agent-oss.
+        assert "Preserve proper nouns" in ctx
+        assert "Preserve numeric precision" in ctx
+        assert "Resolve relative dates" in ctx

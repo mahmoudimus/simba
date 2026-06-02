@@ -103,15 +103,29 @@ def format_memories(memories: list[dict], source: str) -> str:
         return ""
 
     similarities = "-".join(f"{m.get('similarity', 0):.2f}" for m in memories)
+    # Flag the most-recently-created memory (ISO-8601 sorts chronologically) so
+    # the model can prefer fresher info when memories conflict. Relevance order
+    # (RRF) is left untouched — we only annotate.
+    newest_idx = -1
+    if len(memories) >= 2:
+        dates = [(i, m.get("createdAt") or "") for i, m in enumerate(memories)]
+        if any(d for _, d in dates):
+            newest_idx = max(dates, key=lambda t: t[1])[0]
     lines = [
         f"[Recalled {len(memories)} memories | similarity: {similarities}]",
         f'<recalled-memories source="{source}">',
     ]
-    for m in memories:
+    for i, m in enumerate(memories):
         mtype = m.get("type", "UNKNOWN")
         sim = m.get("similarity", 0)
         content = m.get("content", "")
-        lines.append(f'  <memory type="{mtype}" similarity="{sim:.2f}">')
+        attrs = f'type="{mtype}" similarity="{sim:.2f}"'
+        created = (m.get("createdAt") or "")[:10]
+        if created:
+            attrs += f' created="{created}"'
+        if i == newest_idx:
+            attrs += ' recency="newest"'
+        lines.append(f"  <memory {attrs}>")
         lines.append(f"    {content}")
         lines.append("  </memory>")
     lines.append("</recalled-memories>")
