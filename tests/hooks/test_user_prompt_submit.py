@@ -77,6 +77,30 @@ class TestUserPromptSubmitHook:
         _, kwargs = mock_recall.call_args
         assert kwargs["project_path"] == str(tmp_path)
 
+    def test_hooks_config_exposes_prompt_floor(self):
+        import simba.hooks.config
+
+        cfg = simba.hooks.config.HooksConfig()
+        assert cfg.prompt_min_similarity == 0.45
+        assert cfg.prompt_min_length == 10
+
+    def test_recall_floor_comes_from_config(self, tmp_path, monkeypatch):
+        class _Stub:
+            prompt_min_similarity = 0.6
+            prompt_min_length = 5
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Stub(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ) as mock_recall:
+            simba.hooks.user_prompt_submit.main(
+                {"prompt": "a long enough prompt", "cwd": str(tmp_path)}
+            )
+        _, kwargs = mock_recall.call_args
+        assert kwargs["min_similarity"] == 0.6
+
     def test_includes_search_context(self, tmp_path):
         with (
             unittest.mock.patch(

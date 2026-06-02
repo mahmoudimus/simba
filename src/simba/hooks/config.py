@@ -21,6 +21,10 @@ class HooksConfig:
     default_max_results: int = 3
     default_timeout: float = 2.0
 
+    # User-prompt-submit recall
+    prompt_min_length: int = 10  # skip recall for prompts shorter than this
+    prompt_min_similarity: float = 0.45  # stricter floor than the daemon default
+
     # Pre-tool-use. General thinking-block recall defers to the daemon's
     # intent-aware floor (memory.min_similarity / min_similarity_broad), so
     # there is no general-recall floor here — only the strict rule gate below.
