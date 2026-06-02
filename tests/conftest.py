@@ -11,6 +11,32 @@ import pytest
 import simba.db
 
 
+@pytest.fixture(autouse=True)
+def _reset_db_globals():
+    """Reset module-global peewee state between tests.
+
+    The shared ``simba.db.database`` proxy and the per-path schema caches are
+    process-global. Resetting them after each test prevents a DB binding or open
+    connection from one test leaking into the next (defensive isolation for the
+    ORM's global state).
+    """
+    yield
+    try:
+        simba.db._schema_ready.clear()
+        if simba.db.database.database is not None and not simba.db.database.is_closed():
+            simba.db.database.close()
+    except Exception:
+        pass
+    try:
+        import simba.memory.fts as _fts
+
+        _fts._initialized.clear()
+        if _fts._db.database is not None and not _fts._db.is_closed():
+            _fts._db.close()
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a temporary project directory structure."""
