@@ -54,14 +54,10 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
     # -- Phase 1: Query SQLite project memory -------------------------------
     memory_context = ""
     try:
-        conn = simba.db.get_connection(cwd)
-        if conn is not None:
-            try:
-                memory_context = simba.search.project_memory.get_context(
-                    conn, search_terms, cfg.memory_token_budget
-                )
-            finally:
-                conn.close()
+        if simba.db.get_db_path(cwd).exists():
+            memory_context = simba.search.project_memory.get_context(
+                search_terms, cfg.memory_token_budget, cwd=cwd
+            )
     except Exception:
         memory_context = ""
 

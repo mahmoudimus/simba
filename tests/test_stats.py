@@ -98,7 +98,9 @@ class TestRunStats:
         mock_lines = unittest.mock.Mock()
         mock_lines.stdout = ""
 
-        mock_conn = unittest.mock.MagicMock()
+        db_file = tmp_path / ".simba" / "simba.db"
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.write_text("")
 
         with (
             unittest.mock.patch(
@@ -110,10 +112,6 @@ class TestRunStats:
                 return_value=[],
             ),
             unittest.mock.patch(
-                "simba.db.get_connection",
-                return_value=mock_conn,
-            ),
-            unittest.mock.patch(
                 "simba.search.project_memory.get_stats",
                 return_value={"sessions": 5, "knowledge": 3, "facts": 10},
             ),
@@ -123,7 +121,6 @@ class TestRunStats:
         assert "Sessions: 5" in result
         assert "Knowledge: 3" in result
         assert "Facts: 10" in result
-        mock_conn.close.assert_called_once()
 
     def test_no_activity_log(self, tmp_path: pathlib.Path) -> None:
         mock_files = unittest.mock.Mock()

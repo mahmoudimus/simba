@@ -9,7 +9,12 @@ import contextlib
 import sqlite3
 import typing
 
+import simba._vendor.peewee as pw
 import simba.db
+from simba._vendor.playhouse.sqlite_ext import FTS5Model, RowIDField, SearchField
+
+if typing.TYPE_CHECKING:
+    import pathlib
 
 _SCHEMA_BASE_SQL = """\
 -- Session summaries - what was worked on
@@ -127,55 +132,99 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 simba.db.register_schema(_init_schema)
 
 
+class Session(simba.db.BaseModel):
+    summary = pw.TextField()
+    files_touched = pw.TextField(null=True)
+    tools_used = pw.TextField(null=True)
+    topics = pw.TextField(null=True)
+    created_at = pw.TextField(null=True)  # DB default CURRENT_TIMESTAMP
+
+    class Meta:
+        table_name = "sessions"
+
+
+class Knowledge(simba.db.BaseModel):
+    area = pw.TextField(unique=True)
+    summary = pw.TextField()
+    patterns = pw.TextField(null=True)
+    updated_at = pw.TextField(null=True)  # DB default CURRENT_TIMESTAMP
+
+    class Meta:
+        table_name = "knowledge"
+
+
+class Fact(simba.db.BaseModel):
+    fact = pw.TextField()
+    category = pw.TextField(null=True)  # DB default 'general'
+    created_at = pw.TextField(null=True)  # DB default CURRENT_TIMESTAMP
+
+    class Meta:
+        table_name = "facts"
+
+
+class ProjectMemoryFTS(FTS5Model):
+    # Query-only view of the porter-tokenized FTS mirror (creation + sync stay
+    # in the raw DDL/triggers above). Used for snippet() + rank in search_fts.
+    rowid = RowIDField()
+    content = SearchField()
+    source_type = SearchField()
+    source_id = SearchField()
+
+    class Meta:
+        database = simba.db.database
+        table_name = "memory_fts"
+
+
 def add_session(
-    conn: sqlite3.Connection,
     summary: str,
     files_touched: str,
     tools_used: str,
     topics: str,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> int:
     """Insert a session summary and return its rowid."""
-    cursor = conn.execute(
-        "INSERT INTO sessions (summary, files_touched, tools_used, topics) "
-        "VALUES (?, ?, ?, ?)",
-        (summary, files_touched, tools_used, topics),
-    )
-    conn.commit()
-    return typing.cast("int", cursor.lastrowid)
+    with simba.db.connect(cwd):
+        return Session.create(
+            summary=summary,
+            files_touched=files_touched,
+            tools_used=tools_used,
+            topics=topics,
+        ).id
 
 
 def add_knowledge(
-    conn: sqlite3.Connection,
     area: str,
     summary: str,
     patterns: str,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> int:
     """Upsert knowledge for a code area and return its rowid."""
-    cursor = conn.execute(
-        "INSERT INTO knowledge (area, summary, patterns) "
-        "VALUES (?, ?, ?) "
-        "ON CONFLICT(area) DO UPDATE SET "
-        "summary = excluded.summary, "
-        "patterns = excluded.patterns, "
-        "updated_at = CURRENT_TIMESTAMP",
-        (area, summary, patterns),
-    )
-    conn.commit()
-    return typing.cast("int", cursor.lastrowid)
+    with simba.db.connect(cwd):
+        return (
+            Knowledge.insert(area=area, summary=summary, patterns=patterns)
+            .on_conflict(
+                conflict_target=[Knowledge.area],
+                update={
+                    Knowledge.summary: summary,
+                    Knowledge.patterns: patterns,
+                    Knowledge.updated_at: pw.SQL("CURRENT_TIMESTAMP"),
+                },
+            )
+            .execute()
+        )
 
 
 def add_fact(
-    conn: sqlite3.Connection,
     fact: str,
     category: str = "general",
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> int:
     """Insert a fact and return its rowid."""
-    cursor = conn.execute(
-        "INSERT INTO facts (fact, category) VALUES (?, ?)",
-        (fact, category),
-    )
-    conn.commit()
-    return typing.cast("int", cursor.lastrowid)
+    with simba.db.connect(cwd):
+        return Fact.create(fact=fact, category=category).id
 
 
 def _escape_fts_query(query: str) -> str:
@@ -193,9 +242,10 @@ def _escape_fts_query(query: str) -> str:
 
 
 def search_fts(
-    conn: sqlite3.Connection,
     query: str,
     limit: int = 10,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Full-text search with snippet extraction.
 
@@ -206,34 +256,30 @@ def search_fts(
     if not safe_query:
         return []
 
-    try:
-        rows = conn.execute(
-            "SELECT source_type, source_id, "
-            "snippet(memory_fts, 0, '**', '**', '...', 32) AS match "
-            "FROM memory_fts "
-            "WHERE memory_fts MATCH ? "
-            "ORDER BY rank "
-            "LIMIT ?",
-            (safe_query, limit),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        # FTS5 virtual table may not exist if SQLite lacks FTS5 support
-        return []
-
-    return [
-        {
-            "source_type": row["source_type"],
-            "source_id": row["source_id"],
-            "match": row["match"],
-        }
-        for row in rows
-    ]
+    snippet = pw.fn.snippet(ProjectMemoryFTS._meta.entity, 0, "**", "**", "...", 32)
+    with simba.db.connect(cwd):
+        q = (
+            ProjectMemoryFTS.select(
+                ProjectMemoryFTS.source_type,
+                ProjectMemoryFTS.source_id,
+                snippet.alias("match"),
+            )
+            .where(ProjectMemoryFTS.match(safe_query))
+            .order_by(ProjectMemoryFTS.bm25())
+            .limit(limit)
+        )
+        try:
+            return list(q.dicts())
+        except Exception:
+            # FTS5 virtual table may not exist if SQLite lacks FTS5 support
+            return []
 
 
 def get_context(
-    conn: sqlite3.Connection,
     query: str,
     token_budget: int = 500,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> str:
     """Build a markdown context string combining facts, knowledge, sessions, and FTS.
 
@@ -243,82 +289,71 @@ def get_context(
     char_limit = token_budget * 4
     parts: list[str] = []
 
-    # 1. Facts (highest value, lowest cost)
-    fact_rows = conn.execute(
-        "SELECT fact FROM facts ORDER BY created_at DESC LIMIT 5"
-    ).fetchall()
-    if fact_rows:
-        lines = ["## Project Facts"]
-        for row in fact_rows:
-            lines.append(f"- {row['fact']}")
-        parts.append("\n".join(lines))
-
-    # 2. Relevant knowledge areas (LIKE match on query)
-    if query:
-        like_pattern = f"%{query}%"
-        knowledge_rows = conn.execute(
-            "SELECT area, summary FROM knowledge "
-            "WHERE area LIKE ? OR summary LIKE ? "
-            "LIMIT 3",
-            (like_pattern, like_pattern),
-        ).fetchall()
-        if knowledge_rows:
-            lines = ["## Relevant Code Areas"]
-            for row in knowledge_rows:
-                lines.append(f"- **{row['area']}**: {row['summary']}")
+    with simba.db.connect(cwd):
+        # 1. Facts (highest value, lowest cost)
+        facts = list(Fact.select(Fact.fact).order_by(Fact.created_at.desc()).limit(5))
+        if facts:
+            lines = ["## Project Facts"]
+            lines += [f"- {f.fact}" for f in facts]
             parts.append("\n".join(lines))
 
-    # 3. Recent sessions
-    session_rows = conn.execute(
-        "SELECT summary FROM sessions ORDER BY created_at DESC LIMIT 3"
-    ).fetchall()
-    if session_rows:
-        lines = ["## Recent Work"]
-        for row in session_rows:
-            lines.append(f"- {row['summary']}")
-        parts.append("\n".join(lines))
+        # 2. Relevant knowledge areas (LIKE match on query)
+        if query:
+            knowledge = list(
+                Knowledge.select(Knowledge.area, Knowledge.summary)
+                .where(
+                    Knowledge.area.contains(query) | Knowledge.summary.contains(query)
+                )
+                .limit(3)
+            )
+            if knowledge:
+                lines = ["## Relevant Code Areas"]
+                lines += [f"- **{k.area}**: {k.summary}" for k in knowledge]
+                parts.append("\n".join(lines))
 
-    # 4. FTS results for query-specific context
-    if query:
-        fts_results = search_fts(conn, query, limit=5)
-        if fts_results:
-            lines = ["## Related Context"]
-            for result in fts_results:
-                lines.append(f"- {result['match']}")
+        # 3. Recent sessions
+        sessions = list(
+            Session.select(Session.summary).order_by(Session.created_at.desc()).limit(3)
+        )
+        if sessions:
+            lines = ["## Recent Work"]
+            lines += [f"- {s.summary}" for s in sessions]
             parts.append("\n".join(lines))
+
+        # 4. FTS results for query-specific context
+        if query:
+            fts_results = search_fts(query, limit=5, cwd=cwd)
+            if fts_results:
+                lines = ["## Related Context"]
+                lines += [f"- {r['match']}" for r in fts_results]
+                parts.append("\n".join(lines))
 
     output = "\n\n".join(parts)
     return output[:char_limit]
 
 
 def get_recent_sessions(
-    conn: sqlite3.Connection,
     limit: int = 5,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Return recent sessions as a list of dicts."""
-    rows = conn.execute(
-        "SELECT id, created_at, summary, topics "
-        "FROM sessions ORDER BY created_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    return [
-        {
-            "id": row["id"],
-            "created_at": row["created_at"],
-            "summary": row["summary"],
-            "topics": row["topics"],
-        }
-        for row in rows
-    ]
+    with simba.db.connect(cwd):
+        rows = (
+            Session.select(
+                Session.id, Session.created_at, Session.summary, Session.topics
+            )
+            .order_by(Session.created_at.desc())
+            .limit(limit)
+        )
+        return list(rows.dicts())
 
 
-def get_stats(conn: sqlite3.Connection) -> dict[str, int]:
+def get_stats(cwd: pathlib.Path | None = None) -> dict[str, int]:
     """Return counts for sessions, knowledge, and facts."""
-    sessions = conn.execute("SELECT COUNT(*) AS c FROM sessions").fetchone()["c"]
-    knowledge = conn.execute("SELECT COUNT(*) AS c FROM knowledge").fetchone()["c"]
-    facts = conn.execute("SELECT COUNT(*) AS c FROM facts").fetchone()["c"]
-    return {
-        "sessions": sessions,
-        "knowledge": knowledge,
-        "facts": facts,
-    }
+    with simba.db.connect(cwd):
+        return {
+            "sessions": Session.select().count(),
+            "knowledge": Knowledge.select().count(),
+            "facts": Fact.select().count(),
+        }

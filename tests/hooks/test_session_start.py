@@ -69,15 +69,14 @@ class TestSessionStartHook:
 
     def test_includes_project_memory_stats(self, tmp_path):
         health = {"memoryCount": 5, "embeddingModel": "nomic-embed-text"}
-        mock_conn = unittest.mock.MagicMock()
+        db_file = tmp_path / ".simba" / "simba.db"
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.write_text("")
         with (
             unittest.mock.patch(
                 "simba.hooks.session_start._check_health", return_value=health
             ),
-            unittest.mock.patch(
-                "simba.db.get_connection",
-                return_value=mock_conn,
-            ),
+            unittest.mock.patch("simba.db.get_db_path", return_value=db_file),
             unittest.mock.patch(
                 "simba.search.project_memory.get_stats",
                 return_value={"sessions": 10, "knowledge": 3, "facts": 7},
@@ -88,15 +87,18 @@ class TestSessionStartHook:
         assert "10 sessions" in ctx
         assert "3 knowledge areas" in ctx
         assert "7 facts" in ctx
-        mock_conn.close.assert_called_once()
 
     def test_project_memory_error_does_not_crash(self, tmp_path):
+        db_file = tmp_path / ".simba" / "simba.db"
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.write_text("")
         with (
             unittest.mock.patch(
                 "simba.hooks.session_start._check_health", return_value=None
             ),
+            unittest.mock.patch("simba.db.get_db_path", return_value=db_file),
             unittest.mock.patch(
-                "simba.db.get_connection",
+                "simba.search.project_memory.get_stats",
                 side_effect=OSError("db error"),
             ),
         ):
