@@ -246,7 +246,19 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     else:
         min_sim = config.min_similarity
         mode = "precise"
-    max_res = body.max_results if body.max_results is not None else config.max_results
+
+    # Broad queries widen the net: more results + a larger RRF candidate pool.
+    # An explicit client maxResults still wins.
+    broad = mode == "broad"
+    if body.max_results is not None:
+        max_res = body.max_results
+    elif broad:
+        max_res = config.max_results_broad
+    else:
+        max_res = config.max_results
+    candidate_pool = (
+        config.fts_candidate_pool_broad if broad else config.fts_candidate_pool
+    )
 
     filters = dict(body.filters)
     if body.project_path:
@@ -263,6 +275,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             max_results=max_res,
             filters=filters,
             cfg=config,
+            candidate_pool=candidate_pool,
         )
     else:
         memories = await simba.memory.vector_db.search_memories(
