@@ -54,7 +54,11 @@ class TestKgAdd:
         assert rows[0]["subject_type"] == "concept"
         assert rows[0]["object_type"] == "concept"
 
-    def test_duplicate_returns_exists(self) -> None:
+    def test_duplicate_returns_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Dedup keys on UNIQUE(..., valid_from); freeze the clock so both adds
+        # share a valid_from (otherwise a second-boundary makes the 2nd a new
+        # open edge rather than a collision).
+        monkeypatch.setattr("simba.kg.store._now", lambda: "2026-01-01T00:00:00Z")
         assert kg_add("a", "rel", "b", "p1", project_path="proj-1") == "added"
         assert kg_add("a", "rel", "b", "p2", project_path="proj-1") == "exists"
         rows = kg_query(subject="a", project_path="proj-1")
@@ -97,13 +101,9 @@ class TestKgTemporal:
 
         # Close the edge, then ask "as_of" a far-future time → excluded.
         kg_invalidate("a", "rel", "b", project_path="proj-1")
-        closed_rows = kg_query(
-            subject="a", project_path="proj-1", include_expired=True
-        )
+        closed_rows = kg_query(subject="a", project_path="proj-1", include_expired=True)
         valid_to = closed_rows[0]["valid_to"]
-        assert (
-            kg_query(subject="a", project_path="proj-1", as_of=valid_to) == []
-        )
+        assert kg_query(subject="a", project_path="proj-1", as_of=valid_to) == []
 
 
 class TestKgQueryFts:
@@ -141,8 +141,7 @@ class TestKgTriggerSync:
         conn = sqlite3.connect(str(db_path))
         try:
             count = conn.execute(
-                "SELECT COUNT(*) FROM kg_edges_fts "
-                "WHERE kg_edges_fts MATCH 'ledg'"
+                "SELECT COUNT(*) FROM kg_edges_fts WHERE kg_edges_fts MATCH 'ledg'"
             ).fetchone()[0]
         finally:
             conn.close()

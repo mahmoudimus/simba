@@ -48,6 +48,8 @@ dev = [
 src = ["src"]
 line-length = 88
 target-version = "py313"
+# Vendored third-party code (peewee + playhouse) is kept verbatim — never lint it.
+extend-exclude = ["src/simba/_vendor"]
 
 [tool.ruff.lint]
 select = [

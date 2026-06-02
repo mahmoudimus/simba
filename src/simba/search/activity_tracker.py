@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING
 
+import simba._vendor.peewee as pw
 import simba.db
 
 if TYPE_CHECKING:
@@ -28,28 +29,38 @@ _MAX_ROWS = 200
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
-    """Initialize the activities table."""
+    """Initialize the activities table (transitional: legacy get_db path)."""
     conn.executescript(_SCHEMA_SQL)
 
 
+# Transitional: both registrations create the same table IF NOT EXISTS so the
+# legacy get_db path and the peewee path interoperate during the migration.
 simba.db.register_schema(_init_schema)
+
+
+class Activity(simba.db.BaseModel):
+    timestamp = pw.CharField()
+    tool_name = pw.CharField()
+    detail = pw.CharField(default="")
+
+    class Meta:
+        table_name = "activities"
+        indexes = ((("timestamp",), False),)
+
+
+simba.db.register_model(Activity)
 
 
 def log_activity(cwd: pathlib.Path, tool_name: str, detail: str) -> None:
     """Insert a timestamped activity entry and rotate if needed."""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with simba.db.get_db(cwd) as conn:
-        conn.execute(
-            "INSERT INTO activities (timestamp, tool_name, detail) VALUES (?, ?, ?)",
-            (timestamp, tool_name, detail),
+    with simba.db.connect(cwd):
+        Activity.create(timestamp=timestamp, tool_name=tool_name, detail=detail)
+        # Rotation: keep only the last _MAX_ROWS rows.
+        keep = (
+            Activity.select(Activity.id).order_by(Activity.id.desc()).limit(_MAX_ROWS)
         )
-        # Rotation: keep only the last _MAX_ROWS rows
-        conn.execute(
-            "DELETE FROM activities WHERE id NOT IN "
-            "(SELECT id FROM activities ORDER BY id DESC LIMIT ?)",
-            (_MAX_ROWS,),
-        )
-        conn.commit()
+        Activity.delete().where(Activity.id.not_in(keep)).execute()
 
 
 def read_activity_log(
@@ -60,25 +71,18 @@ def read_activity_log(
     Returns entries in chronological order.
     Returns an empty list when the database does not exist.
     """
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         return []
-    try:
-        rows = conn.execute(
-            "SELECT timestamp, tool_name, detail FROM activities ORDER BY id ASC"
-        ).fetchall()
-        return [(row["timestamp"], row["tool_name"], row["detail"]) for row in rows]
-    finally:
-        conn.close()
+    with simba.db.connect(cwd):
+        return [
+            (a.timestamp, a.tool_name, a.detail)
+            for a in Activity.select().order_by(Activity.id)
+        ]
 
 
 def clear_activity_log(cwd: pathlib.Path) -> None:
     """Delete all activity entries."""
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         return
-    try:
-        conn.execute("DELETE FROM activities")
-        conn.commit()
-    finally:
-        conn.close()
+    with simba.db.connect(cwd):
+        Activity.delete().execute()

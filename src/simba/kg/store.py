@@ -15,7 +15,9 @@ import contextlib
 import sqlite3
 import time
 
+import simba._vendor.peewee as pw
 import simba.db
+from simba._vendor.playhouse.sqlite_ext import FTS5Model, RowIDField, SearchField
 
 _SCHEMA_BASE_SQL = """\
 CREATE TABLE IF NOT EXISTS kg_edges (
@@ -95,25 +97,58 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 simba.db.register_schema(_init_schema)
 
 
+class KgEdge(simba.db.BaseModel):
+    # Maps the kg_edges table (created by the raw _init_schema above, which also
+    # owns the external-content FTS5 mirror + sync triggers peewee can't model).
+    subject = pw.TextField(null=True)
+    predicate = pw.TextField(null=True)
+    object = pw.TextField(null=True)
+    subject_type = pw.TextField(null=True)
+    object_type = pw.TextField(null=True)
+    proof = pw.TextField(null=True)
+    transcript_id = pw.TextField(null=True)
+    char_start = pw.IntegerField(null=True)
+    valid_from = pw.TextField(null=True)
+    valid_to = pw.TextField(null=True)
+    project_path = pw.TextField()
+    created_at = pw.TextField(null=True)
+
+    class Meta:
+        table_name = "kg_edges"
+
+
+class KgEdgeFTS(FTS5Model):
+    # Query-only view of the external-content FTS mirror (creation + sync stay
+    # in the raw DDL/triggers).  Used for MATCH + bm25 ranking in kg_query.
+    rowid = RowIDField()
+    subject = SearchField()
+    predicate = SearchField()
+    object = SearchField()
+
+    class Meta:
+        database = simba.db.database
+        table_name = "kg_edges_fts"
+
+
 def _now() -> str:
     """Return the current UTC time as an ISO-8601 ``Z`` timestamp."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
-    """Project a ``kg_edges`` row into a stable public dict."""
+def _row_to_dict(edge: KgEdge) -> dict[str, object]:
+    """Project a ``KgEdge`` row into a stable public dict."""
     return {
-        "id": row["id"],
-        "subject": row["subject"],
-        "predicate": row["predicate"],
-        "object": row["object"],
-        "subject_type": row["subject_type"],
-        "object_type": row["object_type"],
-        "proof": row["proof"],
-        "transcript_id": row["transcript_id"],
-        "char_start": row["char_start"],
-        "valid_from": row["valid_from"],
-        "valid_to": row["valid_to"],
+        "id": edge.id,
+        "subject": edge.subject,
+        "predicate": edge.predicate,
+        "object": edge.object,
+        "subject_type": edge.subject_type,
+        "object_type": edge.object_type,
+        "proof": edge.proof,
+        "transcript_id": edge.transcript_id,
+        "char_start": edge.char_start,
+        "valid_from": edge.valid_from,
+        "valid_to": edge.valid_to,
     }
 
 
@@ -139,30 +174,24 @@ def kg_add(
     if project_path is None:
         project_path = simba.db.resolve_project_id()
     now = _now()
-    with simba.db.get_db() as conn:
+    with simba.db.connect():
         try:
-            conn.execute(
-                "INSERT INTO kg_edges (subject, predicate, object, "
-                "subject_type, object_type, proof, transcript_id, char_start, "
-                "valid_from, valid_to, project_path, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-                (
-                    subject,
-                    predicate,
-                    object,
-                    subject_type,
-                    object_type,
-                    proof,
-                    transcript_id,
-                    char_start,
-                    now,
-                    project_path,
-                    now,
-                ),
+            KgEdge.create(
+                subject=subject,
+                predicate=predicate,
+                object=object,
+                subject_type=subject_type,
+                object_type=object_type,
+                proof=proof,
+                transcript_id=transcript_id,
+                char_start=char_start,
+                valid_from=now,
+                valid_to=None,
+                project_path=project_path,
+                created_at=now,
             )
-            conn.commit()
             return "added"
-        except sqlite3.IntegrityError:
+        except pw.IntegrityError:
             return "exists"
 
 
@@ -180,15 +209,18 @@ def kg_invalidate(
     """
     if project_path is None:
         project_path = simba.db.resolve_project_id()
-    with simba.db.get_db() as conn:
-        cursor = conn.execute(
-            "UPDATE kg_edges SET valid_to=? "
-            "WHERE subject=? AND predicate=? AND object=? "
-            "AND project_path=? AND valid_to IS NULL",
-            (_now(), subject, predicate, object, project_path),
+    with simba.db.connect():
+        return (
+            KgEdge.update(valid_to=_now())
+            .where(
+                (KgEdge.subject == subject)
+                & (KgEdge.predicate == predicate)
+                & (KgEdge.object == object)
+                & (KgEdge.project_path == project_path)
+                & (KgEdge.valid_to.is_null())
+            )
+            .execute()
         )
-        conn.commit()
-        return cursor.rowcount
 
 
 def kg_query(
@@ -213,48 +245,36 @@ def kg_query(
     Returns a list of row dicts.  A malformed FTS ``MATCH`` expression is
     swallowed and yields ``[]``.
     """
-    clauses: list[str] = []
-    params: list[object] = []
+    with simba.db.connect():
+        if query:
+            q = (
+                KgEdge.select()
+                .join(KgEdgeFTS, on=(KgEdgeFTS.rowid == KgEdge.id))
+                .where(KgEdgeFTS.match(query))
+            )
+        else:
+            q = KgEdge.select()
+            if subject:
+                q = q.where(KgEdge.subject == subject)
+            if predicate:
+                q = q.where(KgEdge.predicate == predicate)
 
-    if query:
-        sql = (
-            "SELECT e.* FROM kg_edges e "
-            "JOIN kg_edges_fts f ON f.rowid = e.id "
-            "WHERE kg_edges_fts MATCH ?"
-        )
-        params.append(query)
-    else:
-        sql = "SELECT e.* FROM kg_edges e WHERE 1=1"
-        if subject:
-            clauses.append("e.subject = ?")
-            params.append(subject)
-        if predicate:
-            clauses.append("e.predicate = ?")
-            params.append(predicate)
+        if project_path:
+            q = q.where(KgEdge.project_path == project_path)
 
-    if project_path:
-        clauses.append("e.project_path = ?")
-        params.append(project_path)
+        if as_of is not None:
+            q = q.where(KgEdge.valid_from <= as_of).where(
+                KgEdge.valid_to.is_null() | (as_of < KgEdge.valid_to)
+            )
+        elif not include_expired:
+            q = q.where(KgEdge.valid_to.is_null())
 
-    if as_of is not None:
-        clauses.append("e.valid_from <= ?")
-        params.append(as_of)
-        clauses.append("(e.valid_to IS NULL OR ? < e.valid_to)")
-        params.append(as_of)
-    elif not include_expired:
-        clauses.append("e.valid_to IS NULL")
+        if query:
+            q = q.order_by(KgEdgeFTS.bm25())
+        q = q.limit(limit)
 
-    for clause in clauses:
-        sql += f" AND {clause}"
-
-    if query:
-        sql += " ORDER BY bm25(kg_edges_fts)"
-    sql += " LIMIT ?"
-    params.append(limit)
-
-    with simba.db.get_db() as conn:
         try:
-            rows = conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
+            rows = list(q)
+        except Exception:
             return []
     return [_row_to_dict(row) for row in rows]

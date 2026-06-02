@@ -31,37 +31,35 @@ def _use_tmp_db(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 def _seed_db(cwd: pathlib.Path) -> None:
     """Populate the database with test data via the real project_memory API."""
-    with simba.db.get_db(cwd) as conn:
-        simba.search.project_memory.add_fact(conn, "Use ruff for linting", "tooling")
-        simba.search.project_memory.add_fact(
-            conn, "Authentication uses JWT tokens", "architecture"
-        )
-        simba.search.project_memory.add_knowledge(
-            conn,
-            "auth",
-            "Authentication module handles JWT validation and session management",
-            "decorator-based auth, middleware pattern",
-        )
-        simba.search.project_memory.add_knowledge(
-            conn,
-            "database",
-            "Database layer uses SQLAlchemy with connection pooling",
-            "repository pattern, unit of work",
-        )
-        simba.search.project_memory.add_session(
-            conn,
-            summary="Migrated database to async driver",
-            files_touched="src/db.py,src/models.py",
-            tools_used="Read,Write,Bash",
-            topics="database,migration,async",
-        )
-        simba.search.project_memory.add_session(
-            conn,
-            summary="Fixed authentication token refresh bug",
-            files_touched="src/auth.py",
-            tools_used="Read,Edit",
-            topics="authentication,bugfix",
-        )
+    pm = simba.search.project_memory
+    pm.add_fact("Use ruff for linting", "tooling", cwd=cwd)
+    pm.add_fact("Authentication uses JWT tokens", "architecture", cwd=cwd)
+    pm.add_knowledge(
+        "auth",
+        "Authentication module handles JWT validation and session management",
+        "decorator-based auth, middleware pattern",
+        cwd=cwd,
+    )
+    pm.add_knowledge(
+        "database",
+        "Database layer uses SQLAlchemy with connection pooling",
+        "repository pattern, unit of work",
+        cwd=cwd,
+    )
+    pm.add_session(
+        summary="Migrated database to async driver",
+        files_touched="src/db.py,src/models.py",
+        tools_used="Read,Write,Bash",
+        topics="database,migration,async",
+        cwd=cwd,
+    )
+    pm.add_session(
+        summary="Fixed authentication token refresh bug",
+        files_touched="src/auth.py",
+        tools_used="Read,Edit",
+        topics="authentication,bugfix",
+        cwd=cwd,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +157,11 @@ class TestBuildContext:
         assert result == ""
 
     def test_no_crash_when_db_connection_fails(self, cwd: pathlib.Path) -> None:
-        # Force get_connection to raise by making get_db_path raise
+        # Force the project-memory read to raise; build_context must swallow it.
+        _seed_db(cwd)
         with (
             unittest.mock.patch(
-                "simba.db.get_connection",
+                "simba.search.project_memory.get_context",
                 side_effect=OSError("disk on fire"),
             ),
             unittest.mock.patch("simba.search.qmd.is_available", return_value=False),

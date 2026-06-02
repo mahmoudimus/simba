@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import collections.abc
 import pathlib
 import sqlite3
 
 import pytest
 
 import simba.db
-import simba.search.project_memory
+import simba.search.project_memory as pm
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -17,14 +16,11 @@ import simba.search.project_memory
 
 
 @pytest.fixture
-def db_conn(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> collections.abc.Generator[sqlite3.Connection]:
-    """Create a temporary DB via simba.db.get_db and return the connection."""
+def cwd(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Point simba.db.get_db_path at a tmp DB; functions use connect(cwd=None)."""
     db_path = tmp_path / ".simba" / "simba.db"
-    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
-    with simba.db.get_db(tmp_path) as conn:
-        yield conn
+    monkeypatch.setattr(simba.db, "get_db_path", lambda c=None: db_path)
+    return tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -58,29 +54,30 @@ class TestSchema:
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         db_path = tmp_path / "sub" / ".simba" / "simba.db"
-        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
-        with simba.db.get_db(tmp_path):
+        monkeypatch.setattr(simba.db, "get_db_path", lambda c=None: db_path)
+        with simba.db.connect(tmp_path):
             pass
         assert db_path.exists()
 
-    def test_tables_exist(self, db_conn: sqlite3.Connection) -> None:
-        rows = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        ).fetchall()
+    def test_tables_exist(self, cwd: pathlib.Path) -> None:
+        with simba.db.get_db(cwd) as conn:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
         table_names = {row["name"] for row in rows}
         assert "sessions" in table_names
         assert "knowledge" in table_names
         assert "facts" in table_names
 
-    def test_fts_table_exists_when_supported(self, db_conn: sqlite3.Connection) -> None:
-        rows = db_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        ).fetchall()
+    def test_fts_table_exists_when_supported(self, cwd: pathlib.Path) -> None:
+        with simba.db.get_db(cwd) as conn:
+            rows = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()
         table_names = {row["name"] for row in rows}
         if _has_fts5():
             assert "memory_fts" in table_names
         else:
-            # FTS5 not available; the table should simply be absent.
             assert "memory_fts" not in table_names
 
 
@@ -90,9 +87,8 @@ class TestSchema:
 
 
 class TestAddSession:
-    def test_returns_positive_rowid(self, db_conn: sqlite3.Connection) -> None:
-        rowid = simba.search.project_memory.add_session(
-            db_conn,
+    def test_returns_positive_rowid(self, cwd: pathlib.Path) -> None:
+        rowid = pm.add_session(
             summary="Fixed auth bug",
             files_touched="auth.py",
             tools_used="grep,read",
@@ -100,32 +96,26 @@ class TestAddSession:
         )
         assert rowid > 0
 
-    def test_data_retrievable(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_session(
-            db_conn,
+    def test_data_retrievable(self, cwd: pathlib.Path) -> None:
+        pm.add_session(
             summary="Refactored tests",
             files_touched="tests/test_foo.py",
             tools_used="edit",
             topics="testing",
         )
-        row = db_conn.execute(
-            "SELECT summary, files_touched, tools_used, topics "
-            "FROM sessions WHERE id = 1"
-        ).fetchone()
+        with simba.db.get_db(cwd) as conn:
+            row = conn.execute(
+                "SELECT summary, files_touched, tools_used, topics "
+                "FROM sessions WHERE id = 1"
+            ).fetchone()
         assert row["summary"] == "Refactored tests"
         assert row["files_touched"] == "tests/test_foo.py"
         assert row["tools_used"] == "edit"
         assert row["topics"] == "testing"
 
-    def test_multiple_sessions_get_different_ids(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
-        id1 = simba.search.project_memory.add_session(
-            db_conn, "s1", "f1", "t1", "topic1"
-        )
-        id2 = simba.search.project_memory.add_session(
-            db_conn, "s2", "f2", "t2", "topic2"
-        )
+    def test_multiple_sessions_get_different_ids(self, cwd: pathlib.Path) -> None:
+        id1 = pm.add_session("s1", "f1", "t1", "topic1")
+        id2 = pm.add_session("s2", "f2", "t2", "topic2")
         assert id1 != id2
 
 
@@ -135,42 +125,32 @@ class TestAddSession:
 
 
 class TestAddKnowledge:
-    def test_returns_positive_rowid(self, db_conn: sqlite3.Connection) -> None:
-        rowid = simba.search.project_memory.add_knowledge(
-            db_conn,
+    def test_returns_positive_rowid(self, cwd: pathlib.Path) -> None:
+        rowid = pm.add_knowledge(
             area="auth",
             summary="JWT-based authentication",
             patterns="middleware chain",
         )
         assert rowid > 0
 
-    def test_upsert_updates_existing_area(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="auth", summary="v1", patterns="p1"
-        )
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="auth", summary="v2", patterns="p2"
-        )
-        row = db_conn.execute(
-            "SELECT summary, patterns FROM knowledge WHERE area = 'auth'"
-        ).fetchone()
+    def test_upsert_updates_existing_area(self, cwd: pathlib.Path) -> None:
+        pm.add_knowledge(area="auth", summary="v1", patterns="p1")
+        pm.add_knowledge(area="auth", summary="v2", patterns="p2")
+        with simba.db.get_db(cwd) as conn:
+            row = conn.execute(
+                "SELECT summary, patterns FROM knowledge WHERE area = 'auth'"
+            ).fetchone()
         assert row["summary"] == "v2"
         assert row["patterns"] == "p2"
 
-    def test_upsert_preserves_other_areas(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="auth", summary="auth-summary", patterns="ap"
-        )
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="db", summary="db-summary", patterns="dp"
-        )
-        # Update auth only
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="auth", summary="auth-v2", patterns="ap2"
-        )
-        db_row = db_conn.execute(
-            "SELECT summary FROM knowledge WHERE area = 'db'"
-        ).fetchone()
+    def test_upsert_preserves_other_areas(self, cwd: pathlib.Path) -> None:
+        pm.add_knowledge(area="auth", summary="auth-summary", patterns="ap")
+        pm.add_knowledge(area="db", summary="db-summary", patterns="dp")
+        pm.add_knowledge(area="auth", summary="auth-v2", patterns="ap2")
+        with simba.db.get_db(cwd) as conn:
+            db_row = conn.execute(
+                "SELECT summary FROM knowledge WHERE area = 'db'"
+            ).fetchone()
         assert db_row["summary"] == "db-summary"
 
 
@@ -180,24 +160,22 @@ class TestAddKnowledge:
 
 
 class TestAddFact:
-    def test_default_category(self, db_conn: sqlite3.Connection) -> None:
-        rowid = simba.search.project_memory.add_fact(
-            db_conn, fact="Use ruff for linting"
-        )
+    def test_default_category(self, cwd: pathlib.Path) -> None:
+        rowid = pm.add_fact(fact="Use ruff for linting")
         assert rowid > 0
-        row = db_conn.execute(
-            "SELECT fact, category FROM facts WHERE id = ?", (rowid,)
-        ).fetchone()
+        with simba.db.get_db(cwd) as conn:
+            row = conn.execute(
+                "SELECT fact, category FROM facts WHERE id = ?", (rowid,)
+            ).fetchone()
         assert row["fact"] == "Use ruff for linting"
         assert row["category"] == "general"
 
-    def test_custom_category(self, db_conn: sqlite3.Connection) -> None:
-        rowid = simba.search.project_memory.add_fact(
-            db_conn, fact="Pin numpy to 1.26", category="dependency"
-        )
-        row = db_conn.execute(
-            "SELECT category FROM facts WHERE id = ?", (rowid,)
-        ).fetchone()
+    def test_custom_category(self, cwd: pathlib.Path) -> None:
+        rowid = pm.add_fact(fact="Pin numpy to 1.26", category="dependency")
+        with simba.db.get_db(cwd) as conn:
+            row = conn.execute(
+                "SELECT category FROM facts WHERE id = ?", (rowid,)
+            ).fetchone()
         assert row["category"] == "dependency"
 
 
@@ -208,26 +186,23 @@ class TestAddFact:
 
 class TestSearchFts:
     @pytest.mark.skipif(not _has_fts5(), reason="FTS5 not available")
-    def test_finds_matching_content(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_session(
-            db_conn,
+    def test_finds_matching_content(self, cwd: pathlib.Path) -> None:
+        pm.add_session(
             summary="Implemented caching layer for Redis",
             files_touched="cache.py",
             tools_used="edit",
             topics="caching,redis",
         )
-        results = simba.search.project_memory.search_fts(db_conn, "caching")
+        results = pm.search_fts("caching")
         assert len(results) >= 1
         assert results[0]["source_type"] == "session"
 
-    def test_empty_query_returns_empty(self, db_conn: sqlite3.Connection) -> None:
-        results = simba.search.project_memory.search_fts(db_conn, "")
-        assert results == []
+    def test_empty_query_returns_empty(self, cwd: pathlib.Path) -> None:
+        assert pm.search_fts("") == []
 
-    def test_special_characters_do_not_crash(self, db_conn: sqlite3.Connection) -> None:
+    def test_special_characters_do_not_crash(self, cwd: pathlib.Path) -> None:
         # FTS5 special chars: * " ( ) : ^
-        results = simba.search.project_memory.search_fts(db_conn, '*(foo) "bar": ^baz')
-        # Should not raise; may return empty list
+        results = pm.search_fts('*(foo) "bar": ^baz')
         assert isinstance(results, list)
 
 
@@ -237,39 +212,27 @@ class TestSearchFts:
 
 
 class TestGetContext:
-    def test_includes_facts_section(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_fact(
-            db_conn, fact="Always run linter before commit"
-        )
-        ctx = simba.search.project_memory.get_context(db_conn, query="")
+    def test_includes_facts_section(self, cwd: pathlib.Path) -> None:
+        pm.add_fact(fact="Always run linter before commit")
+        ctx = pm.get_context(query="")
         assert "## Project Facts" in ctx
         assert "Always run linter before commit" in ctx
 
-    def test_includes_knowledge_when_query_matches(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
-        simba.search.project_memory.add_knowledge(
-            db_conn, area="auth", summary="JWT-based auth", patterns="middleware"
-        )
-        ctx = simba.search.project_memory.get_context(db_conn, query="auth")
+    def test_includes_knowledge_when_query_matches(self, cwd: pathlib.Path) -> None:
+        pm.add_knowledge(area="auth", summary="JWT-based auth", patterns="middleware")
+        ctx = pm.get_context(query="auth")
         assert "## Relevant Code Areas" in ctx
         assert "auth" in ctx
 
-    def test_truncates_to_token_budget(self, db_conn: sqlite3.Connection) -> None:
-        # Insert enough data to exceed a tiny budget
+    def test_truncates_to_token_budget(self, cwd: pathlib.Path) -> None:
         for i in range(20):
-            simba.search.project_memory.add_fact(
-                db_conn, fact=f"Fact number {i} with extra padding words"
-            )
-        ctx = simba.search.project_memory.get_context(
-            db_conn, query="", token_budget=10
-        )
+            pm.add_fact(fact=f"Fact number {i} with extra padding words")
+        ctx = pm.get_context(query="", token_budget=10)
         # 10 tokens * 4 chars = 40 chars max
         assert len(ctx) <= 40
 
-    def test_empty_db_returns_empty_string(self, db_conn: sqlite3.Connection) -> None:
-        ctx = simba.search.project_memory.get_context(db_conn, query="test")
-        assert ctx == ""
+    def test_empty_db_returns_empty_string(self, cwd: pathlib.Path) -> None:
+        assert pm.get_context(query="test") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -278,42 +241,32 @@ class TestGetContext:
 
 
 class TestGetRecentSessions:
-    def test_returns_sessions_reverse_chronological(
-        self, db_conn: sqlite3.Connection
-    ) -> None:
+    def test_returns_sessions_reverse_chronological(self, cwd: pathlib.Path) -> None:
         # Insert with explicit timestamps to guarantee ordering.
-        db_conn.execute(
-            "INSERT INTO sessions"
-            " (summary, files_touched, tools_used, topics, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            ("first", "f1", "t1", "topic1", "2024-01-01 00:00:00"),
-        )
-        db_conn.execute(
-            "INSERT INTO sessions"
-            " (summary, files_touched, tools_used, topics, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            ("second", "f2", "t2", "topic2", "2024-01-02 00:00:00"),
-        )
-        db_conn.execute(
-            "INSERT INTO sessions"
-            " (summary, files_touched, tools_used, topics, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            ("third", "f3", "t3", "topic3", "2024-01-03 00:00:00"),
-        )
-        db_conn.commit()
+        with simba.db.get_db(cwd) as conn:
+            for summary, ts in [
+                ("first", "2024-01-01 00:00:00"),
+                ("second", "2024-01-02 00:00:00"),
+                ("third", "2024-01-03 00:00:00"),
+            ]:
+                conn.execute(
+                    "INSERT INTO sessions"
+                    " (summary, files_touched, tools_used, topics, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (summary, "f", "t", "topic", ts),
+                )
+            conn.commit()
 
-        sessions = simba.search.project_memory.get_recent_sessions(db_conn)
+        sessions = pm.get_recent_sessions()
         assert len(sessions) == 3
         assert sessions[0]["summary"] == "third"
         assert sessions[1]["summary"] == "second"
         assert sessions[2]["summary"] == "first"
 
-    def test_respects_limit(self, db_conn: sqlite3.Connection) -> None:
+    def test_respects_limit(self, cwd: pathlib.Path) -> None:
         for i in range(10):
-            simba.search.project_memory.add_session(
-                db_conn, f"s{i}", f"f{i}", f"t{i}", f"topic{i}"
-            )
-        sessions = simba.search.project_memory.get_recent_sessions(db_conn, limit=3)
+            pm.add_session(f"s{i}", f"f{i}", f"t{i}", f"topic{i}")
+        sessions = pm.get_recent_sessions(limit=3)
         assert len(sessions) == 3
 
 
@@ -323,22 +276,17 @@ class TestGetRecentSessions:
 
 
 class TestGetStats:
-    def test_empty_db_returns_zeros(self, db_conn: sqlite3.Connection) -> None:
-        stats = simba.search.project_memory.get_stats(db_conn)
-        assert stats == {"sessions": 0, "knowledge": 0, "facts": 0}
+    def test_empty_db_returns_zeros(self, cwd: pathlib.Path) -> None:
+        assert pm.get_stats(cwd) == {"sessions": 0, "knowledge": 0, "facts": 0}
 
-    def test_counts_correct_after_inserts(self, db_conn: sqlite3.Connection) -> None:
-        simba.search.project_memory.add_session(db_conn, "s", "f", "t", "topic")
-        simba.search.project_memory.add_session(db_conn, "s2", "f2", "t2", "topic2")
-        simba.search.project_memory.add_knowledge(
-            db_conn, "auth", "summary", "patterns"
-        )
-        simba.search.project_memory.add_fact(db_conn, "fact1")
-        simba.search.project_memory.add_fact(db_conn, "fact2")
-        simba.search.project_memory.add_fact(db_conn, "fact3")
-
-        stats = simba.search.project_memory.get_stats(db_conn)
-        assert stats == {"sessions": 2, "knowledge": 1, "facts": 3}
+    def test_counts_correct_after_inserts(self, cwd: pathlib.Path) -> None:
+        pm.add_session("s", "f", "t", "topic")
+        pm.add_session("s2", "f2", "t2", "topic2")
+        pm.add_knowledge("auth", "summary", "patterns")
+        pm.add_fact("fact1")
+        pm.add_fact("fact2")
+        pm.add_fact("fact3")
+        assert pm.get_stats(cwd) == {"sessions": 2, "knowledge": 1, "facts": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -348,13 +296,10 @@ class TestGetStats:
 
 class TestEscapeFtsQuery:
     def test_plain_terms_quoted(self) -> None:
-        result = simba.search.project_memory._escape_fts_query("hello world")
-        assert result == '"hello" "world"'
+        assert pm._escape_fts_query("hello world") == '"hello" "world"'
 
     def test_special_chars_stripped(self) -> None:
-        result = simba.search.project_memory._escape_fts_query('"quoted"')
-        assert result == '"quoted"'
+        assert pm._escape_fts_query('"quoted"') == '"quoted"'
 
     def test_empty_string(self) -> None:
-        result = simba.search.project_memory._escape_fts_query("")
-        assert result == ""
+        assert pm._escape_fts_query("") == ""

@@ -107,18 +107,14 @@ def run_stats(cwd: pathlib.Path) -> str:
     )
 
     # -- Project memory --
-    conn = simba.db.get_connection(cwd)
-    if conn is not None:
-        try:
-            pm_stats = simba.search.project_memory.get_stats(conn)
-            sections.append(
-                f"Project memory\n"
-                f"  Sessions: {pm_stats['sessions']}  "
-                f"Knowledge: {pm_stats['knowledge']}  "
-                f"Facts: {pm_stats['facts']}"
-            )
-        finally:
-            conn.close()
+    if simba.db.get_db_path(cwd).exists():
+        pm_stats = simba.search.project_memory.get_stats(cwd)
+        sections.append(
+            f"Project memory\n"
+            f"  Sessions: {pm_stats['sessions']}  "
+            f"Knowledge: {pm_stats['knowledge']}  "
+            f"Facts: {pm_stats['facts']}"
+        )
     else:
         sections.append("Project memory: not initialized (run `simba search init`)")
 

@@ -667,9 +667,7 @@ def _cmd_codex_install(args: list[str]) -> int:
     if flag_status == "added":
         print(f"  [features] hooks = true set in {config_path}")
     elif flag_status == "migrated":
-        print(
-            f"  [features] codex_hooks -> hooks migrated in {config_path}"
-        )
+        print(f"  [features] codex_hooks -> hooks migrated in {config_path}")
     elif flag_status == "already-set":
         print(f"  [features] hooks = true already set in {config_path}")
     return 0
@@ -733,10 +731,7 @@ def _cmd_codex_extract(args: list[str]) -> int:
 
     meta = _latest_codex_transcript_metadata()
     if not meta:
-        print(
-            "No transcript metadata found in Codex sessions "
-            "(~/.codex/sessions)."
-        )
+        print("No transcript metadata found in Codex sessions (~/.codex/sessions).")
         return 1
 
     transcript = meta.get("transcript_path", "")
@@ -927,13 +922,13 @@ def _cmd_codex_automation(args: list[str]) -> int:
     del args
     cwd = str(pathlib.Path.cwd())
     print(
-        "::automation-update{mode=\"suggested create\" "
-        "name=\"Simba Codex Health\" "
-        "prompt=\"Run simba codex-status and report whether extraction is pending "
+        '::automation-update{mode="suggested create" '
+        'name="Simba Codex Health" '
+        'prompt="Run simba codex-status and report whether extraction is pending '
         "or memory daemon is down. If pending extraction exists, include the exact "
-        "simba codex-extract command in the result.\" "
-        "rrule=\"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0\" "
-        f"cwds=\"{cwd}\" status=\"ACTIVE\"}}"
+        'simba codex-extract command in the result." '
+        'rrule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" '
+        f'cwds="{cwd}" status="ACTIVE"}}'
     )
     return 0
 
@@ -1606,12 +1601,14 @@ def _db_stats(cwd: pathlib.Path) -> int:
     """Print row counts for all tables."""
     import simba.db
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found. Run a simba command first to initialize it.")
         return 1
 
-    try:
+    # Table introspection (sqlite_master + dynamic COUNT) is inherently raw;
+    # run it through the peewee connection.
+    with simba.db.connect(cwd) as db:
+        conn = db.connection()
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -1621,185 +1618,174 @@ def _db_stats(cwd: pathlib.Path) -> int:
         print()
         total = 0
         for (name,) in tables:
-            q = f"SELECT COUNT(*) FROM [{name}]"
-            count = conn.execute(q).fetchone()[0]
+            count = conn.execute(f"SELECT COUNT(*) FROM [{name}]").fetchone()[0]
             total += count
             print(f"  {name:<20s} {count:>6d} rows")
         print(f"  {'─' * 28}")
         print(f"  {'total':<20s} {total:>6d} rows")
-    finally:
-        conn.close()
     return 0
 
 
 def _db_reflections(cwd: pathlib.Path, limit: int, error_type: str | None) -> int:
     """Print recent reflections."""
     import simba.db
+    import simba.tailor.hook as tailor_hook
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found.")
         return 1
 
-    try:
-        query = "SELECT id, ts, error_type, snippet, signature FROM reflections"
-        params: list[str] = []
+    with simba.db.connect(cwd):
+        q = tailor_hook.Reflection.select()
         if error_type:
-            query += " WHERE error_type = ?"
-            params.append(error_type)
-        query += " ORDER BY ts DESC LIMIT ?"
-        params.append(str(limit))
+            q = q.where(tailor_hook.Reflection.error_type == error_type)
+        q = q.order_by(tailor_hook.Reflection.ts.desc()).limit(limit)
+        rows = list(q)
 
-        rows = conn.execute(query, params).fetchall()
-        if not rows:
-            print("No reflections found.")
-            return 0
+    if not rows:
+        print("No reflections found.")
+        return 0
 
-        for row in rows:
-            s = row["snippet"]
-            snippet = s[:80] + "..." if len(s) > 80 else s
-            print(f"[{row['ts']}] {row['error_type']} — {row['signature']}")
-            if snippet:
-                print(f"  {snippet}")
-            print()
-    finally:
-        conn.close()
+    for row in rows:
+        s = row.snippet
+        snippet = s[:80] + "..." if len(s) > 80 else s
+        print(f"[{row.ts}] {row.error_type} — {row.signature}")
+        if snippet:
+            print(f"  {snippet}")
+        print()
     return 0
 
 
 def _db_activities(cwd: pathlib.Path, limit: int) -> int:
     """Print recent activities."""
     import simba.db
+    import simba.search.activity_tracker as activity_tracker
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found.")
         return 1
 
-    try:
-        rows = conn.execute(
-            "SELECT timestamp, tool_name, detail FROM activities "
-            "ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        if not rows:
-            print("No activities logged.")
-            return 0
+    with simba.db.connect(cwd):
+        rows = list(
+            activity_tracker.Activity.select()
+            .order_by(activity_tracker.Activity.id.desc())
+            .limit(limit)
+        )
 
-        for row in rows:
-            d = row["detail"]
-            detail = d[:60] + "..." if len(d) > 60 else d
-            print(f"[{row['timestamp']}] {row['tool_name']:<12s} {detail}")
-    finally:
-        conn.close()
+    if not rows:
+        print("No activities logged.")
+        return 0
+
+    for row in rows:
+        d = row.detail
+        detail = d[:60] + "..." if len(d) > 60 else d
+        print(f"[{row.timestamp}] {row.tool_name:<12s} {detail}")
     return 0
 
 
 def _db_facts(cwd: pathlib.Path, limit: int) -> int:
     """Print currently-valid knowledge-graph facts."""
     import simba.db
+    import simba.kg.store as kg_store
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found.")
         return 1
 
-    try:
-        rows = conn.execute(
-            "SELECT subject, predicate, object, proof FROM kg_edges "
-            "WHERE valid_to IS NULL LIMIT ?",
-            (limit,),
-        ).fetchall()
-        if not rows:
-            print("No facts recorded.")
-            return 0
+    with simba.db.connect(cwd):
+        rows = list(
+            kg_store.KgEdge.select()
+            .where(kg_store.KgEdge.valid_to.is_null())
+            .limit(limit)
+        )
 
-        for row in rows:
-            p = row["proof"]
-            proof = p[:40] + "..." if len(p) > 40 else p
-            print(f"  {row['subject']} {row['predicate']} {row['object']}")
-            print(f"    proof: {proof}")
-    finally:
-        conn.close()
+    if not rows:
+        print("No facts recorded.")
+        return 0
+
+    for row in rows:
+        p = row.proof or ""
+        proof = p[:40] + "..." if len(p) > 40 else p
+        print(f"  {row.subject} {row.predicate} {row.object}")
+        print(f"    proof: {proof}")
     return 0
 
 
 def _db_agents(cwd: pathlib.Path, limit: int, status: str | None) -> int:
     """Print agent runs."""
     import simba.db
+    import simba.orchestration.agents as agents
+    import simba.orchestration.config as orch_config
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found.")
         return 1
 
-    try:
-        query = (
-            "SELECT ar.ticket_id, ar.agent, ar.pid, st.name AS status, "
-            "ar.created_at_utc, ar.completed_at_utc, ar.result, ar.error "
-            "FROM agent_runs ar "
-            "LEFT JOIN status_types st ON ar.status_id = st.id"
-        )
-        params: list[str] = []
+    with simba.db.connect(cwd):
+        q = agents.AgentRun.select()
         if status:
-            query += " WHERE st.name = ?"
-            params.append(status)
-        query += " ORDER BY ar.created_at_utc DESC LIMIT ?"
-        params.append(str(limit))
-
-        rows = conn.execute(query, params).fetchall()
-        if not rows:
-            print("No agent runs found.")
-            return 0
-
-        for row in rows:
-            elapsed = ""
-            if row["completed_at_utc"] and row["created_at_utc"]:
-                secs = row["completed_at_utc"] - row["created_at_utc"]
-                elapsed = f" [{secs}s]"
-            result_preview = ""
-            if row["result"]:
-                r = row["result"]
-                result_preview = f"\n    Result: {r[:80]}{'...' if len(r) > 80 else ''}"
-            error = ""
-            if row["error"]:
-                error = f"\n    Error: {row['error']}"
-            print(
-                f"  {row['ticket_id']} ({row['agent']}, PID {row['pid']}): "
-                f"{row['status'] or 'unknown'}{elapsed}{result_preview}{error}"
+            sid = orch_config.STATUS_NAME_MAP.get(status.lower())
+            q = q.where(
+                agents.AgentRun.status_id == (int(sid) if sid is not None else -1)
             )
-    finally:
-        conn.close()
+        q = q.order_by(agents.AgentRun.created_at_utc.desc()).limit(limit)
+        rows = list(q)
+
+    if not rows:
+        print("No agent runs found.")
+        return 0
+
+    for row in rows:
+        status_name = agents._status_name(row.status_id) or "unknown"
+        elapsed = ""
+        if row.completed_at_utc and row.created_at_utc:
+            elapsed = f" [{row.completed_at_utc - row.created_at_utc}s]"
+        result_preview = ""
+        if row.result:
+            r = row.result
+            result_preview = f"\n    Result: {r[:80]}{'...' if len(r) > 80 else ''}"
+        error = f"\n    Error: {row.error}" if row.error else ""
+        print(
+            f"  {row.ticket_id} ({row.agent}, PID {row.pid}): "
+            f"{status_name}{elapsed}{result_preview}{error}"
+        )
     return 0
 
 
 def _db_sessions(cwd: pathlib.Path, limit: int) -> int:
-    """Print project memory sessions."""
+    """Print project memory sessions (legacy session_id schema)."""
+    import sqlite3
+
     import simba.db
 
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found.")
         return 1
 
-    try:
-        rows = conn.execute(
-            "SELECT session_id, started_at, summary FROM sessions "
-            "ORDER BY started_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        if not rows:
-            print("No sessions recorded.")
-            return 0
+    # Legacy schema (session_id/started_at) — not modelled; query raw via the
+    # peewee connection and degrade gracefully when the columns are absent.
+    with simba.db.connect(cwd) as db:
+        conn = db.connection()
+        try:
+            rows = conn.execute(
+                "SELECT session_id, started_at, summary FROM sessions "
+                "ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
 
-        for row in rows:
-            sm = row["summary"]
-            summary = sm[:60] + "..." if len(sm) > 60 else sm
-            print(f"[{row['started_at']}] {row['session_id']}")
-            if summary:
-                print(f"  {summary}")
-    finally:
-        conn.close()
+    if not rows:
+        print("No sessions recorded.")
+        return 0
+
+    for session_id, started_at, summary in rows:
+        summary = summary or ""
+        if len(summary) > 60:
+            summary = summary[:60] + "..."
+        print(f"[{started_at}] {session_id}")
+        if summary:
+            print(f"  {summary}")
     return 0
 
 
@@ -2047,6 +2033,7 @@ def _cmd_rlm(args: list[str]) -> int:
                 except ValueError:
                     n_stored = 0
         import simba.rlm.jobs
+
         simba.rlm.jobs.complete(tid, str(pathlib.Path.cwd()), n_stored)
         print(f"marked complete: {tid} (stored {n_stored})")
         return 0

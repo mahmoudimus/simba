@@ -15,6 +15,7 @@ from simba.sync.watermarks import set_watermark
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_index_result(**kwargs) -> IndexResult:
     return IndexResult(**kwargs)
 
@@ -31,8 +32,11 @@ def _make_extract_result(**kwargs) -> ExtractResult:
 class TestPrintIndexResult:
     def test_normal_output(self, capsys) -> None:
         result = _make_index_result(
-            tables_polled=3, rows_indexed=5, rows_exported=4,
-            duplicates=1, errors=0,
+            tables_polled=3,
+            rows_indexed=5,
+            rows_exported=4,
+            duplicates=1,
+            errors=0,
         )
         simba.sync.__main__._print_index_result(result)
         out = capsys.readouterr().out
@@ -57,8 +61,10 @@ class TestPrintIndexResult:
 class TestPrintExtractResult:
     def test_normal_output(self, capsys) -> None:
         result = _make_extract_result(
-            facts_extracted=10, memories_processed=3,
-            facts_duplicate=2, errors=0,
+            facts_extracted=10,
+            memories_processed=3,
+            facts_duplicate=2,
+            errors=0,
         )
         simba.sync.__main__._print_extract_result(result)
         out = capsys.readouterr().out
@@ -107,9 +113,9 @@ class TestCmdStatus:
 
     def test_with_watermarks(self, tmp_path, capsys) -> None:
         """With watermarks present, prints a table."""
-        with simba.db.get_db(tmp_path) as conn:
-            set_watermark(conn, "reflections", "index", "42",
-                          rows_processed=10, errors=1)
+        set_watermark(
+            "reflections", "index", "42", rows_processed=10, errors=1, cwd=tmp_path
+        )
         args = _make_status_args(cwd=str(tmp_path))
         rc = simba.sync.__main__._cmd_status(args)
         assert rc == 0
@@ -128,7 +134,9 @@ class TestCmdIndex:
     @patch("simba.sync.__main__.run_index")
     def test_calls_run_index(self, mock_run_index, capsys) -> None:
         mock_run_index.return_value = _make_index_result(
-            tables_polled=2, rows_indexed=3, errors=0,
+            tables_polled=2,
+            rows_indexed=3,
+            errors=0,
         )
         args = _make_index_args()
         rc = simba.sync.__main__._cmd_index(args)
@@ -154,7 +162,9 @@ class TestCmdExtract:
     @patch("simba.sync.__main__.run_extract")
     def test_calls_run_extract(self, mock_run_extract, capsys) -> None:
         mock_run_extract.return_value = _make_extract_result(
-            facts_extracted=5, memories_processed=2, errors=0,
+            facts_extracted=5,
+            memories_processed=2,
+            errors=0,
         )
         args = _make_extract_args()
         rc = simba.sync.__main__._cmd_extract(args)
@@ -180,7 +190,10 @@ class TestCmdRun:
     @patch("simba.sync.__main__.run_extract")
     @patch("simba.sync.__main__.run_index")
     def test_calls_both_pipelines(
-        self, mock_index, mock_extract, capsys,
+        self,
+        mock_index,
+        mock_extract,
+        capsys,
     ) -> None:
         mock_index.return_value = _make_index_result(rows_indexed=2)
         mock_extract.return_value = _make_extract_result(facts_extracted=3)
@@ -233,7 +246,10 @@ class TestMain:
     @patch("simba.sync.__main__.run_extract")
     @patch("simba.sync.__main__.run_index")
     def test_dispatches_run(
-        self, mock_index, mock_extract, monkeypatch,
+        self,
+        mock_index,
+        mock_extract,
+        monkeypatch,
     ) -> None:
         mock_index.return_value = _make_index_result()
         mock_extract.return_value = _make_extract_result()
@@ -246,7 +262,8 @@ class TestMain:
         with simba.db.get_db(tmp_path):
             pass
         monkeypatch.setattr(
-            "sys.argv", ["simba-sync", "status", "--cwd", str(tmp_path)],
+            "sys.argv",
+            ["simba-sync", "status", "--cwd", str(tmp_path)],
         )
         rc = simba.sync.__main__.main()
         assert rc == 0
@@ -269,7 +286,9 @@ def _make_index_args(
     dry_run: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        cwd=cwd, daemon_url=daemon_url, dry_run=dry_run,
+        cwd=cwd,
+        daemon_url=daemon_url,
+        dry_run=dry_run,
     )
 
 

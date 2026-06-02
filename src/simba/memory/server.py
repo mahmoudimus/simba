@@ -45,9 +45,7 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
             scheduler.stop()
         # Give the running cycle a moment to finish, then force-cancel.
         try:
-            await asyncio.wait_for(
-                asyncio.shield(sync_task), timeout=sync_timeout
-            )
+            await asyncio.wait_for(asyncio.shield(sync_task), timeout=sync_timeout)
         except (TimeoutError, asyncio.CancelledError):
             sync_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -183,13 +181,10 @@ async def init_fts_mirror(app: fastapi.FastAPI, data_dir: pathlib.Path) -> None:
         non_system = [r for r in rows if r.get("type") != "SYSTEM"]
 
         def _reconcile() -> int | None:
-            conn = simba.memory.fts.connect(fts_path)
-            try:
-                if simba.memory.fts.count(conn) != len(non_system):
-                    return simba.memory.fts.rebuild(conn, non_system)
+            with simba.memory.fts.connect(fts_path):
+                if simba.memory.fts.count() != len(non_system):
+                    return simba.memory.fts.rebuild(non_system)
                 return None
-            finally:
-                conn.close()
 
         rebuilt = await asyncio.to_thread(_reconcile)
         if rebuilt is not None:
