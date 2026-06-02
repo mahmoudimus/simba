@@ -97,9 +97,7 @@ class TestHybridSearch:
         async def fake_vec(table, emb, min_sim, max_res, filters):
             return [_vec("vec1", 0.9)]
 
-        monkeypatch.setattr(
-            "simba.memory.vector_db.search_memories", fake_vec
-        )
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
 
         cfg = simba.memory.config.MemoryConfig()
         results = await hybrid.hybrid_search(
@@ -121,9 +119,7 @@ class TestHybridSearch:
         async def fake_vec(table, emb, min_sim, max_res, filters):
             return [_vec("vec1", 0.9), _vec("vec2", 0.8)]
 
-        monkeypatch.setattr(
-            "simba.memory.vector_db.search_memories", fake_vec
-        )
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cfg = simba.memory.config.MemoryConfig()
         results = await hybrid.hybrid_search(
             None,
@@ -136,3 +132,85 @@ class TestHybridSearch:
             cfg=cfg,
         )
         assert [r["id"] for r in results] == ["vec1", "vec2"]
+
+
+class TestKeywordArmFocus:
+    """The keyword arm is fed high-signal terms, not the whole query string."""
+
+    @staticmethod
+    def _patch_arms(monkeypatch, captured: dict, *, vec=None):
+        def fake_search(conn, query, *, project_path=None, types=None, limit=20):
+            captured["query"] = query
+            captured["calls"] = captured.get("calls", 0) + 1
+            return []
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return list(vec or [])
+
+        monkeypatch.setattr("simba.memory.fts.search", fake_search)
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+
+    @pytest.mark.asyncio
+    async def test_keyword_arm_receives_focused_terms(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        captured: dict = {}
+        self._patch_arms(monkeypatch, captured)
+        path = tmp_path / fts.FTS_FILENAME
+        fts.init(path)
+        await hybrid.hybrid_search(
+            None,
+            path,
+            [0.1] * 768,
+            "please open the hybrid_search function in routes.py and verify it",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=simba.memory.config.MemoryConfig(),
+        )
+        terms = captured["query"].split()
+        assert "hybrid_search" in terms
+        assert "routes.py" in terms
+        assert "the" not in terms  # stop words dropped before the keyword arm
+        assert "and" not in terms
+
+    @pytest.mark.asyncio
+    async def test_keyword_arm_respects_max_terms(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        captured: dict = {}
+        self._patch_arms(monkeypatch, captured)
+        path = tmp_path / fts.FTS_FILENAME
+        fts.init(path)
+        await hybrid.hybrid_search(
+            None,
+            path,
+            [0.1] * 768,
+            "alpha beta gamma delta epsilon identifiers galore plenty",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=simba.memory.config.MemoryConfig(fts_max_terms=2),
+        )
+        assert len(captured["query"].split()) <= 2
+
+    @pytest.mark.asyncio
+    async def test_all_stop_words_skips_keyword_arm(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        captured: dict = {}
+        self._patch_arms(monkeypatch, captured, vec=[_vec("v", 0.9)])
+        path = tmp_path / fts.FTS_FILENAME
+        fts.init(path)
+        results = await hybrid.hybrid_search(
+            None,
+            path,
+            [0.1] * 768,
+            "the and of to is it",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=simba.memory.config.MemoryConfig(),
+        )
+        assert captured.get("calls", 0) == 0  # degraded to vector-only
+        assert [r["id"] for r in results] == ["v"]

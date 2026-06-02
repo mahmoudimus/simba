@@ -21,8 +21,9 @@ class HooksConfig:
     default_max_results: int = 3
     default_timeout: float = 2.0
 
-    # Pre-tool-use
-    min_similarity: float = 0.35
+    # Pre-tool-use. General thinking-block recall defers to the daemon's
+    # intent-aware floor (memory.min_similarity / min_similarity_broad), so
+    # there is no general-recall floor here — only the strict rule gate below.
     thinking_chars: int = 1500
     dedup_ttl: int = 60
     context_low_bytes: int = 20_000_000

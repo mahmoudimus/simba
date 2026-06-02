@@ -38,6 +38,10 @@ class MemoryConfig:
     fts_tokenize: str = "trigram"
     vector_weight: float = 1.0
     keyword_weight: float = 1.0
+    # Read-path query intelligence (Phase 0).
+    intent_aware: bool = True  # auto-pick the cosine floor from query intent
+    min_similarity_broad: float = 0.28  # recall floor for aggregation/exploration
+    fts_max_terms: int = 12  # cap on high-signal terms fed to the keyword arm
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

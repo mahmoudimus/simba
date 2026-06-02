@@ -38,17 +38,18 @@ def recall_memories(
 ) -> list[dict]:
     """Query the memory daemon for relevant memories."""
     cfg = _get_cfg()
-    if min_similarity is None:
-        min_similarity = cfg.min_similarity
     if max_results is None:
         max_results = cfg.default_max_results
 
     url = f"{daemon_url()}/recall"
     payload: dict = {
         "query": query,
-        "minSimilarity": min_similarity,
         "maxResults": max_results,
     }
+    # Omit the floor unless explicitly set, so the daemon picks it by query
+    # intent (memory.min_similarity / min_similarity_broad).
+    if min_similarity is not None:
+        payload["minSimilarity"] = min_similarity
     if project_path:
         payload["projectPath"] = project_path
     if filters:

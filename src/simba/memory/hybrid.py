@@ -12,6 +12,7 @@ import asyncio
 import typing
 
 import simba.memory.fts
+import simba.memory.keywords
 import simba.memory.vector_db
 
 
@@ -127,13 +128,19 @@ async def hybrid_search(
         table, embedding, min_similarity, candidate_pool, filters
     )
 
+    # The keyword arm is fed high-signal terms, not the whole query: a long
+    # thinking block would otherwise OR together ~200 tokens and bm25 would
+    # match almost anything.  No usable terms -> skip the arm (vector-only).
     keyword_results: list[dict[str, typing.Any]] = []
-    if fts_path:
+    kw_terms = simba.memory.keywords.focus_terms(
+        query_text, max_terms=cfg.fts_max_terms
+    )
+    if fts_path and kw_terms:
         try:
             keyword_results = await asyncio.to_thread(
                 _keyword_arm,
                 fts_path,
-                query_text,
+                " ".join(kw_terms),
                 filters.get("projectPath"),
                 filters.get("types"),
                 candidate_pool,
