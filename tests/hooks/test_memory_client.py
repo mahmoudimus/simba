@@ -120,3 +120,39 @@ class TestFormatMemories:
 
         assert 'source="thinking-block"' in result_a
         assert 'source="user-prompt"' in result_b
+
+    def test_annotates_created_date_and_marks_newest(self):
+        # Relevance order is preserved (older hit ranks first by similarity),
+        # but the most-recently-created memory is flagged so the model can
+        # prefer fresher info when two memories conflict.
+        memories = [
+            {
+                "type": "DECISION",
+                "content": "older call",
+                "similarity": 0.9,
+                "createdAt": "2026-01-01T10:00:00Z",
+            },
+            {
+                "type": "DECISION",
+                "content": "newer call",
+                "similarity": 0.6,
+                "createdAt": "2026-05-30T10:00:00Z",
+            },
+        ]
+        result = simba.hooks._memory_client.format_memories(
+            memories, source="user-prompt"
+        )
+        assert 'created="2026-01-01"' in result
+        assert 'created="2026-05-30"' in result
+        # exactly one newest marker, on the more-recently-created memory
+        assert result.count('recency="newest"') == 1
+        seg = result.split('recency="newest"')[1].split("</memory>")[0]
+        assert "newer call" in seg
+        # order preserved (relevance first): older (top hit) before newer
+        assert result.index("older call") < result.index("newer call")
+
+    def test_omits_recency_annotations_when_no_dates(self):
+        memories = [{"type": "GOTCHA", "content": "x", "similarity": 0.5}]
+        result = simba.hooks._memory_client.format_memories(memories, source="t")
+        assert "created=" not in result
+        assert "recency=" not in result

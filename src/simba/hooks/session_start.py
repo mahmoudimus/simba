@@ -109,6 +109,12 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
         "- Skip generic programming knowledge Claude already knows\n"
         "- Focus on user-specific infrastructure, preferences, workflows\n"
         "- Keep content under 200 characters, use context for details\n"
+        "- Preserve proper nouns, file paths, and identifiers verbatim — "
+        "never replace them with generic words\n"
+        "- Preserve numeric precision: keep exact values exact; never weaken "
+        "an exact number to a range or approximation\n"
+        '- Resolve relative dates to absolute ones (e.g. "yesterday" -> the '
+        "actual date)\n"
         "---\n"
         "</learning-extraction-required>"
     )
