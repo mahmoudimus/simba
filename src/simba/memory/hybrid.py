@@ -114,15 +114,19 @@ async def hybrid_search(
     max_results: int,
     filters: dict[str, typing.Any] | None,
     cfg: typing.Any,
+    candidate_pool: int | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
     The vector arm keeps the ``min_similarity`` floor; the keyword arm is *not*
     cosine-gated (that is what widens coverage).  Both arms share the same
-    project/type scope via ``filters``.  Never raises on the keyword side.
+    project/type scope via ``filters``.  ``candidate_pool`` overrides the
+    per-arm fetch size (broad queries pass a wider pool); it defaults to
+    ``cfg.fts_candidate_pool``.  Never raises on the keyword side.
     """
     filters = filters or {}
-    candidate_pool = max(max_results, cfg.fts_candidate_pool)
+    pool = candidate_pool if candidate_pool is not None else cfg.fts_candidate_pool
+    candidate_pool = max(max_results, pool)
 
     vector_results = await simba.memory.vector_db.search_memories(
         table, embedding, min_similarity, candidate_pool, filters

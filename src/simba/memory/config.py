@@ -42,6 +42,9 @@ class MemoryConfig:
     intent_aware: bool = True  # auto-pick the cosine floor from query intent
     min_similarity_broad: float = 0.28  # recall floor for aggregation/exploration
     fts_max_terms: int = 12  # cap on high-signal terms fed to the keyword arm
+    # Broad-query widening (Phase 0.1): aggregation queries pull a wider net.
+    max_results_broad: int = 8  # results returned for broad queries
+    fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

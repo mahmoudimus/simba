@@ -96,6 +96,7 @@ class TestRecallIntentAwareFloor:
             max_results,
             filters,
             cfg,
+            candidate_pool=None,
         ):
             captured["min_similarity"] = min_similarity
             return []
@@ -158,6 +159,77 @@ class TestRecallIntentAwareFloor:
         )
         assert resp.status_code == 200
         assert captured["min_similarity"] == app.state.config.min_similarity
+
+
+class TestRecallBroadWidening:
+    """Broad queries widen maxResults + the RRF candidate pool (Phase 0.1)."""
+
+    @staticmethod
+    def _capture(monkeypatch, captured: dict) -> None:
+        async def fake_hybrid(
+            table,
+            fts_path,
+            embedding,
+            query,
+            *,
+            min_similarity,
+            max_results,
+            filters,
+            cfg,
+            candidate_pool=None,
+        ):
+            captured["max_results"] = max_results
+            captured["candidate_pool"] = candidate_pool
+            return []
+
+        monkeypatch.setattr("simba.memory.hybrid.hybrid_search", fake_hybrid)
+
+    @pytest.mark.asyncio
+    async def test_broad_widens_results_and_pool(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        captured: dict = {}
+        self._capture(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall", json={"query": "list all the decisions", "projectPath": "p1"}
+        )
+        assert resp.status_code == 200
+        assert captured["max_results"] == app.state.config.max_results_broad
+        assert captured["candidate_pool"] == app.state.config.fts_candidate_pool_broad
+
+    @pytest.mark.asyncio
+    async def test_precise_uses_base_results_and_pool(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        captured: dict = {}
+        self._capture(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={"query": "what port does the daemon use", "projectPath": "p1"},
+        )
+        assert resp.status_code == 200
+        assert captured["max_results"] == app.state.config.max_results
+        assert captured["candidate_pool"] == app.state.config.fts_candidate_pool
+
+    @pytest.mark.asyncio
+    async def test_explicit_max_results_overrides_broad(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, _ = hybrid_client
+        captured: dict = {}
+        self._capture(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={
+                "query": "list all the decisions",
+                "projectPath": "p1",
+                "maxResults": 2,
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["max_results"] == 2
 
 
 class TestDeleteSync:
