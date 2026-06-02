@@ -90,17 +90,13 @@ def _keyword_arm(
     limit: int,
 ) -> list[dict[str, typing.Any]]:
     """Open a per-call connection (thread-affinity safe) and run the bm25 search."""
-    conn = simba.memory.fts.connect(fts_path)
-    try:
+    with simba.memory.fts.connect(fts_path):
         return simba.memory.fts.search(
-            conn,
             query_text,
             project_path=project_path,
             types=types,
             limit=limit,
         )
-    finally:
-        conn.close()
 
 
 async def hybrid_search(

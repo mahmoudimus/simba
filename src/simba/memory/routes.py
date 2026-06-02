@@ -37,27 +37,18 @@ _background_tasks: set[asyncio.Task[None]] = set()
 
 
 def _fts_upsert(fts_path: str, memory: dict[str, typing.Any]) -> None:
-    conn = simba.memory.fts.connect(fts_path)
-    try:
-        simba.memory.fts.upsert(conn, memory)
-    finally:
-        conn.close()
+    with simba.memory.fts.connect(fts_path):
+        simba.memory.fts.upsert(memory)
 
 
 def _fts_delete(fts_path: str, memory_id: str) -> None:
-    conn = simba.memory.fts.connect(fts_path)
-    try:
-        simba.memory.fts.delete(conn, memory_id)
-    finally:
-        conn.close()
+    with simba.memory.fts.connect(fts_path):
+        simba.memory.fts.delete(memory_id)
 
 
 def _fts_set_project(fts_path: str, memory_id: str, project_path: str) -> None:
-    conn = simba.memory.fts.connect(fts_path)
-    try:
-        simba.memory.fts.set_project(conn, memory_id, project_path)
-    finally:
-        conn.close()
+    with simba.memory.fts.connect(fts_path):
+        simba.memory.fts.set_project(memory_id, project_path)
 
 
 class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
@@ -279,11 +270,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
-            **(
-                {"sessionSource": m["sessionSource"]}
-                if m.get("sessionSource")
-                else {}
-            ),
+            **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
         }
         for m in memories
     ]
@@ -402,11 +389,7 @@ async def list_memories(
             "createdAt": m.get("createdAt"),
             "accessCount": m.get("accessCount", 0),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
-            **(
-                {"sessionSource": m["sessionSource"]}
-                if m.get("sessionSource")
-                else {}
-            ),
+            **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
         }
         for m in paginated
     ]
@@ -445,11 +428,8 @@ async def reindex(request: fastapi.Request) -> dict:
     non_system = [r for r in rows if r.get("type") != "SYSTEM"]
 
     def _rebuild() -> int:
-        conn = simba.memory.fts.connect(fts_path)
-        try:
-            return simba.memory.fts.rebuild(conn, non_system)
-        finally:
-            conn.close()
+        with simba.memory.fts.connect(fts_path):
+            return simba.memory.fts.rebuild(non_system)
 
     indexed = await asyncio.to_thread(_rebuild)
     return {"status": "reindexed", "indexed": indexed}

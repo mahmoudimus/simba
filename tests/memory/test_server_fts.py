@@ -49,14 +49,11 @@ async def test_init_fts_mirror_backfills_from_lancedb(
 
     fts_path = tmp_path / fts.FTS_FILENAME
     assert app.state.fts_path == str(fts_path)
-    conn = fts.connect(fts_path)
-    try:
+    with fts.connect(fts_path):
         # SYSTEM row is excluded; the two memories are indexed and searchable.
-        assert fts.count(conn) == 2
-        hits = fts.search(conn, "pytest", project_path="proj-1")
+        assert fts.count() == 2
+        hits = fts.search("pytest", project_path="proj-1")
         assert [h["memory_id"] for h in hits] == ["m2"]
-    finally:
-        conn.close()
 
 
 @pytest.mark.asyncio
@@ -71,8 +68,5 @@ async def test_init_fts_mirror_is_idempotent_when_in_sync(
     await simba.memory.server.init_fts_mirror(app, tmp_path)
     await simba.memory.server.init_fts_mirror(app, tmp_path)  # second run = no-op
 
-    conn = fts.connect(tmp_path / fts.FTS_FILENAME)
-    try:
-        assert fts.count(conn) == 1
-    finally:
-        conn.close()
+    with fts.connect(tmp_path / fts.FTS_FILENAME):
+        assert fts.count() == 1

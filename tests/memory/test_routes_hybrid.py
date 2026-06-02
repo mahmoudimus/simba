@@ -28,11 +28,8 @@ async def hybrid_client(memory_config, lance_table, mock_embed, tmp_path):
 
 
 def _mirror_count(fts_path: str) -> int:
-    conn = fts.connect(fts_path)
-    try:
-        return fts.count(conn)
-    finally:
-        conn.close()
+    with fts.connect(fts_path):
+        return fts.count()
 
 
 async def _store(ac, content, *, project="proj-1", mtype="GOTCHA"):
@@ -50,12 +47,9 @@ class TestStoreSync:
         ac, fts_path, _ = hybrid_client
         await _store(ac, "ruff lints the python source tree")
         assert _mirror_count(fts_path) == 1
-        conn = fts.connect(fts_path)
-        try:
-            hits = fts.search(conn, "lints", project_path="proj-1")
+        with fts.connect(fts_path):
+            hits = fts.search("lints", project_path="proj-1")
             assert len(hits) == 1
-        finally:
-            conn.close()
 
 
 class TestRecallHybrid:
@@ -97,17 +91,12 @@ class TestPatchSync:
     async def test_patch_moves_project_in_mirror(self, hybrid_client) -> None:
         ac, fts_path, _ = hybrid_client
         stored = await _store(ac, "movable lambda memory content", project="proj-1")
-        resp = await ac.patch(
-            f"/memory/{stored['id']}", json={"projectPath": "proj-2"}
-        )
+        resp = await ac.patch(f"/memory/{stored['id']}", json={"projectPath": "proj-2"})
         assert resp.status_code == 200
-        conn = fts.connect(fts_path)
-        try:
-            assert fts.search(conn, "lambda", project_path="proj-1") == []
-            moved = fts.search(conn, "lambda", project_path="proj-2")
+        with fts.connect(fts_path):
+            assert fts.search("lambda", project_path="proj-1") == []
+            moved = fts.search("lambda", project_path="proj-2")
             assert [m["memory_id"] for m in moved] == [stored["id"]]
-        finally:
-            conn.close()
 
 
 class TestHybridDisabled:
@@ -130,12 +119,8 @@ class TestReindex:
         ac, fts_path, _ = hybrid_client
         await _store(ac, "reindexable nu memory content")
         # Simulate drift by wiping the mirror out of band.
-        conn = fts.connect(fts_path)
-        try:
-            conn.execute("DELETE FROM memory_fts")
-            conn.commit()
-        finally:
-            conn.close()
+        with fts.connect(fts_path):
+            fts.MemoryFTS.delete().execute()
         assert _mirror_count(fts_path) == 0
 
         resp = await ac.post("/reindex")

@@ -78,28 +78,23 @@ class TestHybridSearch:
         self, tmp_path: pathlib.Path, monkeypatch
     ) -> None:
         path = tmp_path / fts.FTS_FILENAME
-        fts.init(path)
-        c = fts.connect(path)
-        fts.upsert(
-            c,
-            {
-                "id": "kw1",
-                "type": "GOTCHA",
-                "content": "the unique_zeta keyword token",
-                "context": "",
-                "confidence": 0.7,
-                "createdAt": "t",
-                "projectPath": "proj-1",
-            },
-        )
-        c.close()
+        with fts.connect(path):
+            fts.upsert(
+                {
+                    "id": "kw1",
+                    "type": "GOTCHA",
+                    "content": "the unique_zeta keyword token",
+                    "context": "",
+                    "confidence": 0.7,
+                    "createdAt": "t",
+                    "projectPath": "proj-1",
+                },
+            )
 
         async def fake_vec(table, emb, min_sim, max_res, filters):
             return [_vec("vec1", 0.9)]
 
-        monkeypatch.setattr(
-            "simba.memory.vector_db.search_memories", fake_vec
-        )
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
 
         cfg = simba.memory.config.MemoryConfig()
         results = await hybrid.hybrid_search(
@@ -121,9 +116,7 @@ class TestHybridSearch:
         async def fake_vec(table, emb, min_sim, max_res, filters):
             return [_vec("vec1", 0.9), _vec("vec2", 0.8)]
 
-        monkeypatch.setattr(
-            "simba.memory.vector_db.search_memories", fake_vec
-        )
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cfg = simba.memory.config.MemoryConfig()
         results = await hybrid.hybrid_search(
             None,
