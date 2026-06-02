@@ -22,3 +22,9 @@ class TestPhase0Defaults:
 
     def test_fts_max_terms_default(self) -> None:
         assert config.MemoryConfig().fts_max_terms == 12
+
+    def test_broad_widening_defaults(self) -> None:
+        # Broad queries should pull a wider net than the precise defaults.
+        cfg = config.MemoryConfig()
+        assert cfg.max_results_broad > cfg.max_results
+        assert cfg.fts_candidate_pool_broad > cfg.fts_candidate_pool

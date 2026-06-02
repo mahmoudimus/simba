@@ -130,6 +130,30 @@ class TestHybridSearch:
         )
         assert [r["id"] for r in results] == ["vec1", "vec2"]
 
+    @pytest.mark.asyncio
+    async def test_candidate_pool_param_widens_arms(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            captured["limit"] = max_res
+            return []
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig()  # fts_candidate_pool=20
+        await hybrid.hybrid_search(
+            None,
+            None,
+            [0.1] * 768,
+            "anything",
+            min_similarity=0.35,
+            max_results=3,
+            filters={},
+            cfg=cfg,
+            candidate_pool=40,
+        )
+        # The explicit pool (40) overrides cfg.fts_candidate_pool (20).
+        assert captured["limit"] == 40
+
 
 class TestKeywordArmFocus:
     """The keyword arm is fed high-signal terms, not the whole query string."""
