@@ -87,6 +87,9 @@ def connect(cwd: pathlib.Path | None = None) -> Generator[pw.SqliteDatabase]:
         database.init(path)
     with database.connection_context():
         if path not in _schema_ready:
+            # Run legacy raw initializers first (FTS5 virtual tables + triggers
+            # that peewee models can't express), then create model tables.
+            _init_schemas(database.connection())
             if _MODELS:
                 database.create_tables(_MODELS)
             _schema_ready.add(path)
