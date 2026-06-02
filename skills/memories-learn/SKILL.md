@@ -32,6 +32,9 @@ RULES:
 - Skip generic programming knowledge Claude already knows
 - Focus on user-specific infrastructure, preferences, workflows
 - Keep content under 200 characters, use context field for details
+- Preserve proper nouns, file paths, and identifiers verbatim — never replace them with generic words
+- Preserve numeric precision: keep exact values exact; never weaken an exact number to a range or approximation
+- Resolve relative dates to absolute ones (e.g. "yesterday" -> the actual date)
 
 Extract 5-15 quality learnings.
 ```
