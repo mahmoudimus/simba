@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import simba.db
+import simba.orchestration.agents
 import simba.orchestration.config
 import simba.orchestration.install
 import simba.orchestration.templates
@@ -128,30 +129,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Invalid status: {args.state}", file=sys.stderr)
             return 1
 
-        with simba.db.get_db() as conn:
+        run = simba.orchestration.agents.AgentRun
+        with simba.db.connect():
             if status_id in (
                 simba.orchestration.config.Status.COMPLETED,
                 simba.orchestration.config.Status.FAILED,
             ):
-                conn.execute(
-                    """UPDATE agent_runs
-                       SET status_id=?, error=?, completed_at_utc=?
-                       WHERE ticket_id=?""",
-                    (
-                        status_id,
+                run.update(
+                    status_id=int(status_id),
+                    error=(
                         args.message
                         if status_id == simba.orchestration.config.Status.FAILED
-                        else None,
-                        simba.orchestration.config.utc_now(),
-                        args.ticket_id,
+                        else None
                     ),
-                )
+                    completed_at_utc=simba.orchestration.config.utc_now(),
+                ).where(run.ticket_id == args.ticket_id).execute()
             else:
-                conn.execute(
-                    "UPDATE agent_runs SET status_id=? WHERE ticket_id=?",
-                    (status_id, args.ticket_id),
-                )
-            conn.commit()
+                run.update(status_id=int(status_id)).where(
+                    run.ticket_id == args.ticket_id
+                ).execute()
         print(f"{args.ticket_id} -> {args.state}")
         return 0
 
