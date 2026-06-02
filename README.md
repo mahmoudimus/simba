@@ -268,6 +268,34 @@ simba config set memory.keyword_weight 1.0    # RRF weight, keyword arm
 simba memory reindex                          # rebuild the keyword mirror
 ```
 
+### Query intelligence
+
+Before fusing the arms, `/recall` adapts to the query — all LLM-free, so it runs
+inside hooks with no extra model call:
+
+- **Intent-aware breadth** — a lightweight, marker-based classifier tags each
+  query `broad` (aggregation / history / exploration) or `precise` (point fact).
+  Broad queries lower the cosine floor (`min_similarity_broad`) **and** widen the
+  result count and candidate pool (`max_results_broad` / `fts_candidate_pool_broad`);
+  precise queries keep the strict defaults. An explicit client `minSimilarity` /
+  `maxResults` always wins.
+- **Entity-biased keyword arm** — the keyword arm is fed a small set of
+  high-signal terms (identifiers, paths, proper nouns), capped at `fts_max_terms`,
+  instead of the whole query. This stops a long thinking block from OR-ing
+  hundreds of tokens into bm25 and matching almost everything.
+- **Recency-labeled injection** — recalled memories are annotated with their
+  `created` date and the most-recently-created one is flagged `recency="newest"`,
+  so the model can prefer fresher facts when two memories conflict (the relevance
+  order itself is untouched).
+
+```bash
+simba config set memory.intent_aware true           # adapt breadth to query intent
+simba config set memory.min_similarity_broad 0.28   # cosine floor for broad queries
+simba config set memory.max_results_broad 8         # results returned for broad queries
+simba config set memory.fts_candidate_pool_broad 40 # RRF candidate pool for broad queries
+simba config set memory.fts_max_terms 12            # cap on high-signal keyword-arm terms
+```
+
 ## Neuron — Neuro-Symbolic Logic Server
 
 Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools (Z3 theorem prover, Souffle Datalog) and a truth database.
@@ -488,6 +516,11 @@ Automatically triggered after context compaction:
 
 Memory types: `GOTCHA`, `WORKING_SOLUTION`, `PATTERN`, `DECISION`, `FAILURE`, `PREFERENCE`
 
+Extraction follows quality rules baked into the prompt (shared by the hook and
+the skill): keep content under 200 chars, preserve proper nouns / file paths /
+identifiers verbatim, preserve numeric precision (never weaken an exact value),
+and resolve relative dates to absolute ones.
+
 Can also be invoked manually with `/memories-learn`.
 
 ### `/memories-sanitize` — Review and Clean Up Memories
@@ -613,14 +646,16 @@ All project-level data lives under a single `.simba/` directory in the project r
 
 ```
 .simba/
-  simba.db             SQLite — proven facts, activities, reflections, agent runs, sync watermarks
-  memory/              LanceDB vector database (semantic memories)
+  simba.db             SQLite — knowledge graph (kg_edges + FTS5), activities, reflections, agent runs, sessions/knowledge/facts, sync watermarks
+  memory/              LanceDB vector database (semantic memories) + memory_fts.db keyword mirror
   search/              Search activity log
   tailor/              Error reflection journal (JSONL)
   config.toml          Local configuration overrides (optional)
 ```
 
 This directory is gitignored. The embedding model cache lives in `~/.cache/huggingface/hub/`.
+
+All SQLite access goes through a **vendored [peewee](https://github.com/coleifer/peewee) ORM** (`src/simba/_vendor/`, kept in-tree to preserve the zero-dependency install). Tables are peewee models; the FTS5 virtual tables + sync triggers and a few introspection/migration paths stay as raw SQL by necessity. LanceDB remains the source of truth for vectors; the `memory_fts.db` keyword mirror is rebuildable.
 
 ## Unified Configuration
 
@@ -667,13 +702,24 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `model_path` | `""` (auto-download) | Local path to GGUF file |
 | `n_gpu_layers` | -1 | GPU layers (-1=all, 0=CPU only) |
 | `embed_url` | `""` (in-process) | External embedding server URL |
-| `min_similarity` | 0.35 | Minimum cosine similarity for recall |
-| `max_results` | 3 | Maximum memories returned per query |
+| `min_similarity` | 0.35 | Minimum cosine similarity for recall (precise queries) |
+| `max_results` | 3 | Maximum memories returned per query (precise queries) |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
-| `max_content_length` | 1000 | Maximum memory content length (chars) |
+| `max_content_length` | 200 | Maximum memory content length (chars) |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
 | `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |
+| `hybrid_enabled` | true | Fuse BM25 keyword arm with the vector arm (RRF) |
+| `rrf_k` | 60 | Reciprocal Rank Fusion rank constant |
+| `fts_candidate_pool` | 20 | Candidates pulled per arm before fusion |
+| `fts_tokenize` | trigram | FTS5 tokenizer (trigram \| porter \| unicode61) |
+| `vector_weight` | 1.0 | RRF weight for the vector arm |
+| `keyword_weight` | 1.0 | RRF weight for the keyword arm |
+| `intent_aware` | true | Adapt recall breadth to query intent (broad vs precise) |
+| `min_similarity_broad` | 0.28 | Cosine floor for broad/aggregation queries |
+| `max_results_broad` | 8 | Maximum memories returned for broad queries |
+| `fts_candidate_pool_broad` | 40 | Candidate pool for broad queries |
+| `fts_max_terms` | 12 | Cap on high-signal terms fed to the keyword arm |
 
 ### Neuron
 
