@@ -14,6 +14,7 @@ import string
 import sys
 import time
 
+import simba._vendor.peewee as pw
 import simba.db
 
 
@@ -34,6 +35,19 @@ def _init_reflections_schema(conn) -> None:
 
 
 simba.db.register_schema(_init_reflections_schema)
+
+
+class Reflection(simba.db.BaseModel):
+    id = pw.TextField(primary_key=True)
+    ts = pw.TextField()
+    error_type = pw.TextField()
+    snippet = pw.TextField(default="")
+    context = pw.TextField(default="{}")
+    signature = pw.TextField(default="")
+
+    class Meta:
+        table_name = "reflections"
+
 
 ERROR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"Error:", re.IGNORECASE),
@@ -211,21 +225,15 @@ def process_hook(input_str: str) -> None:
 
     cwd = hook_data.get("cwd", ".")
     try:
-        with simba.db.get_db(pathlib.Path(cwd)) as conn:
-            conn.execute(
-                "INSERT INTO reflections "
-                "(id, ts, error_type, snippet, context, signature) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    reflection["id"],
-                    reflection["ts"],
-                    reflection["error_type"],
-                    reflection["snippet"],
-                    json.dumps(reflection["context"]),
-                    reflection["signature"],
-                ),
+        with simba.db.connect(pathlib.Path(cwd)):
+            Reflection.create(
+                id=reflection["id"],
+                ts=reflection["ts"],
+                error_type=reflection["error_type"],
+                snippet=reflection["snippet"],
+                context=json.dumps(reflection["context"]),
+                signature=reflection["signature"],
             )
-            conn.commit()
     except Exception:
         pass
 
