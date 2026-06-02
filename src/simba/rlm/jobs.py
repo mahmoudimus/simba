@@ -7,32 +7,32 @@ transcript is digested at most once.
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from typing import TYPE_CHECKING
 
+import simba._vendor.peewee as pw
 import simba.db
 
 if TYPE_CHECKING:
     import pathlib
 
 
-def _init_jobs_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS rlm_jobs (
-            transcript_id TEXT,
-            project_path  TEXT,
-            status        TEXT,
-            engine        TEXT,
-            started_at    TEXT,
-            finished_at   TEXT,
-            n_stored      INTEGER DEFAULT 0,
-            UNIQUE(transcript_id, project_path)
-        )"""
-    )
+class RlmJob(simba.db.BaseModel):
+    transcript_id = pw.CharField(null=True)
+    project_path = pw.CharField(null=True)
+    status = pw.CharField(null=True)
+    engine = pw.CharField(null=True)
+    started_at = pw.CharField(null=True)
+    finished_at = pw.CharField(null=True)
+    n_stored = pw.IntegerField(default=0)
+
+    class Meta:
+        table_name = "rlm_jobs"
+        primary_key = False  # rowid table, matching the original schema
+        indexes = ((("transcript_id", "project_path"), True),)  # UNIQUE
 
 
-simba.db.register_schema(_init_jobs_schema)
+simba.db.register_model(RlmJob)
 
 
 def _now() -> str:
@@ -47,17 +47,17 @@ def claim(
     cwd: pathlib.Path | None = None,
 ) -> bool:
     """Insert a 'running' job. Return True if claimed, False if one exists."""
-    with simba.db.get_db(cwd) as conn:
+    with simba.db.connect(cwd):
         try:
-            conn.execute(
-                "INSERT INTO rlm_jobs "
-                "(transcript_id, project_path, status, engine, started_at) "
-                "VALUES (?, ?, 'running', ?, ?)",
-                (transcript_id, project_path, engine, _now()),
+            RlmJob.create(
+                transcript_id=transcript_id,
+                project_path=project_path,
+                status="running",
+                engine=engine,
+                started_at=_now(),
             )
-            conn.commit()
             return True
-        except sqlite3.IntegrityError:
+        except pw.IntegrityError:
             return False
 
 
@@ -68,12 +68,8 @@ def complete(
     *,
     cwd: pathlib.Path | None = None,
 ) -> None:
-    with simba.db.get_db(cwd) as conn:
-        conn.execute(
-            "UPDATE rlm_jobs SET status='done', finished_at=?, n_stored=? "
-            "WHERE transcript_id=? AND project_path=?",
-            (_now(), n_stored, transcript_id, project_path),
-        )
-        conn.commit()
-
-
+    with simba.db.connect(cwd):
+        RlmJob.update(status="done", finished_at=_now(), n_stored=n_stored).where(
+            (RlmJob.transcript_id == transcript_id)
+            & (RlmJob.project_path == project_path)
+        ).execute()

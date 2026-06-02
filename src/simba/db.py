@@ -13,6 +13,7 @@ import sqlite3
 import uuid
 from typing import TYPE_CHECKING
 
+import simba._vendor.peewee as pw
 import simba.config
 
 if TYPE_CHECKING:
@@ -44,6 +45,52 @@ def register_schema(init_fn: Callable[[sqlite3.Connection], None]) -> None:
     initializers run on the first ``get_db()`` call.
     """
     _SCHEMA_INITIALIZERS.append(init_fn)
+
+
+# ── peewee ORM layer (vendored) ─────────────────────────────────────────────
+# Subsystems define peewee Models subclassing ``BaseModel`` and register them
+# with ``register_model``.  ``connect(cwd)`` binds the shared deferred database
+# to this repo's ``.simba/simba.db`` and ensures all registered tables exist.
+# This is the ORM replacement for the raw ``get_db`` / ``register_schema`` path.
+
+database = pw.SqliteDatabase(None, pragmas={"busy_timeout": 3000})
+
+
+class BaseModel(pw.Model):
+    class Meta:
+        database = database
+
+
+_MODELS: list[type[pw.Model]] = []
+_schema_ready: set[str] = set()
+
+
+def register_model(*models: type[pw.Model]) -> None:
+    """Register peewee model(s) so ``connect()`` creates their tables."""
+    for model in models:
+        if model not in _MODELS:
+            _MODELS.append(model)
+
+
+@contextlib.contextmanager
+def connect(cwd: pathlib.Path | None = None) -> Generator[pw.SqliteDatabase]:
+    """Bind the shared peewee database to ``simba.db`` and yield it.
+
+    Re-entrant via peewee's ``connection_context`` (safe to nest for the same
+    repo).  Creates tables for all registered models once per database path.
+    """
+    path = str(get_db_path(cwd))
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if database.database != path:
+        if not database.is_closed():
+            database.close()
+        database.init(path)
+    with database.connection_context():
+        if path not in _schema_ready:
+            if _MODELS:
+                database.create_tables(_MODELS)
+            _schema_ready.add(path)
+        yield database
 
 
 def find_repo_root(cwd: pathlib.Path) -> pathlib.Path | None:
