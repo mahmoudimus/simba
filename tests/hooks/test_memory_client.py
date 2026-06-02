@@ -37,7 +37,8 @@ class TestRecallMemories:
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
         assert call_kwargs.kwargs["json"]["query"] == "auth module"
-        assert call_kwargs.kwargs["json"]["minSimilarity"] == 0.35
+        # No floor passed -> omitted so the daemon picks it via query intent.
+        assert "minSimilarity" not in call_kwargs.kwargs["json"]
         assert call_kwargs.kwargs["json"]["maxResults"] == 3
 
     def test_with_project_path(self):

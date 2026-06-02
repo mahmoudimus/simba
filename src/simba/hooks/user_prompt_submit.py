@@ -47,8 +47,14 @@ def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
     lines.append("</rlm-pointers>")
     return "\n".join(lines)
 
-_MIN_PROMPT_LENGTH = 10
-_MIN_SIMILARITY = 0.45
+
+def _cfg():
+    """Load the hooks config section (registers it on first access)."""
+    import simba.config
+    import simba.hooks.config
+
+    _ = simba.hooks.config  # ensure "hooks" section is registered
+    return simba.config.load("hooks")
 
 
 def main(hook_input: dict) -> str:
@@ -58,6 +64,7 @@ def main(hook_input: dict) -> str:
     cwd_str = hook_input.get("cwd")
     cwd = pathlib.Path(cwd_str) if cwd_str else pathlib.Path.cwd()
 
+    cfg = _cfg()
     parts: list[str] = []
 
     # 1. Guardian: extract CORE blocks from CLAUDE.md
@@ -67,10 +74,10 @@ def main(hook_input: dict) -> str:
 
     # 2. Memory: recall relevant memories using prompt
     memories: list[dict] = []
-    if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
+    if prompt and len(prompt) >= cfg.prompt_min_length:
         project_path = str(cwd) if cwd_str else None
         memories = simba.hooks._memory_client.recall_memories(
-            prompt, project_path=project_path, min_similarity=_MIN_SIMILARITY
+            prompt, project_path=project_path, min_similarity=cfg.prompt_min_similarity
         )
         formatted = simba.hooks._memory_client.format_memories(
             memories, source="user-prompt"
@@ -79,7 +86,7 @@ def main(hook_input: dict) -> str:
             parts.append(formatted)
 
     # 3. Search: project memory + QMD context
-    if prompt and len(prompt) >= _MIN_PROMPT_LENGTH:
+    if prompt and len(prompt) >= cfg.prompt_min_length:
         try:
             search_ctx = simba.search.rag_context.build_context(prompt, cwd)
             if search_ctx:

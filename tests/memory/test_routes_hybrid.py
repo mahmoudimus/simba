@@ -81,6 +81,85 @@ class TestRecallHybrid:
         assert any("unique_zeta_marker" in c for c in contents)
 
 
+class TestRecallIntentAwareFloor:
+    """The daemon picks the cosine floor from query intent when none is sent."""
+
+    @staticmethod
+    def _capture_floor(monkeypatch, captured: dict) -> None:
+        async def fake_hybrid(
+            table,
+            fts_path,
+            embedding,
+            query,
+            *,
+            min_similarity,
+            max_results,
+            filters,
+            cfg,
+        ):
+            captured["min_similarity"] = min_similarity
+            return []
+
+        monkeypatch.setattr("simba.memory.hybrid.hybrid_search", fake_hybrid)
+
+    @pytest.mark.asyncio
+    async def test_broad_query_lowers_floor(self, hybrid_client, monkeypatch) -> None:
+        ac, _, app = hybrid_client
+        captured: dict = {}
+        self._capture_floor(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall", json={"query": "list all the decisions", "projectPath": "p1"}
+        )
+        assert resp.status_code == 200
+        assert captured["min_similarity"] == app.state.config.min_similarity_broad
+
+    @pytest.mark.asyncio
+    async def test_precise_query_keeps_strict_floor(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        captured: dict = {}
+        self._capture_floor(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={"query": "what port does the daemon use", "projectPath": "p1"},
+        )
+        assert resp.status_code == 200
+        assert captured["min_similarity"] == app.state.config.min_similarity
+
+    @pytest.mark.asyncio
+    async def test_explicit_min_similarity_overrides_intent(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, _ = hybrid_client
+        captured: dict = {}
+        self._capture_floor(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={
+                "query": "list all the decisions",
+                "projectPath": "p1",
+                "minSimilarity": 0.5,
+            },
+        )
+        assert resp.status_code == 200
+        assert captured["min_similarity"] == 0.5
+
+    @pytest.mark.asyncio
+    async def test_intent_aware_disabled_uses_strict_floor(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.intent_aware = False
+        captured: dict = {}
+        self._capture_floor(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall", json={"query": "list all the decisions", "projectPath": "p1"}
+        )
+        assert resp.status_code == 200
+        assert captured["min_similarity"] == app.state.config.min_similarity
+
+
 class TestDeleteSync:
     @pytest.mark.asyncio
     async def test_delete_removes_from_mirror(self, hybrid_client) -> None:
@@ -97,9 +176,7 @@ class TestPatchSync:
     async def test_patch_moves_project_in_mirror(self, hybrid_client) -> None:
         ac, fts_path, _ = hybrid_client
         stored = await _store(ac, "movable lambda memory content", project="proj-1")
-        resp = await ac.patch(
-            f"/memory/{stored['id']}", json={"projectPath": "proj-2"}
-        )
+        resp = await ac.patch(f"/memory/{stored['id']}", json={"projectPath": "proj-2"})
         assert resp.status_code == 200
         conn = fts.connect(fts_path)
         try:

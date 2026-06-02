@@ -21,6 +21,7 @@ import starlette.responses
 
 import simba.memory.fts
 import simba.memory.hybrid
+import simba.memory.intent
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -241,11 +242,19 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         logger.warning("[recall] Embedding failed: %s", e)
         return {"memories": [], "queryTimeMs": 0, "error": "embedding_failed"}
 
-    min_sim = (
-        body.min_similarity
-        if body.min_similarity is not None
-        else config.min_similarity
-    )
+    # Cosine floor: an explicit client value always wins (escape hatch);
+    # otherwise pick by query intent — broad/aggregation queries widen the net.
+    if body.min_similarity is not None:
+        min_sim = body.min_similarity
+        mode = "explicit"
+    elif config.intent_aware:
+        mode = simba.memory.intent.classify(body.query)
+        min_sim = (
+            config.min_similarity_broad if mode == "broad" else config.min_similarity
+        )
+    else:
+        min_sim = config.min_similarity
+        mode = "precise"
     max_res = body.max_results if body.max_results is not None else config.max_results
 
     filters = dict(body.filters)
@@ -279,11 +288,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
-            **(
-                {"sessionSource": m["sessionSource"]}
-                if m.get("sessionSource")
-                else {}
-            ),
+            **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
         }
         for m in memories
     ]
@@ -291,8 +296,11 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     query_time_ms = int((time.time() - start_time) * 1000)
     top_sim = round(results[0]["similarity"], 2) if results else 0.0
     logger.info(
-        '[recall] project=%s query="%s" -> %d memories (%dms), top: %.2f',
+        '[recall] project=%s mode=%s floor=%.2f query="%s" '
+        "-> %d memories (%dms), top: %.2f",
         body.project_path or "(global)",
+        mode,
+        min_sim,
         body.query[:50],
         len(results),
         query_time_ms,
@@ -402,11 +410,7 @@ async def list_memories(
             "createdAt": m.get("createdAt"),
             "accessCount": m.get("accessCount", 0),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
-            **(
-                {"sessionSource": m["sessionSource"]}
-                if m.get("sessionSource")
-                else {}
-            ),
+            **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
         }
         for m in paginated
     ]

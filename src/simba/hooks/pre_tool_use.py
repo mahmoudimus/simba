@@ -70,7 +70,7 @@ def _extract_thinking(transcript_path: pathlib.Path) -> str:
         for item in reversed(content):
             if isinstance(item, dict) and item.get("type") == "thinking":
                 thinking = item.get("thinking", "")
-                return thinking[-_hooks_cfg().thinking_chars:]
+                return thinking[-_hooks_cfg().thinking_chars :]
 
     return ""
 
@@ -125,9 +125,7 @@ def _check_context_low(transcript_path: pathlib.Path) -> str | None:
 
     with contextlib.suppress(OSError):
         _CONTEXT_LOW_FLAG.write_text(
-            json.dumps(
-                {"transcript": str(transcript_path), "timestamp": time.time()}
-            )
+            json.dumps({"transcript": str(transcript_path), "timestamp": time.time()})
         )
 
     size_mb = size / 1_000_000
@@ -184,9 +182,7 @@ def _check_tool_rules(
 
     # Scope to the opaque, worktree-robust project id the learner stores under,
     # so another repo's rules never surface here (and a repo's worktrees share).
-    project_id = simba.db.resolve_project_id(
-        pathlib.Path(cwd_str) if cwd_str else None
-    )
+    project_id = simba.db.resolve_project_id(pathlib.Path(cwd_str) if cwd_str else None)
     memories = simba.hooks._memory_client.recall_memories(
         query,
         project_path=project_id,
@@ -264,10 +260,10 @@ def main(hook_input: dict) -> str:
 
         if thinking and not _check_dedup(thinking):
             project_path = cwd_str if cwd_str else None
+            # Defer the cosine floor to the daemon's intent-aware selection.
             memories = simba.hooks._memory_client.recall_memories(
                 thinking,
                 project_path=project_path,
-                min_similarity=_hooks_cfg().min_similarity,
             )
 
             if memories:
@@ -278,7 +274,6 @@ def main(hook_input: dict) -> str:
             )
             if formatted:
                 parts.append(formatted)
-
 
     if not parts:
         return simba.hooks._io.empty("PreToolUse")

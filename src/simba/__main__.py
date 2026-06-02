@@ -1021,19 +1021,19 @@ _VALID_MEMORY_TYPES = {
 
 
 def _memory_max_content_length() -> int:
-    """Return configured memory content length cap (default 1000)."""
+    """Return configured memory content length cap (default 200)."""
     try:
         import simba.config
         import simba.memory.config
 
         _ = simba.memory.config  # ensure section registration
         cfg = simba.config.load("memory")
-        max_len = int(getattr(cfg, "max_content_length", 1000))
+        max_len = int(getattr(cfg, "max_content_length", 200))
         if max_len <= 0:
-            return 1000
+            return 200
         return max_len
     except Exception:
-        return 1000
+        return 200
 
 
 def _cmd_memory(args: list[str]) -> int:
