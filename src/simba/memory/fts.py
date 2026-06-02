@@ -8,13 +8,20 @@ reconciled against LanceDB on startup.  ``SYSTEM`` memories are never indexed
 
 Append-only applies to the LanceDB *source* of truth; this index is rebuildable
 and may be deleted from (same as the KG's external-content FTS).
+
+Backed by a vendored peewee ``FTS5Model``.  The virtual-table DDL (which carries
+the configurable tokenizer name — not bindable) is still emitted as a small,
+allowlist-guarded ``CREATE`` via the bound connection.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
-import sqlite3
 import typing
+
+import simba._vendor.peewee as pw
+from simba._vendor.playhouse.sqlite_ext import FTS5Model, RowIDField, SearchField
 
 FTS_FILENAME = "memory_fts.db"
 
@@ -27,15 +34,25 @@ _ALLOWED_TOKENIZE = frozenset({"trigram", "porter", "unicode61", "ascii"})
 _MIN_TOKEN_LEN = 3
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 
-_COLUMNS = (
-    "memory_id",
-    "project_path",
-    "type",
-    "confidence",
-    "created_at",
-    "content",
-    "context",
-)
+# Dedicated database for the keyword mirror (a separate file from simba.db),
+# bound to a concrete path by ``connect()``.
+_db = pw.SqliteDatabase(None)
+_initialized: set[str] = set()
+
+
+class MemoryFTS(FTS5Model):
+    rowid = RowIDField()
+    memory_id = SearchField(unindexed=True)
+    project_path = SearchField(unindexed=True)
+    type = SearchField(unindexed=True)
+    confidence = SearchField(unindexed=True)
+    created_at = SearchField(unindexed=True)
+    content = SearchField()
+    context = SearchField()
+
+    class Meta:
+        database = _db
+        table_name = "memory_fts"
 
 
 def schema_sql(tokenize: str = _DEFAULT_TOKENIZE) -> str:
@@ -49,48 +66,49 @@ def schema_sql(tokenize: str = _DEFAULT_TOKENIZE) -> str:
     )
 
 
-def connect(path: typing.Any) -> sqlite3.Connection:
-    """Open a connection to the mirror with a ``Row`` factory."""
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    return conn
+@contextlib.contextmanager
+def connect(
+    path: typing.Any, tokenize: str = _DEFAULT_TOKENIZE
+) -> typing.Iterator[pw.SqliteDatabase]:
+    """Bind the mirror DB to ``path`` and yield it (re-entrant, table ensured)."""
+    p = str(path)
+    if _db.database != p:
+        if not _db.is_closed():
+            _db.close()
+        _db.init(p)
+    with _db.connection_context():
+        if p not in _initialized:
+            _db.execute_sql(schema_sql(tokenize))
+            _initialized.add(p)
+        yield _db
 
 
 def init(path: typing.Any, tokenize: str = _DEFAULT_TOKENIZE) -> None:
     """Create the mirror table if it does not exist."""
-    conn = connect(path)
-    try:
-        conn.execute(schema_sql(tokenize))
-        conn.commit()
-    finally:
-        conn.close()
+    with connect(path, tokenize):
+        pass
 
 
-def _insert(conn: sqlite3.Connection, memory: dict[str, typing.Any]) -> bool:
-    """Insert one memory row (no commit). Returns False if skipped."""
+def _insert(memory: dict[str, typing.Any]) -> bool:
+    """Insert one memory row. Returns False if skipped (SYSTEM or no id)."""
     if memory.get("type") == "SYSTEM":
         return False
     mid = memory.get("id") or memory.get("memory_id")
     if not mid:
         return False
-    conn.execute(
-        "INSERT INTO memory_fts "
-        "(memory_id, project_path, type, confidence, created_at, "
-        "content, context) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            mid,
-            memory.get("projectPath", "") or "",
-            memory.get("type", "") or "",
-            float(memory.get("confidence", 0.0) or 0.0),
-            memory.get("createdAt", "") or "",
-            memory.get("content", "") or "",
-            memory.get("context", "") or "",
-        ),
-    )
+    MemoryFTS.insert(
+        memory_id=mid,
+        project_path=memory.get("projectPath", "") or "",
+        type=memory.get("type", "") or "",
+        confidence=float(memory.get("confidence", 0.0) or 0.0),
+        created_at=memory.get("createdAt", "") or "",
+        content=memory.get("content", "") or "",
+        context=memory.get("context", "") or "",
+    ).execute()
     return True
 
 
-def upsert(conn: sqlite3.Connection, memory: dict[str, typing.Any]) -> None:
+def upsert(memory: dict[str, typing.Any]) -> None:
     """Idempotently index a memory (delete-then-insert by ``memory_id``).
 
     ``SYSTEM`` memories and rows without an id are skipped.
@@ -100,41 +118,34 @@ def upsert(conn: sqlite3.Connection, memory: dict[str, typing.Any]) -> None:
         return
     # DELETE-then-insert: also purges the row if the memory became SYSTEM
     # (then _insert is a no-op), keeping the mirror free of SYSTEM rows.
-    conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (mid,))
-    _insert(conn, memory)
-    conn.commit()
+    MemoryFTS.delete().where(MemoryFTS.memory_id == mid).execute()
+    _insert(memory)
 
 
-def delete(conn: sqlite3.Connection, memory_id: str) -> None:
+def delete(memory_id: str) -> None:
     """Remove a memory from the mirror."""
-    conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
-    conn.commit()
+    MemoryFTS.delete().where(MemoryFTS.memory_id == memory_id).execute()
 
 
-def set_project(conn: sqlite3.Connection, memory_id: str, project_path: str) -> None:
+def set_project(memory_id: str, project_path: str) -> None:
     """Update the scoping ``project_path`` for a memory (keeps /patch in sync)."""
-    conn.execute(
-        "UPDATE memory_fts SET project_path = ? WHERE memory_id = ?",
-        (project_path or "", memory_id),
-    )
-    conn.commit()
+    MemoryFTS.update(project_path=project_path or "").where(
+        MemoryFTS.memory_id == memory_id
+    ).execute()
 
 
-def count(conn: sqlite3.Connection) -> int:
+def count() -> int:
     """Return the number of indexed rows."""
-    return conn.execute("SELECT COUNT(*) FROM memory_fts").fetchone()[0]
+    return MemoryFTS.select().count()
 
 
-def rebuild(
-    conn: sqlite3.Connection, memories: typing.Iterable[dict[str, typing.Any]]
-) -> int:
+def rebuild(memories: typing.Iterable[dict[str, typing.Any]]) -> int:
     """Replace the whole mirror from ``memories`` (skips SYSTEM). Returns count."""
-    conn.execute("DELETE FROM memory_fts")
+    MemoryFTS.delete().execute()
     n = 0
     for m in memories:
-        if _insert(conn, m):
+        if _insert(m):
             n += 1
-    conn.commit()
     return n
 
 
@@ -160,7 +171,6 @@ def _build_match(query: str, min_token_len: int = _MIN_TOKEN_LEN) -> str:
 
 
 def search(
-    conn: sqlite3.Connection,
     query: str,
     *,
     project_path: str | None = None,
@@ -176,41 +186,33 @@ def search(
     if not match:
         return []
 
-    sql = (
-        "SELECT memory_id, project_path, type, confidence, created_at, "
-        "content, context FROM memory_fts WHERE memory_fts MATCH ?"
-    )
-    params: list[typing.Any] = [match]
+    q = MemoryFTS.select().where(MemoryFTS.match(match))
     if project_path:
-        sql += " AND project_path = ?"
-        params.append(project_path)
+        q = q.where(MemoryFTS.project_path == project_path)
     if types:
-        sql += f" AND type IN ({','.join('?' * len(types))})"
-        params.extend(types)
-    sql += " ORDER BY bm25(memory_fts) LIMIT ?"
-    params.append(limit)
+        q = q.where(MemoryFTS.type.in_(types))
+    q = q.order_by(MemoryFTS.bm25()).limit(limit)
 
     try:
-        rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
+        rows = list(q)
+    except Exception:
         return []
 
     results = []
     for r in rows:
-        raw_conf = r["confidence"]
         try:
-            conf = float(raw_conf) if raw_conf not in (None, "") else 0.0
+            conf = float(r.confidence) if r.confidence not in (None, "") else 0.0
         except (TypeError, ValueError):
             conf = 0.0
         results.append(
             {
-                "memory_id": r["memory_id"],
-                "type": r["type"],
-                "content": r["content"],
-                "context": r["context"],
+                "memory_id": r.memory_id,
+                "type": r.type,
+                "content": r.content,
+                "context": r.context,
                 "confidence": conf,
-                "createdAt": r["created_at"],
-                "projectPath": r["project_path"],
+                "createdAt": r.created_at,
+                "projectPath": r.project_path,
             }
         )
     return results

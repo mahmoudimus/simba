@@ -105,7 +105,7 @@ def run_index(
     try:
         for table_name in INDEXABLE_TABLES:
             result.tables_polled += 1
-            cursor = get_watermark(conn, table_name, "index")
+            cursor = get_watermark(table_name, "index", cwd=Path(cwd))
 
             try:
                 rows = conn.execute(
@@ -155,12 +155,12 @@ def run_index(
             if table_export:
                 export_rows[table_name] = table_export
                 set_watermark(
-                    conn,
                     table_name,
                     "index",
                     max_rowid,
                     rows_processed=len(table_export),
                     errors=0,
+                    cwd=Path(cwd),
                 )
     finally:
         if client is not None:

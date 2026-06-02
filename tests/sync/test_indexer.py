@@ -71,9 +71,7 @@ class TestRunIndex:
             return_value=_get_test_conn(db_dir),
         ):
             run_index(db_dir, dry_run=True)
-        conn = _get_test_conn(db_dir)
-        wm = get_watermark(conn, "reflections", "index")
-        conn.close()
+        wm = get_watermark("reflections", "index", cwd=db_dir)
         assert wm != "0"
 
     @patch("simba.sync.indexer.exporter.export_all_tables", return_value=[])
@@ -121,9 +119,7 @@ class TestRunIndex:
             return_value=_get_test_conn(db_dir),
         ):
             run_index(db_dir)
-        conn = _get_test_conn(db_dir)
-        wm = get_watermark(conn, "reflections", "index")
-        conn.close()
+        wm = get_watermark("reflections", "index", cwd=db_dir)
         assert wm != "0"
 
     @patch("simba.sync.indexer.exporter.export_all_tables", return_value=[])

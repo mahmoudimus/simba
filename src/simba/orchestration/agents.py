@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import simba._vendor.peewee as pw
 import simba.db
 import simba.orchestration.config
 
@@ -94,6 +95,53 @@ def _init_agent_db_schema(conn: sqlite3.Connection) -> None:
 
 
 simba.db.register_schema(_init_agent_db_schema)
+
+
+# Models map the tables created (and enum-seeded) by the raw _init_agent_db_schema
+# above; used by the query functions below. Status/level names resolve via the
+# config enums (the source of truth the enum tables are seeded from).
+
+
+class AgentRun(simba.db.BaseModel):
+    ticket_id = pw.TextField(primary_key=True)
+    agent = pw.TextField()
+    pid = pw.IntegerField(null=True)
+    status_id = pw.IntegerField(null=True)
+    command = pw.TextField(null=True)
+    working_dir = pw.TextField(null=True)
+    output_format = pw.TextField(null=True)
+    created_at_utc = pw.IntegerField()
+    started_at_utc = pw.IntegerField(null=True)
+    completed_at_utc = pw.IntegerField(null=True)
+    result = pw.TextField(null=True)
+    error = pw.TextField(null=True)
+    stdout = pw.TextField(null=True)
+    stderr = pw.TextField(null=True)
+
+    class Meta:
+        table_name = "agent_runs"
+
+
+class AgentLog(simba.db.BaseModel):
+    ticket_id = pw.TextField(null=True)
+    level_id = pw.IntegerField(null=True)
+    event = pw.TextField()
+    func = pw.TextField(null=True)
+    data = pw.TextField(null=True)
+    timestamp_utc = pw.IntegerField()
+
+    class Meta:
+        table_name = "agent_logs"
+
+
+def _status_name(status_id: int | None) -> str | None:
+    """Resolve a status id to its lowercase name via the Status enum."""
+    if status_id is None:
+        return None
+    try:
+        return simba.orchestration.config.Status(status_id).name.lower()
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -204,21 +252,15 @@ class SQLiteLogHandler(logging.Handler):
             )
             data_json = json.dumps(data) if data else "{}"
 
-            with simba.db.get_db() as conn:
-                conn.execute(
-                    """INSERT INTO agent_logs
-                       (ticket_id, level_id, event, func, data, timestamp_utc)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (
-                        ticket_id,
-                        int(level_id),
-                        event,
-                        record.funcName,
-                        data_json,
-                        simba.orchestration.config.utc_now(),
-                    ),
+            with simba.db.connect():
+                AgentLog.create(
+                    ticket_id=ticket_id,
+                    level_id=int(level_id),
+                    event=event,
+                    func=record.funcName,
+                    data=data_json,
+                    timestamp_utc=simba.orchestration.config.utc_now(),
                 )
-                conn.commit()
         except Exception:
             self.handleError(record)
 
@@ -323,22 +365,14 @@ def _capture_and_cleanup(
     stderr = _safe_read_file(stderr_path)
     result = _extract_result(stdout, stderr, output_format)
 
-    with simba.db.get_db() as conn:
-        conn.execute(
-            """UPDATE agent_runs
-               SET stdout=?, stderr=?, result=?, completed_at_utc=?,
-                   status_id=?
-               WHERE ticket_id=?""",
-            (
-                stdout,
-                stderr,
-                result,
-                simba.orchestration.config.utc_now(),
-                simba.orchestration.config.Status.COMPLETED,
-                ticket_id,
-            ),
-        )
-        conn.commit()
+    with simba.db.connect():
+        AgentRun.update(
+            stdout=stdout,
+            stderr=stderr,
+            result=result,
+            completed_at_utc=simba.orchestration.config.utc_now(),
+            status_id=int(simba.orchestration.config.Status.COMPLETED),
+        ).where(AgentRun.ticket_id == ticket_id).execute()
 
     logger = _get_logger()
     if logger:
@@ -392,37 +426,27 @@ def agent_status_update(ticket_id: str, status: str, message: str = "") -> str:
 
     status_id = simba.orchestration.config.STATUS_NAME_MAP[status_lower]
 
-    with simba.db.get_db() as conn:
-        cursor = conn.cursor()
-        row = cursor.execute(
-            "SELECT status_id FROM agent_runs WHERE ticket_id=?",
-            (ticket_id,),
-        ).fetchone()
-        old_status_id = row[0] if row else None
+    with simba.db.connect():
+        run = AgentRun.get_or_none(AgentRun.ticket_id == ticket_id)
+        old_status_id = run.status_id if run else None
 
         if status_id in (
             simba.orchestration.config.Status.COMPLETED,
             simba.orchestration.config.Status.FAILED,
         ):
-            conn.execute(
-                """UPDATE agent_runs
-                   SET status_id=?, error=?, completed_at_utc=?
-                   WHERE ticket_id=?""",
-                (
-                    status_id,
+            AgentRun.update(
+                status_id=int(status_id),
+                error=(
                     message
                     if status_id == simba.orchestration.config.Status.FAILED
-                    else None,
-                    simba.orchestration.config.utc_now(),
-                    ticket_id,
+                    else None
                 ),
-            )
+                completed_at_utc=simba.orchestration.config.utc_now(),
+            ).where(AgentRun.ticket_id == ticket_id).execute()
         else:
-            conn.execute(
-                "UPDATE agent_runs SET status_id=? WHERE ticket_id=?",
-                (status_id, ticket_id),
-            )
-        conn.commit()
+            AgentRun.update(status_id=int(status_id)).where(
+                AgentRun.ticket_id == ticket_id
+            ).execute()
 
         logger = _get_logger()
         if logger:
@@ -456,47 +480,37 @@ def agent_status_check(ticket_id: str | None = None) -> str:
         ticket_id: Optional specific ticket to check. If None, returns all
                  active agents.
     """
-    with simba.db.get_db() as conn:
-        cursor = conn.cursor()
-
-        base_query = """
-            SELECT ar.ticket_id, ar.agent, ar.pid, ar.status_id, st.name,
-                   ar.output_format, ar.result, ar.error, ar.created_at_utc
-            FROM agent_runs ar
-            LEFT JOIN status_types st ON ar.status_id = st.id
-        """
-
+    with simba.db.connect():
         if ticket_id:
-            rows = cursor.execute(
-                base_query + " WHERE ar.ticket_id=?", (ticket_id,)
-            ).fetchall()
+            runs = list(AgentRun.select().where(AgentRun.ticket_id == ticket_id))
         else:
-            rows = cursor.execute(
-                base_query + " WHERE ar.status_id NOT IN (?, ?)",
-                (
-                    simba.orchestration.config.Status.COMPLETED,
-                    simba.orchestration.config.Status.FAILED,
-                ),
-            ).fetchall()
+            runs = list(
+                AgentRun.select().where(
+                    AgentRun.status_id.not_in(
+                        [
+                            int(simba.orchestration.config.Status.COMPLETED),
+                            int(simba.orchestration.config.Status.FAILED),
+                        ]
+                    )
+                )
+            )
 
-        if not rows:
+        if not runs:
             if not ticket_id:
                 return "No active agents."
             return f"No status for {ticket_id}"
 
         lines: list[str] = []
-        for row in rows:
-            (
-                bid,
-                agent,
-                pid,
-                status_id,
-                status_name,
-                output_format,
-                result,
-                error,
-                created_at,
-            ) = row
+        for run in runs:
+            bid = run.ticket_id
+            agent = run.agent
+            pid = run.pid
+            status_id = run.status_id
+            status_name = _status_name(status_id)
+            output_format = run.output_format
+            result = run.result
+            error = run.error
+            created_at = run.created_at_utc
 
             # Auto-detect completion
             if status_id in (
@@ -603,26 +617,18 @@ def dispatch_agent(agent_name: str, ticket_id: str, instructions: str) -> str:
         now = simba.orchestration.config.utc_now()
         cmd_str = " ".join(cmd)
 
-        with simba.db.get_db() as conn:
-            conn.execute(
-                """INSERT OR REPLACE INTO agent_runs
-                   (ticket_id, agent, pid, status_id, command,
-                    working_dir, output_format,
-                    created_at_utc, started_at_utc)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    ticket_id,
-                    agent_name,
-                    proc.pid,
-                    simba.orchestration.config.Status.STARTED,
-                    cmd_str,
-                    str(project_root),
-                    output_format,
-                    now,
-                    now,
-                ),
-            )
-            conn.commit()
+        with simba.db.connect():
+            AgentRun.replace(
+                ticket_id=ticket_id,
+                agent=agent_name,
+                pid=proc.pid,
+                status_id=int(simba.orchestration.config.Status.STARTED),
+                command=cmd_str,
+                working_dir=str(project_root),
+                output_format=output_format,
+                created_at_utc=now,
+                started_at_utc=now,
+            ).execute()
 
         logger = _get_logger()
         if logger:

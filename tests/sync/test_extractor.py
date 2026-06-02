@@ -7,13 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import simba.db
 import simba.kg.store
 from simba.sync.extractor import ExtractResult, run_extract
 from simba.sync.watermarks import _init_schema
 
 
 @pytest.fixture()
-def db_dir(tmp_path: Path) -> Path:
+def db_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create a test DB with watermarks and the kg_edges schema.
 
     The extractor now stores facts into the temporal knowledge graph
@@ -29,6 +30,12 @@ def db_dir(tmp_path: Path) -> Path:
     simba.kg.store._init_schema(conn)
     conn.commit()
     conn.close()
+    # kg_add() now uses simba.db.connect() -> get_db_path; redirect it to this
+    # test DB so facts land here (not the real repo DB). Freeze the KG clock so
+    # re-adding a fact collides on the UNIQUE(..., valid_from) key
+    # deterministically (otherwise the two runs can straddle a second boundary).
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+    monkeypatch.setattr(simba.kg.store, "_now", lambda: "2025-01-01T00:00:00Z")
     return tmp_path
 
 

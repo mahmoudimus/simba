@@ -153,10 +153,8 @@ def main(hook_input: dict) -> str:
 
     # 3. Project memory status
     try:
-        conn = simba.db.get_connection(cwd)
-        if conn is not None:
-            stats = simba.search.project_memory.get_stats(conn)
-            conn.close()
+        if simba.db.get_db_path(cwd).exists():
+            stats = simba.search.project_memory.get_stats(cwd)
             sessions = stats.get("sessions", 0)
             knowledge = stats.get("knowledge", 0)
             facts = stats.get("facts", 0)

@@ -9,9 +9,11 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING
 
+import simba._vendor.peewee as pw
 import simba.db
 
 if TYPE_CHECKING:
+    import pathlib
     import sqlite3
 
 _SCHEMA_SQL = """\
@@ -28,57 +30,77 @@ CREATE TABLE IF NOT EXISTS sync_watermarks (
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:
-    """Create the sync_watermarks table."""
+    """Create the sync_watermarks table (transitional: legacy get_db path)."""
     conn.executescript(_SCHEMA_SQL)
 
 
 simba.db.register_schema(_init_schema)
 
 
-def get_watermark(conn: sqlite3.Connection, table_name: str, pipeline: str) -> str:
+class SyncWatermark(simba.db.BaseModel):
+    table_name = pw.CharField()
+    pipeline = pw.CharField()
+    last_cursor = pw.CharField(default="0")
+    last_run_at = pw.CharField(null=True)
+    rows_processed = pw.IntegerField(default=0)
+    errors = pw.IntegerField(default=0)
+
+    class Meta:
+        table_name = "sync_watermarks"
+        primary_key = pw.CompositeKey("table_name", "pipeline")
+
+
+def get_watermark(
+    table_name: str, pipeline: str, *, cwd: pathlib.Path | None = None
+) -> str:
     """Return the last processed cursor for *(table_name, pipeline)*.
 
     Returns ``"0"`` if no watermark has been recorded yet.
     """
-    row = conn.execute(
-        "SELECT last_cursor FROM sync_watermarks WHERE table_name = ? AND pipeline = ?",
-        (table_name, pipeline),
-    ).fetchone()
-    if row is None:
-        return "0"
-    return row["last_cursor"]
+    with simba.db.connect(cwd):
+        row = SyncWatermark.get_or_none(
+            (SyncWatermark.table_name == table_name)
+            & (SyncWatermark.pipeline == pipeline)
+        )
+        return row.last_cursor if row is not None else "0"
 
 
 def set_watermark(
-    conn: sqlite3.Connection,
     table_name: str,
     pipeline: str,
     last_cursor: str,
     rows_processed: int = 0,
     errors: int = 0,
+    *,
+    cwd: pathlib.Path | None = None,
 ) -> None:
     """Upsert the watermark for *(table_name, pipeline)*."""
     now = datetime.datetime.now(tz=datetime.UTC).isoformat()
-    conn.execute(
-        "INSERT INTO sync_watermarks "
-        "(table_name, pipeline, last_cursor, last_run_at, "
-        "rows_processed, errors) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(table_name, pipeline) DO UPDATE SET "
-        "last_cursor = excluded.last_cursor, "
-        "last_run_at = excluded.last_run_at, "
-        "rows_processed = rows_processed + excluded.rows_processed, "
-        "errors = errors + excluded.errors",
-        (table_name, pipeline, last_cursor, now, rows_processed, errors),
-    )
-    conn.commit()
+    with simba.db.connect(cwd):
+        SyncWatermark.insert(
+            table_name=table_name,
+            pipeline=pipeline,
+            last_cursor=last_cursor,
+            last_run_at=now,
+            rows_processed=rows_processed,
+            errors=errors,
+        ).on_conflict(
+            conflict_target=[SyncWatermark.table_name, SyncWatermark.pipeline],
+            update={
+                SyncWatermark.last_cursor: pw.EXCLUDED.last_cursor,
+                SyncWatermark.last_run_at: pw.EXCLUDED.last_run_at,
+                SyncWatermark.rows_processed: (
+                    SyncWatermark.rows_processed + pw.EXCLUDED.rows_processed
+                ),
+                SyncWatermark.errors: SyncWatermark.errors + pw.EXCLUDED.errors,
+            },
+        ).execute()
 
 
-def get_all_watermarks(conn: sqlite3.Connection) -> list[dict]:
+def get_all_watermarks(*, cwd: pathlib.Path | None = None) -> list[dict]:
     """Return all watermark rows as dicts."""
-    rows = conn.execute(
-        "SELECT table_name, pipeline, last_cursor, last_run_at, "
-        "rows_processed, errors FROM sync_watermarks "
-        "ORDER BY table_name, pipeline"
-    ).fetchall()
-    return [dict(row) for row in rows]
+    with simba.db.connect(cwd):
+        rows = SyncWatermark.select().order_by(
+            SyncWatermark.table_name, SyncWatermark.pipeline
+        )
+        return list(rows.dicts())

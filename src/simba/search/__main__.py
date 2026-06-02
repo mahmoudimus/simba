@@ -133,61 +133,47 @@ def main() -> int:
     if cmd == "index":
         return _cmd_index(cwd)
 
-    # For all other commands, get connection (init if needed)
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
-        # DB does not exist yet; create it via get_db context manager,
-        # but we need a persistent connection for the commands below.
-        db_path = simba.db.get_db_path(cwd)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        import sqlite3
+    # For all other commands, the project_memory functions self-manage the
+    # connection (creating the DB on first write) via simba.db.connect(cwd).
+    if cmd == "add-session" and len(args) >= 5:
+        rowid = simba.search.project_memory.add_session(
+            args[1], args[2], args[3], args[4], cwd=cwd
+        )
+        print(f"Session saved (id={rowid}).")
 
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        simba.db._init_schemas(conn)
+    elif cmd == "add-knowledge" and len(args) >= 4:
+        rowid = simba.search.project_memory.add_knowledge(
+            args[1], args[2], args[3], cwd=cwd
+        )
+        print(f"Knowledge saved for: {args[1]}")
 
-    try:
-        if cmd == "add-session" and len(args) >= 5:
-            rowid = simba.search.project_memory.add_session(
-                conn, args[1], args[2], args[3], args[4]
-            )
-            print(f"Session saved (id={rowid}).")
+    elif cmd == "add-fact" and len(args) >= 2:
+        category = args[2] if len(args) >= 3 else "general"
+        rowid = simba.search.project_memory.add_fact(args[1], category, cwd=cwd)
+        print(f"Fact saved (id={rowid}).")
 
-        elif cmd == "add-knowledge" and len(args) >= 4:
-            rowid = simba.search.project_memory.add_knowledge(
-                conn, args[1], args[2], args[3]
-            )
-            print(f"Knowledge saved for: {args[1]}")
+    elif cmd == "search" and len(args) >= 2:
+        limit = int(args[2]) if len(args) >= 3 else 10
+        results = simba.search.project_memory.search_fts(args[1], limit, cwd=cwd)
+        print(json.dumps(results, indent=2))
 
-        elif cmd == "add-fact" and len(args) >= 2:
-            category = args[2] if len(args) >= 3 else "general"
-            rowid = simba.search.project_memory.add_fact(conn, args[1], category)
-            print(f"Fact saved (id={rowid}).")
+    elif cmd == "context" and len(args) >= 2:
+        budget = int(args[2]) if len(args) >= 3 else 500
+        ctx = simba.search.project_memory.get_context(args[1], budget, cwd=cwd)
+        print(ctx)
 
-        elif cmd == "search" and len(args) >= 2:
-            limit = int(args[2]) if len(args) >= 3 else 10
-            results = simba.search.project_memory.search_fts(conn, args[1], limit)
-            print(json.dumps(results, indent=2))
+    elif cmd == "recent":
+        limit = int(args[1]) if len(args) >= 2 else 5
+        sessions = simba.search.project_memory.get_recent_sessions(limit, cwd=cwd)
+        print(json.dumps(sessions, indent=2))
 
-        elif cmd == "context" and len(args) >= 2:
-            budget = int(args[2]) if len(args) >= 3 else 500
-            ctx = simba.search.project_memory.get_context(conn, args[1], budget)
-            print(ctx)
+    elif cmd == "stats":
+        stats = simba.search.project_memory.get_stats(cwd)
+        print(json.dumps(stats, indent=2))
 
-        elif cmd == "recent":
-            limit = int(args[1]) if len(args) >= 2 else 5
-            sessions = simba.search.project_memory.get_recent_sessions(conn, limit)
-            print(json.dumps(sessions, indent=2))
-
-        elif cmd == "stats":
-            stats = simba.search.project_memory.get_stats(conn)
-            print(json.dumps(stats, indent=2))
-
-        else:
-            print(__doc__)
-            return 1
-    finally:
-        conn.close()
+    else:
+        print(__doc__)
+        return 1
 
     return 0
 

@@ -118,7 +118,6 @@ def run_extract(
     dry_run: bool = False,
 ) -> ExtractResult:
     """Run one cycle of fact extraction."""
-    import simba.db
 
     cfg = _sync_cfg()
     if daemon_url is None:
@@ -128,8 +127,7 @@ def run_extract(
     cwd_str = str(cwd_path)
     result = ExtractResult()
 
-    with simba.db.get_db(cwd_path) as conn:
-        watermark = get_watermark(conn, "memories", "facts")
+    watermark = get_watermark("memories", "facts", cwd=cwd_path)
 
     client = httpx.Client(base_url=daemon_url, timeout=10)
     no_fact_memories: list[dict] = []
@@ -187,14 +185,13 @@ def run_extract(
 
         # Update watermark
         if result.memories_processed > 0 and not dry_run:
-            with simba.db.get_db(cwd_path) as conn:
-                set_watermark(
-                    conn,
-                    "memories",
-                    "facts",
-                    latest_ts,
-                    rows_processed=result.memories_processed,
-                )
+            set_watermark(
+                "memories",
+                "facts",
+                latest_ts,
+                rows_processed=result.memories_processed,
+                cwd=cwd_path,
+            )
 
     except Exception:
         logger.debug("Extraction error", exc_info=True)

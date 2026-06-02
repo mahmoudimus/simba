@@ -26,17 +26,21 @@ logger = logging.getLogger("simba.sync")
 
 def _print_index_result(result: IndexResult, *, dry_run: bool = False) -> None:
     prefix = "[dry-run] " if dry_run else ""
-    print(f"{prefix}Index: {result.rows_indexed} indexed, "
-          f"{result.duplicates} duplicates, {result.errors} errors "
-          f"({result.tables_polled} tables polled, "
-          f"{result.rows_exported} exported)")
+    print(
+        f"{prefix}Index: {result.rows_indexed} indexed, "
+        f"{result.duplicates} duplicates, {result.errors} errors "
+        f"({result.tables_polled} tables polled, "
+        f"{result.rows_exported} exported)"
+    )
 
 
 def _print_extract_result(result: ExtractResult, *, dry_run: bool = False) -> None:
     prefix = "[dry-run] " if dry_run else ""
-    print(f"{prefix}Extract: {result.facts_extracted} facts from "
-          f"{result.memories_processed} memories, "
-          f"{result.facts_duplicate} duplicates, {result.errors} errors")
+    print(
+        f"{prefix}Extract: {result.facts_extracted} facts from "
+        f"{result.memories_processed} memories, "
+        f"{result.facts_duplicate} duplicates, {result.errors} errors"
+    )
     if result.agent_dispatched:
         print("  Claude researcher agent dispatched for deeper extraction")
 
@@ -62,9 +66,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 def _cmd_index(args: argparse.Namespace) -> int:
     """Run the indexing pipeline once."""
-    result = run_index(
-        Path(args.cwd), daemon_url=args.daemon_url, dry_run=args.dry_run
-    )
+    result = run_index(Path(args.cwd), daemon_url=args.daemon_url, dry_run=args.dry_run)
     _print_index_result(result, dry_run=args.dry_run)
     return 1 if result.errors > 0 else 0
 
@@ -84,23 +86,21 @@ def _cmd_extract(args: argparse.Namespace) -> int:
 def _cmd_status(args: argparse.Namespace) -> int:
     """Show watermarks and pipeline state."""
     cwd = Path(args.cwd)
-    conn = simba.db.get_connection(cwd)
-    if conn is None:
+    if not simba.db.get_db_path(cwd).exists():
         print("Database not found. Run a simba command first to initialize it.")
         return 1
 
-    try:
-        watermarks = get_all_watermarks(conn)
-    finally:
-        conn.close()
+    watermarks = get_all_watermarks(cwd=cwd)
 
     if not watermarks:
         print("No sync watermarks recorded yet.")
         print("Run 'simba sync run' to start syncing.")
         return 0
 
-    print(f"{'Table':<20s} {'Pipeline':<10s} {'Cursor':<24s} "
-          f"{'Last Run':<24s} {'Rows':>6s} {'Errors':>6s}")
+    print(
+        f"{'Table':<20s} {'Pipeline':<10s} {'Cursor':<24s} "
+        f"{'Last Run':<24s} {'Rows':>6s} {'Errors':>6s}"
+    )
     print("-" * 94)
     for wm in watermarks:
         cursor = wm["last_cursor"]
@@ -163,7 +163,8 @@ def main() -> int:
     _add_common_args(run_parser)
     run_parser.add_argument("--dry-run", action="store_true", help="Preview only")
     run_parser.add_argument(
-        "--use-claude", action="store_true",
+        "--use-claude",
+        action="store_true",
         help="Use Claude agent for deeper fact extraction",
     )
 
@@ -179,7 +180,8 @@ def main() -> int:
     _add_common_args(extract_parser)
     extract_parser.add_argument("--dry-run", action="store_true", help="Preview only")
     extract_parser.add_argument(
-        "--use-claude", action="store_true",
+        "--use-claude",
+        action="store_true",
         help="Use Claude agent for deeper fact extraction",
     )
 
@@ -201,7 +203,8 @@ def main() -> int:
         help="Seconds between sync cycles (default: 300)",
     )
     schedule_parser.add_argument(
-        "--use-claude", action="store_true",
+        "--use-claude",
+        action="store_true",
         help="Use Claude agent for deeper fact extraction",
     )
 
