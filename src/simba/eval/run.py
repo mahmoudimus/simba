@@ -28,6 +28,7 @@ def run_dataset(
     embed_doc: EmbedFn,
     embed_query: EmbedFn,
     cfg: typing.Any | None = None,
+    llm_client: typing.Any = None,
 ) -> simba.eval.runner.EvalReport:
     """Load a dataset, build the real recall retriever, and score it."""
     cfg = cfg or simba.memory.config.MemoryConfig()
@@ -38,6 +39,7 @@ def run_dataset(
         embed_doc=embed_doc,
         embed_query=embed_query,
         data_dir=data_dir,
+        llm_client=llm_client,
     )
     return simba.eval.runner.run_eval(dataset, retriever, ks=ks)
 

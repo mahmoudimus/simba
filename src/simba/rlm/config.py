@@ -21,10 +21,12 @@ class RlmConfig:
     # recall.py — router
     default_max_pointers: int = 5
     # UserPromptSubmit: passively inject navigable transcript pointers so the
-    # agent knows it can rlm_grep/rlm_peek them. Off by default (opt-in).
-    inject_pointers: bool = False
-    # Autonomous engine (opt-in): "claude" = none (agent-driven default).
-    engine: str = "claude"  # claude | claude-cli | api | local-gguf
+    # agent knows it can rlm_grep/rlm_peek them. On by default (experimental).
+    inject_pointers: bool = True
+    # Autonomous engine: "claude" = none (agent-driven); "claude-cli" spawns a
+    # detached cheap digest on PreCompact + enables episodic consolidation. On by
+    # default (experimental); set to "claude" to disable the autonomous spend.
+    engine: str = "claude-cli"  # claude | claude-cli | api | local-gguf
     engine_model: str = "haiku"  # cheap by default; never opus
     engine_base_url: str = ""  # OpenAI/Anthropic-compatible endpoint or proxy
     engine_api_key_env: str = "ANTHROPIC_API_KEY"  # env var holding the key

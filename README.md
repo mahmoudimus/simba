@@ -287,11 +287,11 @@ inside hooks with no extra model call:
   `created` date and the most-recently-created one is flagged `recency="newest"`,
   so the model can prefer fresher facts when two memories conflict (the relevance
   order itself is untouched).
-- **Multi-arm HyDE** *(opt-in)* — with `memory.expansion_enabled`, a **second
+- **Multi-arm HyDE** — with `memory.expansion_enabled` (on by default), a **second
   vector arm** embeds the focused-term string as its own query and is fused into
   RRF alongside the full-query vector arm and the keyword arm. It often nails
   identifiers/entities the full-query embedding blurs, at the cost of one extra
-  embed per recall (off by default).
+  embed per recall.
 
 ```bash
 simba config set memory.intent_aware true           # adapt breadth to query intent
@@ -310,10 +310,10 @@ type and project** — similarity in `[supersede_threshold, duplicate_threshold)
 **replaces** the older memory instead of appending another near-copy: the old row
 is deleted from both LanceDB and the keyword mirror and `/store` returns
 `{"status": "superseded", "supersededId": ...}`. This keeps the freshest version
-of an evolving note. Off by default.
+of an evolving note. On by default (experimental).
 
 ```bash
-simba config set memory.supersede_enabled true    # replace near-dupes (opt-in)
+simba config set memory.supersede_enabled false   # keep every near-dupe instead
 simba config set memory.supersede_threshold 0.85  # band floor (below duplicate_threshold)
 ```
 
@@ -328,7 +328,26 @@ simba config set memory.score_weight_importance 0.3
 simba config set memory.recency_halflife_days 90
 ```
 
-Measured with the eval harness (live embedder): on the time-sensitive `simba-temporal` set — each query's answer is the *fresh* version of a near-duplicate fact — scoring lifts **recall@1 from 0.63 → 1.00** (MRR 0.81 → 1.00); on the general `simba-seed` set (uniform dates) it is an exact **no-op**. Off by default.
+Measured with the eval harness (live embedder): on the time-sensitive `simba-temporal` set — each query's answer is the *fresh* version of a near-duplicate fact — scoring lifts **recall@1 from 0.63 → 1.00** (MRR 0.81 → 1.00); on the general `simba-seed` set (uniform dates) it is an exact **no-op**. On by default (experimental).
+
+### LLM reranker, extraction & providers
+
+Simba can call an LLM for two memory tasks via a small **CLI-backed client** (`simba.llm`) — no SDK dependency, fully `simba config`-driven, and **fail-open** (any error degrades to the non-LLM path):
+
+- **Reranker** (`memory.llm_rerank_enabled`) — the cross-encoder's role: after RRF + composite scoring, the LLM re-orders the candidate pool by relevance before truncation. Measured on `simba-seed` with `claude`/haiku it lifts **recall@1 0.71 → 0.90** and **MRR 0.90 → 1.00**, fixing exactly the confusable cases dense recall missed. **Cost note:** this adds one LLM round-trip *per recall* (i.e. on every prompt/tool hook) — use a fast model or set it false if recall feels sluggish.
+- **Extraction** (`sync.llm_extract_enabled`) — for memories the regex heuristics miss, the LLM extracts typed `(subject, predicate, object)` triples (reusing the project's existing entity vocabulary). Runs in the background sync pipeline, not the hot path.
+
+Providers (`llm.provider`): `claude-cli`, `llm-cli` (cloud), and **100% local** `llama-cli` (llama.cpp) or `mlx-lm` (Apple MLX) — set `llm.model_path` to a GGUF/model. A DeepSeek-style backend works via `llm.base_url` (claude-cli) or the `llm` CLI.
+
+```bash
+simba config set llm.provider llm-cli            # or claude-cli | llama-cli | mlx-lm | none
+simba config set llm.model deepseek-chat         # model name the chosen CLI expects
+simba config set llm.thinking xhigh              # reasoning-effort hint (best-effort)
+simba config set llm.model_path ~/models/q.gguf  # for llama-cli / mlx-lm (100% local)
+simba config set llm.provider none               # disable all LLM features
+```
+
+> **Experimental defaults:** simba now ships with its experimental features **on by default** — composite scoring, multi-arm HyDE, supersession, entity resolution, RLM pointer injection + autonomous engine, LLM extraction, and the LLM reranker. The LLM features need a working `llm.provider`/`rlm.engine` (default `claude-cli`); point them at a fast/cheap or local model, or set the relevant flag (or `llm.provider none`) to dial back cost/latency.
 
 ## Eval — Recall Benchmark
 

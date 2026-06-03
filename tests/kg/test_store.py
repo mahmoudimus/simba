@@ -321,7 +321,7 @@ class TestKgBitemporal:
 
 
 class TestEntityResolution:
-    def _enable(self, monkeypatch) -> None:
+    def _set(self, monkeypatch, *, enabled: bool) -> None:
         import simba.config
         import simba.kg.config as kc
 
@@ -329,12 +329,17 @@ class TestEntityResolution:
 
         def fake(section, *a, **k):
             if section == "kg":
-                return kc.KgConfig(entity_resolution_enabled=True)
+                return kc.KgConfig(entity_resolution_enabled=enabled)
             return real(section, *a, **k)
 
         monkeypatch.setattr(simba.config, "load", fake)
 
-    def test_disabled_keeps_surface_forms(self) -> None:
+    def _enable(self, monkeypatch) -> None:
+        self._set(monkeypatch, enabled=True)
+
+    def test_disabled_keeps_surface_forms(self, monkeypatch) -> None:
+        # Resolution ships on by default now, so disable it explicitly here.
+        self._set(monkeypatch, enabled=False)
         kg_add("GITHUB_TOKEN", "causes", "401", "p", project_path="proj-1")
         kg_add("the GITHUB_TOKEN", "causes", "errors", "p", project_path="proj-1")
         subjects = {r["subject"] for r in kg_query(project_path="proj-1")}

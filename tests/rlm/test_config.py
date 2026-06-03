@@ -19,12 +19,12 @@ def test_defaults():
     assert cfg.lru_documents == 4
     assert cfg.transcript_source == "md"
     assert cfg.default_max_pointers == 5
-    assert cfg.engine == "claude"
+    assert cfg.engine == "claude-cli"
 
 
 def test_engine_defaults():
     cfg = simba.config.load("rlm")
-    assert cfg.engine == "claude"
+    assert cfg.engine == "claude-cli"
     assert cfg.engine_model == "haiku"
     assert cfg.engine_base_url == ""
     assert cfg.engine_api_key_env == "ANTHROPIC_API_KEY"

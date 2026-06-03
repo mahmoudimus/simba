@@ -17,8 +17,9 @@ class KgConfig:
     default_subject_type: str = "concept"
     default_object_type: str = "concept"
     # Entity resolution: collapse surface-form variants (case/articles/quotes)
-    # of the same entity to one canonical node on kg_add. Opt-in.
-    entity_resolution_enabled: bool = False
+    # of the same entity to one canonical node on kg_add. On by default
+    # (experimental); set false to store raw surface forms.
+    entity_resolution_enabled: bool = True
     entity_similarity_threshold: float = 0.9
     # Multi-hop traversal: safety bound on edges returned by a single
     # kg_neighbors / expand_hops traversal (guards against runaway subgraphs).
