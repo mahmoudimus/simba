@@ -21,5 +21,5 @@ def test_kg_defaults() -> None:
 
 def test_entity_resolution_defaults() -> None:
     cfg = simba.kg.config.KgConfig()
-    assert cfg.entity_resolution_enabled is False  # opt-in
+    assert cfg.entity_resolution_enabled is True  # experimental: on by default
     assert 0.0 < cfg.entity_similarity_threshold <= 1.0

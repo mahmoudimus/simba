@@ -27,8 +27,9 @@ class MemoryConfig:
     max_results: int = 3
     duplicate_threshold: float = 0.92
     # Supersession (Phase 3): on store, replace an older same-type memory whose
-    # similarity is in [supersede_threshold, duplicate_threshold). Opt-in.
-    supersede_enabled: bool = False
+    # similarity is in [supersede_threshold, duplicate_threshold). On by default
+    # (experimental); set false to keep every near-duplicate.
+    supersede_enabled: bool = True
     supersede_threshold: float = 0.85
     max_content_length: int = 200
     auto_start: bool = True
@@ -50,23 +51,25 @@ class MemoryConfig:
     max_results_broad: int = 8  # results returned for broad queries
     fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
     # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
-    expansion_enabled: bool = False  # opt-in (costs one extra embed per recall)
+    expansion_enabled: bool = True  # on by default (costs one extra embed per recall)
     # Composite re-scoring: blend RRF relevance with recency + importance after
-    # fusion. Opt-in (scoring_enabled). The default weights are the measured-good
+    # fusion. On by default (experimental). The default weights are the measured
     # blend — relevance-dominant, with recency + importance as tie-breakers
-    # (never the sole signal, which would ignore the query) — so flipping the
-    # flag activates a benefit on time-sensitive recall and is a no-op when a
-    # corpus has uniform dates/confidence. See datasets/temporal.json.
-    scoring_enabled: bool = False
+    # (never the sole signal, which would ignore the query) — so it benefits
+    # time-sensitive recall and is a no-op when a corpus has uniform
+    # dates/confidence. See datasets/temporal.json.
+    scoring_enabled: bool = True
     score_weight_relevance: float = 1.0
     score_weight_recency: float = 0.5
     score_weight_importance: float = 0.3  # uses the stored confidence as importance
     recency_halflife_days: float = 90.0
     # LLM reranker: an LLM relevance pass over the candidate pool before truncating
-    # to max_results (the cross-encoder's role). Opt-in; needs an llm provider and
-    # adds one LLM round-trip per recall (latency), so it's off by default. Always
+    # to max_results (the cross-encoder's role). On by default (experimental).
+    # NOTE: needs an llm provider and adds ONE LLM round-trip per recall — i.e.
+    # latency on every UserPromptSubmit/PreToolUse hook. Use a fast model
+    # (e.g. a DeepSeek flash via llm.provider) or set false to disable. Always
     # fail-open: any error leaves the RRF + composite ordering intact.
-    llm_rerank_enabled: bool = False
+    llm_rerank_enabled: bool = True
     llm_rerank_candidates: int = 20  # cap of candidates sent to the reranker
 
 
