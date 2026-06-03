@@ -26,6 +26,10 @@ class MemoryConfig:
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92
+    # Supersession (Phase 3): on store, replace an older same-type memory whose
+    # similarity is in [supersede_threshold, duplicate_threshold). Opt-in.
+    supersede_enabled: bool = False
+    supersede_threshold: float = 0.85
     max_content_length: int = 200
     auto_start: bool = True
     diagnostics_after: int = 50

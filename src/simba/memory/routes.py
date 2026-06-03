@@ -160,6 +160,21 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             "similarity": round(dup_check["similarity"], 2),
         }
 
+    # Supersession (opt-in): if a same-type memory sits just below the duplicate
+    # threshold, replace it with this fresher one instead of appending a near-dup.
+    superseded_id: str | None = None
+    if config.supersede_enabled:
+        candidates = await simba.memory.vector_db.search_memories(
+            table,
+            embedding,
+            config.supersede_threshold,
+            1,
+            {"projectPath": body.project_path, "types": [body.type]},
+        )
+        if candidates:
+            superseded_id = candidates[0]["id"]
+            await table.delete(f"id = '{superseded_id}'")
+
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -208,14 +223,20 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             )
         except Exception:
             logger.debug("[store] fts mirror upsert failed", exc_info=True)
+        if superseded_id:
+            try:
+                await asyncio.to_thread(_fts_delete, fts_path, superseded_id)
+            except Exception:
+                logger.debug("[store] fts supersede-delete failed", exc_info=True)
 
     diag = getattr(request.app.state, "diagnostics", None)
     if diag is not None:
         diag.record_store(body.type, duplicate=False)
 
     return {
-        "status": "stored",
+        "status": "superseded" if superseded_id else "stored",
         "id": memory_id,
+        **({"supersededId": superseded_id} if superseded_id else {}),
         "embedding_dims": len(embedding),
     }
 

@@ -282,6 +282,63 @@ class TestRecallExpansion:
         assert captured["extra_embedding"] is not None
 
 
+class TestSupersede:
+    """Opt-in: a near-duplicate same-type store supersedes the older memory.
+
+    The mock embed returns a constant vector (cosine 1.0 for everything), so the
+    thresholds are tuned per test: duplicate_threshold=1.5 keeps the dup-check
+    from firing, supersede_threshold=0.5 puts the constant 1.0 in the band.
+    """
+
+    @pytest.mark.asyncio
+    async def test_supersede_replaces_same_type(self, hybrid_client) -> None:
+        ac, fts_path, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+
+        first = await _store(ac, "ruff is the linter", mtype="PATTERN")
+        resp = await ac.post(
+            "/store",
+            json={"type": "PATTERN", "content": "ruff lints", "projectPath": "proj-1"},
+        )
+        body = resp.json()
+        assert body["status"] == "superseded"
+        assert body["supersededId"] == first["id"]
+        # Old row gone, new row present -> mirror holds exactly one.
+        assert _mirror_count(fts_path) == 1
+
+    @pytest.mark.asyncio
+    async def test_disabled_keeps_both(self, hybrid_client) -> None:
+        ac, fts_path, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_enabled = False
+
+        await _store(ac, "alpha", mtype="PATTERN")
+        resp = await ac.post(
+            "/store",
+            json={"type": "PATTERN", "content": "beta", "projectPath": "proj-1"},
+        )
+        assert resp.json()["status"] == "stored"
+        assert _mirror_count(fts_path) == 2
+
+    @pytest.mark.asyncio
+    async def test_supersede_only_same_type(self, hybrid_client) -> None:
+        ac, fts_path, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+
+        await _store(ac, "alpha", mtype="GOTCHA")
+        resp = await ac.post(
+            "/store",
+            json={"type": "PATTERN", "content": "beta", "projectPath": "proj-1"},
+        )
+        # Different type -> no supersession; both remain.
+        assert resp.json()["status"] == "stored"
+        assert _mirror_count(fts_path) == 2
+
+
 class TestDeleteSync:
     @pytest.mark.asyncio
     async def test_delete_removes_from_mirror(self, hybrid_client) -> None:

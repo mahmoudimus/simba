@@ -32,3 +32,13 @@ class TestPhase0Defaults:
     def test_expansion_disabled_by_default(self) -> None:
         # The 2nd HyDE vector arm costs an extra embed; opt-in only.
         assert config.MemoryConfig().expansion_enabled is False
+
+
+class TestSupersedeDefaults:
+    def test_supersede_off_by_default(self) -> None:
+        assert config.MemoryConfig().supersede_enabled is False
+
+    def test_supersede_band_below_duplicate(self) -> None:
+        # The supersede band sits below the duplicate threshold.
+        cfg = config.MemoryConfig()
+        assert 0 < cfg.supersede_threshold < cfg.duplicate_threshold
