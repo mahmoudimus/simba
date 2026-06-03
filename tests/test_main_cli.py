@@ -94,9 +94,7 @@ def test_ensure_codex_feature_flag_preserves_existing(
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     config_path = codex_home / "config.toml"
-    config_path.write_text(
-        'model = "gpt-5.5"\n\n[features]\nmulti_agent = true\n'
-    )
+    config_path.write_text('model = "gpt-5.5"\n\n[features]\nmulti_agent = true\n')
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     status = cli._ensure_codex_feature_flag()
@@ -112,25 +110,19 @@ def test_ensure_codex_feature_flag_idempotent(
 ) -> None:
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
-    (codex_home / "config.toml").write_text(
-        "[features]\nhooks = true\n"
-    )
+    (codex_home / "config.toml").write_text("[features]\nhooks = true\n")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     assert cli._ensure_codex_feature_flag() == "already-set"
 
 
-def test_ensure_codex_feature_flag_remove(
-    tmp_path: pathlib.Path, monkeypatch
-) -> None:
+def test_ensure_codex_feature_flag_remove(tmp_path: pathlib.Path, monkeypatch) -> None:
     import tomllib
 
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     config_path = codex_home / "config.toml"
-    config_path.write_text(
-        "[features]\nmulti_agent = true\nhooks = true\n"
-    )
+    config_path.write_text("[features]\nmulti_agent = true\nhooks = true\n")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     status = cli._ensure_codex_feature_flag(remove=True)
@@ -165,9 +157,7 @@ def test_ensure_codex_feature_flag_migrates_legacy_key(
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     config_path = codex_home / "config.toml"
-    config_path.write_text(
-        "[features]\nmulti_agent = true\ncodex_hooks = true\n"
-    )
+    config_path.write_text("[features]\nmulti_agent = true\ncodex_hooks = true\n")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     status = cli._ensure_codex_feature_flag()
@@ -402,7 +392,8 @@ def test_rlm_complete_marks_done(monkeypatch, capsys):
 
     calls = {}
     monkeypatch.setattr(
-        simba.rlm.jobs, "complete",
+        simba.rlm.jobs,
+        "complete",
         lambda tid, project, n, **k: calls.update(tid=tid, n=n),
     )
     rc = cli._cmd_rlm(["complete", "sess-1", "--stored", "5"])
@@ -857,3 +848,20 @@ def test_rlm_digest_dedup_skips(monkeypatch, capsys):
     rc = cli._cmd_rlm(["digest", "sess-1"])
     assert rc == 0
     assert "already" in capsys.readouterr().out.lower()
+
+
+def test_db_facts_shows_occurred_at(tmp_path, monkeypatch, capsys) -> None:
+    import simba.db
+    import simba.kg.store
+
+    db_path = tmp_path / ".simba" / "simba.db"
+    monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+    simba.kg.store.kg_add(
+        "alpha", "rel", "beta", "proof", project_path="p1", occurred_at="2025-03-01"
+    )
+
+    rc = cli._db_facts(tmp_path, 10)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "alpha rel beta" in out
+    assert "2025-03-01" in out

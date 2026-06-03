@@ -27,9 +27,7 @@ class TestKgAdd:
         assert calls["args"] == ("simba", "supports", "sqlite", "unit test")
         assert calls["kwargs"]["project_path"] is None
 
-    def test_forwards_optional_arguments(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_forwards_optional_arguments(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, object] = {}
 
         def fake_kg_add(subject, predicate, object, proof, **kwargs):
@@ -47,12 +45,14 @@ class TestKgAdd:
             object_type="entity",
             transcript_id="t-1",
             char_start=42,
+            occurred_at="2025-03-01",
         )
 
         assert captured["subject_type"] == "entity"
         assert captured["object_type"] == "entity"
         assert captured["transcript_id"] == "t-1"
         assert captured["char_start"] == 42
+        assert captured["occurred_at"] == "2025-03-01"
 
 
 class TestKgQuery:
@@ -84,6 +84,8 @@ class TestKgQuery:
             predicate="p",
             as_of="2026-01-01T00:00:00Z",
             include_expired=True,
+            occurred_after="2025-01-01",
+            occurred_before="2025-12-31",
             limit=5,
         )
 
@@ -91,6 +93,8 @@ class TestKgQuery:
         assert captured["kwargs"]["predicate"] == "p"
         assert captured["kwargs"]["as_of"] == "2026-01-01T00:00:00Z"
         assert captured["kwargs"]["include_expired"] is True
+        assert captured["kwargs"]["occurred_after"] == "2025-01-01"
+        assert captured["kwargs"]["occurred_before"] == "2025-12-31"
         assert captured["kwargs"]["limit"] == 5
 
 
