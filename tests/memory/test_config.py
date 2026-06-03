@@ -34,6 +34,21 @@ class TestPhase0Defaults:
         assert config.MemoryConfig().expansion_enabled is True
 
 
+class TestEmbedderDefaults:
+    def test_embed_provider_default_is_gguf(self) -> None:
+        assert config.MemoryConfig().embed_provider == "gguf"
+
+    def test_nomic_prefixes_preserved_by_default(self) -> None:
+        cfg = config.MemoryConfig()
+        assert cfg.embed_doc_prefix == "search_document: "
+        assert cfg.embed_query_prefix == "search_query: "
+
+
+class TestRerankModeDefault:
+    def test_default_is_async_nonblocking(self) -> None:
+        assert config.MemoryConfig().llm_rerank_mode == "async"
+
+
 class TestScoringDefaults:
     def test_scoring_on_by_default(self) -> None:
         assert config.MemoryConfig().scoring_enabled is True
