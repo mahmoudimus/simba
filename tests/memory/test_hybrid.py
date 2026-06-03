@@ -332,3 +332,45 @@ class TestScoringWiring:
             min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
         )
         assert [r["id"] for r in results] == ["lo", "hi"]  # recency flipped order
+
+
+class _FakeRerankClient:
+    def available(self):
+        return True
+
+    def complete_json(self, prompt):
+        # reverse the bracketed ids found in the prompt, to prove a reorder
+        import re
+        ids = re.findall(r"\[([^\]]+)\]", prompt)
+        return list(reversed(ids))
+
+
+class TestLlmRerankWiring:
+    @pytest.mark.asyncio
+    async def test_disabled_no_rerank(self, monkeypatch) -> None:
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [_vec("a", 0.9), _vec("b", 0.8), _vec("c", 0.7)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=False)
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+            llm_client=_FakeRerankClient(),
+        )
+        assert [r["id"] for r in results] == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_enabled_reranks_pool_before_truncation(self, monkeypatch) -> None:
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [_vec("a", 0.9), _vec("b", 0.8), _vec("c", 0.7)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
+            llm_client=_FakeRerankClient(),
+        )
+        # reranker reversed the pool [a,b,c] -> [c,b,a], THEN truncated to 2
+        assert [r["id"] for r in results] == ["c", "b"]

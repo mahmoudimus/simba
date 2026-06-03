@@ -29,14 +29,17 @@ class TestPhase0Defaults:
         assert cfg.max_results_broad > cfg.max_results
         assert cfg.fts_candidate_pool_broad > cfg.fts_candidate_pool
 
-    def test_expansion_disabled_by_default(self) -> None:
-        # The 2nd HyDE vector arm costs an extra embed; opt-in only.
-        assert config.MemoryConfig().expansion_enabled is False
+    def test_expansion_on_by_default(self) -> None:
+        # Experimental features ship on by default; the 2nd HyDE arm included.
+        assert config.MemoryConfig().expansion_enabled is True
 
 
 class TestScoringDefaults:
-    def test_scoring_off_by_default(self) -> None:
-        assert config.MemoryConfig().scoring_enabled is False
+    def test_scoring_on_by_default(self) -> None:
+        assert config.MemoryConfig().scoring_enabled is True
+
+    def test_llm_rerank_on_by_default(self) -> None:
+        assert config.MemoryConfig().llm_rerank_enabled is True
 
     def test_relevance_dominant_blend(self) -> None:
         # Enabling the flag should activate the measured-good blend: relevance
@@ -49,8 +52,8 @@ class TestScoringDefaults:
 
 
 class TestSupersedeDefaults:
-    def test_supersede_off_by_default(self) -> None:
-        assert config.MemoryConfig().supersede_enabled is False
+    def test_supersede_on_by_default(self) -> None:
+        assert config.MemoryConfig().supersede_enabled is True
 
     def test_supersede_band_below_duplicate(self) -> None:
         # The supersede band sits below the duplicate threshold.

@@ -73,6 +73,7 @@ async def _search(
     embedding: list[float],
     extra_embedding: list[float] | None,
     plan: simba.memory.recall_plan.RecallPlan,
+    llm_client: typing.Any,
 ) -> list[str]:
     import lancedb
 
@@ -89,6 +90,7 @@ async def _search(
         cfg=cfg,
         candidate_pool=plan.candidate_pool,
         extra_embedding=extra_embedding,
+        llm_client=llm_client,
     )
     return [r["id"] for r in fused]
 
@@ -100,6 +102,7 @@ def build_retriever(
     embed_doc: EmbedFn,
     embed_query: EmbedFn,
     data_dir: str | pathlib.Path,
+    llm_client: typing.Any = None,
 ) -> Retriever:
     """Build the LanceDB+FTS store from ``dataset.corpus`` and return a retriever."""
     cfg = cfg or simba.memory.config.MemoryConfig()
@@ -124,7 +127,9 @@ def build_retriever(
         embedding = embed_query(query)
         extra = embed_query(plan.expansion_terms) if plan.expansion_terms else None
         return asyncio.run(
-            _search(db_path, str(fts_path), cfg, query, embedding, extra, plan)
+            _search(
+                db_path, str(fts_path), cfg, query, embedding, extra, plan, llm_client
+            )
         )
 
     return retriever

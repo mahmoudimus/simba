@@ -9,11 +9,13 @@ fully defensive — any failure degrades the result to vector-only.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import typing
 
 import simba.memory.fts
 import simba.memory.keywords
+import simba.memory.llm_rerank
 import simba.memory.scoring
 import simba.memory.vector_db
 
@@ -117,6 +119,7 @@ async def hybrid_search(
     cfg: typing.Any,
     candidate_pool: int | None = None,
     extra_embedding: list[float] | None = None,
+    llm_client: typing.Any = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -177,5 +180,18 @@ async def hybrid_search(
         fused = simba.memory.scoring.composite_rescore(
             fused, cfg=cfg, now=time.time()
         )
+
+    # Optional LLM rerank of the candidate pool (cross-encoder role) before
+    # truncation. Runs in a worker thread (the client shells out, blocking) and
+    # is fail-open: any error returns the pre-rerank order.
+    if getattr(cfg, "llm_rerank_enabled", False) and llm_client is not None:
+        with contextlib.suppress(Exception):
+            fused = await asyncio.to_thread(
+                simba.memory.llm_rerank.rerank,
+                query_text,
+                fused,
+                client=llm_client,
+                max_candidates=getattr(cfg, "llm_rerank_candidates", 20),
+            )
 
     return fused[:max_results]

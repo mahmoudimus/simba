@@ -176,6 +176,17 @@ def run_extract(
     cwd_str = str(cwd_path)
     result = ExtractResult()
 
+    # Opt-in synchronous LLM extraction for regex misses (built once; fail-open).
+    llm_client = None
+    llm_vocab: list[str] = []
+    if getattr(cfg, "llm_extract_enabled", False) and not dry_run:
+        import simba.llm.client
+
+        client = simba.llm.client.get_client()
+        if client.available():
+            llm_client = client
+            llm_vocab = _project_entity_vocab(cwd_str)
+
     watermark = get_watermark("memories", "facts", cwd=cwd_path)
 
     client = httpx.Client(base_url=daemon_url, timeout=10)
@@ -203,6 +214,16 @@ def run_extract(
                 mem_id = mem.get("id", "")
 
                 triples = extract_facts(mem_type, content, context, mem_id)
+                # LLM fallback for regex misses (opt-in; synchronous; fail-open).
+                if not triples and llm_client is not None:
+                    import simba.sync.llm_extract
+
+                    triples = simba.sync.llm_extract.extract_triples(
+                        f"{content} {context}".strip(),
+                        client=llm_client,
+                        existing_entities=llm_vocab,
+                        max_triples=cfg.llm_extract_max_triples,
+                    )
                 # Event time (occurred_at): resolve a narrative date from the
                 # memory text, falling back to None when none is present.
                 occurred_at = resolve_occurred_at(

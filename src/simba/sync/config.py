@@ -17,3 +17,8 @@ class SyncConfig:
     retry_backoff: float = 0.5
     page_size: int = 50
     default_interval: int = 300
+    # Synchronous LLM fact extraction for memories the regex heuristics miss
+    # (uses the llm provider; fail-open to regex-only). On by default
+    # (experimental); runs in the background sync pipeline, not the hot path.
+    llm_extract_enabled: bool = True
+    llm_extract_max_triples: int = 8
