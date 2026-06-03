@@ -21,8 +21,7 @@ import starlette.responses
 
 import simba.memory.fts
 import simba.memory.hybrid
-import simba.memory.intent
-import simba.memory.keywords
+import simba.memory.recall_plan
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -256,32 +255,18 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         logger.warning("[recall] Embedding failed: %s", e)
         return {"memories": [], "queryTimeMs": 0, "error": "embedding_failed"}
 
-    # Cosine floor: an explicit client value always wins (escape hatch);
-    # otherwise pick by query intent — broad/aggregation queries widen the net.
-    if body.min_similarity is not None:
-        min_sim = body.min_similarity
-        mode = "explicit"
-    elif config.intent_aware:
-        mode = simba.memory.intent.classify(body.query)
-        min_sim = (
-            config.min_similarity_broad if mode == "broad" else config.min_similarity
-        )
-    else:
-        min_sim = config.min_similarity
-        mode = "precise"
-
-    # Broad queries widen the net: more results + a larger RRF candidate pool.
-    # An explicit client maxResults still wins.
-    broad = mode == "broad"
-    if body.max_results is not None:
-        max_res = body.max_results
-    elif broad:
-        max_res = config.max_results_broad
-    else:
-        max_res = config.max_results
-    candidate_pool = (
-        config.fts_candidate_pool_broad if broad else config.fts_candidate_pool
+    # Intent-aware floor + broad-query widening + HyDE term selection, all
+    # derived by the shared planner (the eval harness uses the same logic).
+    plan = simba.memory.recall_plan.plan_recall(
+        body.query,
+        config,
+        min_similarity=body.min_similarity,
+        max_results=body.max_results,
     )
+    min_sim = plan.min_similarity
+    max_res = plan.max_results
+    candidate_pool = plan.candidate_pool
+    mode = plan.mode
 
     filters = dict(body.filters)
     if body.project_path:
@@ -290,15 +275,11 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     # Multi-arm HyDE (opt-in): a 2nd vector arm over the focused-term string,
     # which often nails identifiers/entities the full-query embedding blurs.
     extra_embedding: list[float] | None = None
-    if config.hybrid_enabled and config.expansion_enabled:
-        kw_terms = simba.memory.keywords.focus_terms(
-            body.query, max_terms=config.fts_max_terms
-        )
-        if kw_terms:
-            try:
-                extra_embedding = await embed_query(" ".join(kw_terms))
-            except Exception:
-                extra_embedding = None
+    if plan.expansion_terms:
+        try:
+            extra_embedding = await embed_query(plan.expansion_terms)
+        except Exception:
+            extra_embedding = None
 
     fts_path = getattr(request.app.state, "fts_path", None)
     if config.hybrid_enabled:
