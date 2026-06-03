@@ -9,10 +9,12 @@ fully defensive — any failure degrades the result to vector-only.
 from __future__ import annotations
 
 import asyncio
+import time
 import typing
 
 import simba.memory.fts
 import simba.memory.keywords
+import simba.memory.scoring
 import simba.memory.vector_db
 
 
@@ -168,4 +170,12 @@ async def hybrid_search(
         keyword_weight=cfg.keyword_weight,
         extra_vector_results=extra_vector_results,
     )
+
+    # Optional composite re-scoring: blend RRF relevance with recency +
+    # importance over the full fused candidate set, then truncate.
+    if getattr(cfg, "scoring_enabled", False):
+        fused = simba.memory.scoring.composite_rescore(
+            fused, cfg=cfg, now=time.time()
+        )
+
     return fused[:max_results]
