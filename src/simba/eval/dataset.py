@@ -53,6 +53,7 @@ class EvalCase:
     relevant_ids: list[str]
     intent: str = ""
     note: str = ""
+    split: str = ""  # "dev" | "test" | "" (auto-assigned deterministically)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> EvalCase:
@@ -62,6 +63,7 @@ class EvalCase:
             relevant_ids=list(raw.get("relevant_ids", [])),
             intent=raw.get("intent", ""),
             note=raw.get("note", ""),
+            split=raw.get("split", ""),
         )
 
 
@@ -73,6 +75,36 @@ class Dataset:
 
     def corpus_ids(self) -> set[str]:
         return {m.id for m in self.corpus}
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to the dataset JSON shape (round-trips through load_dataset)."""
+        return {
+            "name": self.name,
+            "corpus": [
+                {
+                    "id": m.id,
+                    "content": m.content,
+                    "type": m.type,
+                    "context": m.context,
+                    "project_path": m.project_path,
+                    "session_source": m.session_source,
+                    "created_at": m.created_at,
+                    "confidence": m.confidence,
+                }
+                for m in self.corpus
+            ],
+            "cases": [
+                {
+                    "id": c.id,
+                    "query": c.query,
+                    "relevant_ids": c.relevant_ids,
+                    "intent": c.intent,
+                    "note": c.note,
+                    "split": c.split,
+                }
+                for c in self.cases
+            ],
+        }
 
 
 def load_dataset(path: str | pathlib.Path) -> Dataset:
