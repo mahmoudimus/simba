@@ -47,3 +47,34 @@ class TestInvokedPrograms:
         inv = p.invoked_programs("cargo build --release")[0]
         assert inv.words[0].endswith("cargo")
         assert "build" in inv.words
+
+
+class TestShlexTokenization:
+    def test_quoted_arg_is_one_token(self) -> None:
+        # shlex keeps a quoted run together (hand-rolled split would too, but
+        # this locks the shlex behavior)
+        assert p.tokenize('cargo build "--message-format json"') == [
+            "cargo",
+            "build",
+            "--message-format json",
+        ]
+
+    def test_escaped_space(self) -> None:
+        assert p.tokenize(r"python my\ script.py") == ["python", "my script.py"]
+
+    def test_single_quotes(self) -> None:
+        assert p.tokenize("python -c 'import sys; print(1)'") == [
+            "python",
+            "-c",
+            "import sys; print(1)",
+        ]
+
+    def test_malformed_quotes_falls_back_not_raises(self) -> None:
+        # unbalanced quote must NOT raise (the hook can't crash) — best-effort
+        out = p.tokenize('cargo build "--unterminated')
+        assert isinstance(out, list)
+        assert out and out[0] == "cargo"
+
+    def test_invoked_programs_with_quoted_args(self) -> None:
+        progs = [i.program for i in p.invoked_programs('cargo run -- "a b c"')]
+        assert progs == ["cargo"]
