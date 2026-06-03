@@ -159,6 +159,58 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
         return None
 
 
+def _dedup_triples(triples: list) -> list:
+    """Dedup triples by case-insensitive (subject, predicate, object); keep first."""
+    seen: set[tuple[str, str, str]] = set()
+    out = []
+    for t in triples:
+        s, p, o = t[0], t[1], t[2]
+        key = (s.lower().strip(), p.lower().strip(), o.lower().strip())
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
+def _extract_for_memory(
+    mem_type: str,
+    content: str,
+    context: str,
+    mem_id: str,
+    *,
+    strategy: str,
+    llm_client: object | None,
+    llm_vocab: list[str],
+    max_triples: int,
+) -> list:
+    """Extract triples for one memory per ``strategy`` (regex | llm | llm+regex).
+
+    ``llm+regex`` unions both (deduped). ``llm`` uses the LLM only — but falls
+    back to regex when no provider is available, so extraction is never silently
+    empty. Returns ``(subject, predicate, object, proof)`` tuples.
+    """
+    use_regex = strategy in ("regex", "llm+regex") or (
+        strategy == "llm" and llm_client is None
+    )
+    use_llm = llm_client is not None and strategy in ("llm", "llm+regex")
+
+    triples: list = []
+    if use_regex:
+        triples.extend(extract_facts(mem_type, content, context, mem_id))
+    if use_llm:
+        import simba.sync.llm_extract
+
+        triples.extend(
+            simba.sync.llm_extract.extract_triples(
+                f"{content} {context}".strip(),
+                client=llm_client,
+                existing_entities=llm_vocab,
+                max_triples=max_triples,
+            )
+        )
+    return _dedup_triples(triples)
+
+
 def run_extract(
     cwd: str | Path,
     *,
@@ -193,6 +245,10 @@ def run_extract(
     no_fact_memories: list[dict] = []
 
     try:
+        # Collect all new (above-watermark) memories across pages, then process
+        # them in createdAt order so the per-cycle LLM cap is watermark-safe
+        # (breaking leaves the watermark at the last fully-processed memory).
+        new_memories: list[dict] = []
         offset = 0
         while True:
             memories, total = _fetch_memories(
@@ -200,65 +256,71 @@ def run_extract(
             )
             if not memories:
                 break
-
-            latest_ts = watermark
-            for mem in memories:
-                created = mem.get("createdAt", "")
-                if created <= watermark:
-                    continue
-
-                result.memories_processed += 1
-                mem_type = mem.get("type", "")
-                content = mem.get("content", "")
-                context = mem.get("context", "")
-                mem_id = mem.get("id", "")
-
-                triples = extract_facts(mem_type, content, context, mem_id)
-                # LLM fallback for regex misses (opt-in; synchronous; fail-open).
-                if not triples and llm_client is not None:
-                    import simba.sync.llm_extract
-
-                    triples = simba.sync.llm_extract.extract_triples(
-                        f"{content} {context}".strip(),
-                        client=llm_client,
-                        existing_entities=llm_vocab,
-                        max_triples=cfg.llm_extract_max_triples,
-                    )
-                # Event time (occurred_at): resolve a narrative date from the
-                # memory text, falling back to None when none is present.
-                occurred_at = resolve_occurred_at(
-                    f"{content} {context}", created_at=created
-                )
-
-                if dry_run:
-                    for s, p, o, proof in triples:
-                        logger.info(
-                            "[dry-run] %s %s %s (proof: %s)",
-                            s,
-                            p,
-                            o,
-                            proof,
-                        )
-                    result.facts_extracted += len(triples)
-                else:
-                    for s, p, o, proof in triples:
-                        status = _store_fact(
-                            s, p, o, proof, cwd=cwd_str, occurred_at=occurred_at
-                        )
-                        if status == "ok":
-                            result.facts_extracted += 1
-                        else:
-                            result.facts_duplicate += 1
-
-                if not triples:
-                    no_fact_memories.append(mem)
-
-                if created > latest_ts:
-                    latest_ts = created
-
+            new_memories.extend(
+                m for m in memories if m.get("createdAt", "") > watermark
+            )
             offset += cfg.page_size
             if offset >= total:
                 break
+
+        new_memories.sort(key=lambda m: m.get("createdAt", ""))
+
+        strategy = getattr(cfg, "extract_strategy", "llm+regex")
+        llm_active = llm_client is not None and strategy in ("llm", "llm+regex")
+        cap = getattr(cfg, "llm_extract_max_per_cycle", 0) or 0
+        llm_used = 0
+        latest_ts = watermark
+
+        for mem in new_memories:
+            # Stop once the per-cycle LLM budget is spent; the rest are picked up
+            # next cycle (watermark only advances past processed memories).
+            if llm_active and cap > 0 and llm_used >= cap:
+                break
+
+            result.memories_processed += 1
+            mem_type = mem.get("type", "")
+            content = mem.get("content", "")
+            context = mem.get("context", "")
+            mem_id = mem.get("id", "")
+            created = mem.get("createdAt", "")
+
+            triples = _extract_for_memory(
+                mem_type,
+                content,
+                context,
+                mem_id,
+                strategy=strategy,
+                llm_client=llm_client,
+                llm_vocab=llm_vocab,
+                max_triples=cfg.llm_extract_max_triples,
+            )
+            if llm_active:
+                llm_used += 1
+
+            # Event time (occurred_at): resolve a narrative date from the memory
+            # text, falling back to None when none is present.
+            occurred_at = resolve_occurred_at(
+                f"{content} {context}", created_at=created
+            )
+
+            if dry_run:
+                for s, p, o, proof in triples:
+                    logger.info("[dry-run] %s %s %s (proof: %s)", s, p, o, proof)
+                result.facts_extracted += len(triples)
+            else:
+                for s, p, o, proof in triples:
+                    status = _store_fact(
+                        s, p, o, proof, cwd=cwd_str, occurred_at=occurred_at
+                    )
+                    if status == "ok":
+                        result.facts_extracted += 1
+                    else:
+                        result.facts_duplicate += 1
+
+            if not triples:
+                no_fact_memories.append(mem)
+
+            latest_ts = created  # sorted ascending → the running high-water mark
 
         # Update watermark
         if result.memories_processed > 0 and not dry_run:
