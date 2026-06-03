@@ -63,11 +63,14 @@ def kg_query(
     occurred_after: str | None = None,
     occurred_before: str | None = None,
     limit: int = 10,
+    expand_hops: int = 0,
 ) -> str:
     """Queries the knowledge graph with FTS ranking and bitemporal filters.
 
     ``as_of`` snapshots belief time; ``occurred_after``/``occurred_before`` bound
     event time (``occurred_at``). Returned facts include their ``occurred_at``.
+    ``expand_hops`` > 0 also returns the connected subgraph reachable within that
+    many hops of the matched edges' entities (multi-hop recall).
     """
     return json.dumps(
         simba.kg.store.kg_query(
@@ -79,6 +82,32 @@ def kg_query(
             occurred_after=occurred_after,
             occurred_before=occurred_before,
             limit=limit,
+            expand_hops=expand_hops,
+        )
+    )
+
+
+@mcp.tool()
+def kg_neighbors(
+    entity: str,
+    depth: int = 1,
+    direction: str = "both",
+    as_of: str | None = None,
+    include_expired: bool = False,
+) -> str:
+    """Traverses the graph outward from ``entity`` up to ``depth`` hops.
+
+    ``direction`` is ``out`` (subject→object), ``in`` (object→subject), or
+    ``both``. Each returned edge carries its 1-based ``hop`` distance; a
+    retracted edge cuts off the paths beyond it.
+    """
+    return json.dumps(
+        simba.kg.store.kg_neighbors(
+            entity,
+            depth=depth,
+            direction=direction,
+            as_of=as_of,
+            include_expired=include_expired,
         )
     )
 
