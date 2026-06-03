@@ -317,6 +317,23 @@ simba config set memory.supersede_enabled true    # replace near-dupes (opt-in)
 simba config set memory.supersede_threshold 0.85  # band floor (below duplicate_threshold)
 ```
 
+## Eval — Recall Benchmark
+
+Recall quality used to be unmeasured — every ranking change was a guess. The eval harness fixes that: it scores the **real** recall stack (`plan_recall` → `hybrid_search` → RRF, the exact path `/recall` uses) against a curated dataset and reports standard IR metrics.
+
+```bash
+simba eval run                          # score the bundled simba-seed dataset
+simba eval run --dataset path/to.json   # a custom dataset
+simba eval run --ks 1,3,5 --json        # custom cutoffs / machine-readable
+```
+
+- **Metrics**: `recall@k`, `precision@k`, `hit@k`, `ndcg@k`, and `mrr` (means over cases); the text report also lists the worst cases by MRR so failures are visible, not averaged away.
+- **In-process & non-invasive**: the harness builds a throwaway LanceDB table + FTS mirror from the dataset corpus — it never touches your real memory store — and embeds with the same local GGUF model as production.
+- **Dataset format** — one JSON file: `{"corpus": [{id, content, type}...], "cases": [{id, query, relevant_ids}...]}`. Loading validates that every `relevant_id` resolves and corpus ids are unique, so a typo fails loudly instead of silently scoring zero.
+- **The bundled `simba-seed`** is deliberately hard (tight clusters that share an entity but differ in the fact, adversarial keyword-overlap distractors, broad multi-relevant aggregation cases) — a perfect score would mean the dataset is too easy, not that recall is solved.
+
+Config: `eval.ks` (default `1,3,5,10`) and `eval.dataset` (empty ⇒ bundled seed), both via `simba config`.
+
 ## Neuron — Neuro-Symbolic Logic Server
 
 Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools (Z3 theorem prover, Souffle Datalog) and a truth database.
