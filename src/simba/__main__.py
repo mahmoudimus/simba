@@ -28,6 +28,7 @@ Usage:
     simba markers <cmd>    Discover, audit, and update SIMBA markers
     simba rule <cmd>       Manage tool rules (auto-learned + manual)
     simba rlm <cmd>        RLM autonomous engine commands (digest)
+    simba episodes <cmd>   Episodic consolidation control (complete)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
 """
@@ -973,6 +974,7 @@ Subcommands:
     prune    Bulk-delete memories by age / confidence / type
     update   Update memory metadata
     reindex  Rebuild the hybrid-recall FTS keyword mirror from LanceDB
+    consolidate  Roll a session's memories into one EPISODE (engine-gated)
 
 store options:
     --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
@@ -1012,6 +1014,7 @@ _VALID_MEMORY_TYPES = {
     "DECISION",
     "FAILURE",
     "PREFERENCE",
+    "EPISODE",
 }
 
 
@@ -1054,6 +1057,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_update(rest)
     elif subcmd == "reindex":
         return _memory_reindex(rest)
+    elif subcmd == "consolidate":
+        return _memory_consolidate(rest)
     else:
         print(f"Unknown memory subcommand: {subcmd}")
         print(_MEMORY_USAGE)
@@ -1556,6 +1561,7 @@ def _cmd_db(args: list[str]) -> int:
     import simba.db
 
     # Ensure all schemas are registered by importing modules
+    import simba.episodes.jobs
     import simba.kg.store
     import simba.orchestration.agents
     import simba.rlm.jobs
@@ -1564,6 +1570,7 @@ def _cmd_db(args: list[str]) -> int:
     import simba.tailor.hook
 
     _use = (
+        simba.episodes.jobs,
         simba.orchestration.agents,
         simba.kg.store,
         simba.search.activity_tracker,
@@ -2007,6 +2014,41 @@ def _cmd_rule(args: list[str]) -> int:
     return simba.rules_cli.main(args)
 
 
+def _cmd_episodes(args: list[str]) -> int:
+    """Episodic consolidation control commands (job close, called by the agent)."""
+    if not args or args[0] != "complete" or len(args) < 2:
+        print("Usage: simba episodes complete <session_id>", file=sys.stderr)
+        return 1
+    sid = args[1]
+    import simba.episodes.jobs
+
+    cwd = pathlib.Path.cwd()
+    simba.episodes.jobs.complete(sid, str(cwd), cwd=cwd)
+    print(f"episode complete: {sid}")
+    return 0
+
+
+def _memory_consolidate(args: list[str]) -> int:
+    """Dispatch episodic consolidation (engine-gated, fire-and-forget)."""
+    import simba.episodes.consolidate as ec
+
+    cwd = str(pathlib.Path.cwd())
+    if "--session" in args:
+        i = args.index("--session")
+        if i + 1 >= len(args):
+            print("Usage: simba memory consolidate --session <id>", file=sys.stderr)
+            return 1
+        sid = args[i + 1]
+        print(f"{sid}: {ec.consolidate_session(sid, cwd=cwd)}")
+        return 0
+    result = ec.consolidate_eligible(cwd, all_projects=("--all" in args))
+    if result.get("no_engine"):
+        print("no RLM engine configured (set rlm.engine=claude-cli) — skipped")
+        return 0
+    print(f"dispatched {len(result['dispatched'])}, skipped {result['skipped']}")
+    return 0
+
+
 def _cmd_rlm(args: list[str]) -> int:
     """RLM autonomous engine commands."""
     if not args or args[0] not in ("digest", "complete"):
@@ -2125,6 +2167,8 @@ def main() -> None:
         sys.exit(_cmd_rule(rest))
     elif cmd == "rlm":
         sys.exit(_cmd_rlm(rest))
+    elif cmd == "episodes":
+        sys.exit(_cmd_episodes(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
     else:

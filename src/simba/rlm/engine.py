@@ -14,6 +14,10 @@ import typing
 
 
 class RlmEngine(typing.Protocol):
+    def run(self, prompt: str, *, cwd: str) -> None:
+        """Dispatch a detached, cheap agent with ``prompt``. Fire-and-forget —
+        the agent does the work itself and never blocks the caller."""
+
     def digest(self, transcript_id: str, query: str, *, cwd: str) -> None:
         """Extract lossless memories from a transcript and store them.
         Always invoked detached/background — never blocks a hook."""
@@ -59,8 +63,8 @@ class ClaudeCliEngine:
             )
         return env
 
-    def digest(self, transcript_id: str, query: str, *, cwd: str) -> None:
-        prompt = _build_digest_prompt(transcript_id, cwd)
+    def run(self, prompt: str, *, cwd: str) -> None:
+        """Spawn a detached, cheap ``claude -p`` with ``prompt`` (no blocking)."""
         subprocess.Popen(
             self._argv(prompt),
             env=self._env(),
@@ -70,6 +74,9 @@ class ClaudeCliEngine:
             start_new_session=True,
             cwd=cwd,
         )
+
+    def digest(self, transcript_id: str, query: str, *, cwd: str) -> None:
+        self.run(_build_digest_prompt(transcript_id, cwd), cwd=cwd)
 
 
 def get_engine(cfg) -> RlmEngine | None:
