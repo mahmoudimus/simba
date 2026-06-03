@@ -1707,6 +1707,8 @@ def _db_facts(cwd: pathlib.Path, limit: int) -> int:
         p = row.proof or ""
         proof = p[:40] + "..." if len(p) > 40 else p
         print(f"  {row.subject} {row.predicate} {row.object}")
+        if row.occurred_at:
+            print(f"    occurred: {row.occurred_at}")
         print(f"    proof: {proof}")
     return 0
 
