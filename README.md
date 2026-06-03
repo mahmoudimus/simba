@@ -590,7 +590,7 @@ Steer bare commands to better tooling — e.g. `cargo …` → `soldr cargo …`
 
 Two modes (`hooks.redirect_mode`):
 - **`deny`** (default) — blocks the call with a `permissionDecision: deny` whose reason names the corrected command; the model re-issues it. Works in every case.
-- **`rewrite`** — silently substitutes the command via PreToolUse `updatedInput` (no model retry) for simple leading-program commands (`cargo build` → `soldr cargo build`); anything fancier (env-prefixed, multi-segment, `uv run`, nested shell) safely falls back to `deny` so a broken command is never synthesized.
+- **`rewrite`** — silently substitutes the command via PreToolUse `updatedInput` (no model retry) for simple leading-program commands (`cargo build` → `soldr cargo build`); anything fancier (env-prefixed, multi-segment, `uv run`, nested shell) safely falls back to `deny` so a broken command is never synthesized. **Opt-in and not yet verified live — sanity-check that silent rewrites actually take effect in your setup (esp. under `--dangerously-skip-permissions`) before relying on it; `deny` is the reliable default.**
 
 Rules come from **both** a version-controlled `.simba/redirects.toml` and a CLI-managed store, merged and project-scoped:
 
@@ -610,7 +610,7 @@ replacement = "soldr cargo"
 reason = "use the pinned rustup toolchain"
 ```
 
-No-op when there are no rules. This is the deterministic sibling of the semantic [tool-rule deny](#guardian--claudemd-rule-enforcement) (which blocks by similarity to learned errors).
+> **Activate it:** redirect rules are **empty by default**, so the feature is a no-op until you add rules per-repo (the CLI or `.simba/redirects.toml` above). It's the deterministic sibling of the semantic [tool-rule deny](#guardian--claudemd-rule-enforcement) (which blocks by similarity to learned errors).
 
 ## Guardian — CLAUDE.md Rule Enforcement
 
