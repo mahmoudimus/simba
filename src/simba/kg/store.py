@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS kg_edges (
     subject TEXT, predicate TEXT, object TEXT,
     subject_type TEXT, object_type TEXT,
     proof TEXT, transcript_id TEXT, char_start INTEGER,
-    valid_from TEXT, valid_to TEXT,
+    valid_from TEXT, valid_to TEXT, occurred_at TEXT,
     project_path TEXT NOT NULL, created_at TEXT,
     UNIQUE(subject, predicate, object, project_path, valid_from)
 );
@@ -80,6 +80,18 @@ def backup_and_drop_proven_facts(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_occurred_at(conn: sqlite3.Connection) -> None:
+    """Add the bitemporal ``occurred_at`` (event time) column to a legacy table.
+
+    Idempotent: a no-op once the column exists.  New databases get the column
+    from ``_SCHEMA_BASE_SQL`` directly; this backfills pre-existing ones.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(kg_edges)")}
+    if "occurred_at" not in cols:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE kg_edges ADD COLUMN occurred_at TEXT")
+
+
 def _init_schema(conn: sqlite3.Connection) -> None:
     """Create ``kg_edges`` plus its FTS5 mirror and sync triggers.
 
@@ -89,6 +101,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     table is retired here so the migration runs once on first connect.
     """
     conn.executescript(_SCHEMA_BASE_SQL)
+    _migrate_occurred_at(conn)
     with contextlib.suppress(sqlite3.OperationalError):
         conn.executescript(_SCHEMA_FTS_SQL)
     backup_and_drop_proven_facts(conn)
@@ -108,8 +121,9 @@ class KgEdge(simba.db.BaseModel):
     proof = pw.TextField(null=True)
     transcript_id = pw.TextField(null=True)
     char_start = pw.IntegerField(null=True)
-    valid_from = pw.TextField(null=True)
-    valid_to = pw.TextField(null=True)
+    valid_from = pw.TextField(null=True)  # belief time: when recorded
+    valid_to = pw.TextField(null=True)  # belief time: when retracted (NULL=open)
+    occurred_at = pw.TextField(null=True)  # event time: when it was true in world
     project_path = pw.TextField()
     created_at = pw.TextField(null=True)
 
@@ -149,6 +163,7 @@ def _row_to_dict(edge: KgEdge) -> dict[str, object]:
         "char_start": edge.char_start,
         "valid_from": edge.valid_from,
         "valid_to": edge.valid_to,
+        "occurred_at": edge.occurred_at,
     }
 
 
@@ -163,8 +178,13 @@ def kg_add(
     transcript_id: str | None = None,
     char_start: int | None = None,
     project_path: str | None = None,
+    occurred_at: str | None = None,
 ) -> str:
     """Insert an *open* edge (``valid_from`` = now, ``valid_to`` = NULL).
+
+    ``valid_from`` is *belief* time (when we recorded the fact); ``occurred_at``
+    is *event* time (when the fact was true in the world) — pass it when the
+    narrative date is known, else leave ``None`` (unspecified).
 
     Returns ``"added"`` on success, or ``"exists"`` when an edge with the same
     ``(subject, predicate, object, project_path, valid_from)`` already exists
@@ -187,6 +207,7 @@ def kg_add(
                 char_start=char_start,
                 valid_from=now,
                 valid_to=None,
+                occurred_at=occurred_at,
                 project_path=project_path,
                 created_at=now,
             )
@@ -231,16 +252,25 @@ def kg_query(
     project_path: str | None = None,
     as_of: str | None = None,
     include_expired: bool = False,
+    occurred_after: str | None = None,
+    occurred_before: str | None = None,
     limit: int = 10,
 ) -> list[dict[str, object]]:
-    """Query the knowledge graph, with FTS/bm25 ranking and temporal filters.
+    """Query the knowledge graph, with FTS/bm25 ranking and bitemporal filters.
 
     When *query* is set, results are matched against the trigram FTS index and
     ordered by ``bm25``; otherwise rows are filtered by *subject*/*predicate*.
-    *project_path* scopes results when given.  Temporal semantics: unless
-    *include_expired*, only currently-valid edges (``valid_to IS NULL``) are
-    returned; when *as_of* is given, an edge is kept iff
-    ``valid_from <= as_of AND (valid_to IS NULL OR as_of < valid_to)``.
+    *project_path* scopes results when given.
+
+    Two independent time axes:
+
+    - **Belief time** (``valid_from``/``valid_to``) — when the fact was on
+      record.  Unless *include_expired*, only currently-valid edges
+      (``valid_to IS NULL``) are returned; *as_of* snapshots it
+      (``valid_from <= as_of AND (valid_to IS NULL OR as_of < valid_to)``).
+    - **Event time** (``occurred_at``) — when the fact was true in the world.
+      *occurred_after*/*occurred_before* bound it (inclusive); edges with an
+      unknown (``NULL``) ``occurred_at`` are excluded once either bound is set.
 
     Returns a list of row dicts.  A malformed FTS ``MATCH`` expression is
     swallowed and yields ``[]``.
@@ -268,6 +298,12 @@ def kg_query(
             )
         elif not include_expired:
             q = q.where(KgEdge.valid_to.is_null())
+
+        # Event-time axis (NULL occurred_at excluded once a bound is set).
+        if occurred_after is not None:
+            q = q.where(KgEdge.occurred_at >= occurred_after)
+        if occurred_before is not None:
+            q = q.where(KgEdge.occurred_at <= occurred_before)
 
         if query:
             q = q.order_by(KgEdgeFTS.bm25())

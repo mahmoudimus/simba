@@ -246,3 +246,75 @@ class TestKgProjectScoping:
         assert all(r["subject"] == "a" for r in fts_rows)
         # proj-2's edge has a distinct rowid; ensure only one is in scope.
         assert len(fts_rows) == 1
+
+
+class TestKgBitemporal:
+    """occurred_at = event time, distinct from valid_from = belief time."""
+
+    def test_occurred_at_stored_and_returned(self) -> None:
+        kg_add(
+            "a",
+            "moved_to",
+            "nyc",
+            "p",
+            project_path="proj-1",
+            occurred_at="2025-03-01T00:00:00Z",
+        )
+        rows = kg_query(subject="a", project_path="proj-1")
+        assert rows[0]["occurred_at"] == "2025-03-01T00:00:00Z"
+        # event time is independent of belief time (valid_from = insert time)
+        assert rows[0]["valid_from"] != "2025-03-01T00:00:00Z"
+
+    def test_occurred_at_defaults_to_none(self) -> None:
+        kg_add("a", "rel", "b", "p", project_path="proj-1")
+        assert kg_query(subject="a", project_path="proj-1")[0]["occurred_at"] is None
+
+    def test_occurred_after_is_inclusive_and_excludes_earlier(self) -> None:
+        kg_add("e2024", "r", "o", "p", project_path="p1", occurred_at="2024-06-01")
+        kg_add("e2025", "r", "o", "p", project_path="p1", occurred_at="2025-06-01")
+        kg_add("e2026", "r", "o", "p", project_path="p1", occurred_at="2026-06-01")
+        rows = kg_query(project_path="p1", occurred_after="2025-06-01")
+        subjects = {r["subject"] for r in rows}
+        assert subjects == {"e2025", "e2026"}
+
+    def test_occurred_before_is_inclusive_and_excludes_later(self) -> None:
+        kg_add("e2024", "r", "o", "p", project_path="p1", occurred_at="2024-06-01")
+        kg_add("e2025", "r", "o", "p", project_path="p1", occurred_at="2025-06-01")
+        kg_add("e2026", "r", "o", "p", project_path="p1", occurred_at="2026-06-01")
+        rows = kg_query(project_path="p1", occurred_before="2025-06-01")
+        subjects = {r["subject"] for r in rows}
+        assert subjects == {"e2024", "e2025"}
+
+    def test_occurred_filter_excludes_unknown_event_time(self) -> None:
+        kg_add("known", "r", "o", "p", project_path="p1", occurred_at="2025-06-01")
+        kg_add("unknown", "r", "o", "p", project_path="p1")  # occurred_at = None
+        # With no event-time filter, both show.
+        assert len(kg_query(project_path="p1")) == 2
+        # With an event-time window, the unknown-event-time edge is excluded.
+        rows = kg_query(project_path="p1", occurred_after="2024-01-01")
+        assert {r["subject"] for r in rows} == {"known"}
+
+    def test_migration_adds_occurred_at_to_legacy_table(self) -> None:
+        # Pre-create a legacy kg_edges WITHOUT the occurred_at column.
+        db_path = simba.db.get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE kg_edges (id INTEGER PRIMARY KEY, subject TEXT, "
+            "predicate TEXT, object TEXT, subject_type TEXT, object_type TEXT, "
+            "proof TEXT, transcript_id TEXT, char_start INTEGER, valid_from TEXT, "
+            "valid_to TEXT, project_path TEXT NOT NULL, created_at TEXT)"
+        )
+        conn.commit()
+        conn.close()
+
+        # connect() runs the schema initializers → migration adds the column.
+        with simba.db.connect():
+            pass
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(kg_edges)")}
+        finally:
+            conn.close()
+        assert "occurred_at" in cols
