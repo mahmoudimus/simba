@@ -65,12 +65,16 @@ class MemoryConfig:
     recency_halflife_days: float = 90.0
     # LLM reranker: an LLM relevance pass over the candidate pool before truncating
     # to max_results (the cross-encoder's role). On by default (experimental).
-    # NOTE: needs an llm provider and adds ONE LLM round-trip per recall — i.e.
-    # latency on every UserPromptSubmit/PreToolUse hook. Use a fast model
-    # (e.g. a DeepSeek flash via llm.provider) or set false to disable. Always
-    # fail-open: any error leaves the RRF + composite ordering intact.
+    # In the daemon it is NON-BLOCKING — recall serves the fast order and reranks
+    # off the hot path, caching by (query, candidate-set), so novel queries pay no
+    # latency and recurring ones get the rerank for free. Needs an llm provider;
+    # always fail-open (any error leaves the RRF + composite ordering intact).
     llm_rerank_enabled: bool = True
     llm_rerank_candidates: int = 20  # cap of candidates sent to the reranker
+    # Async rerank: when a cache is wired (the daemon), recall never blocks on the
+    # LLM — it serves the fast order and reranks off the hot path, caching the
+    # result by (query, candidate-set) for the next recurrence. Cache capacity:
+    rerank_cache_size: int = 256
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

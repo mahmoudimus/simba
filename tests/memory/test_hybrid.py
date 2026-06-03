@@ -374,3 +374,68 @@ class TestLlmRerankWiring:
         )
         # reranker reversed the pool [a,b,c] -> [c,b,a], THEN truncated to 2
         assert [r["id"] for r in results] == ["c", "b"]
+
+
+class _CountingRerankClient:
+    def __init__(self):
+        self.calls = 0
+
+    def available(self):
+        return True
+
+    def complete_json(self, prompt):
+        self.calls += 1
+        import re
+        return list(reversed(re.findall(r"\[([^\]]+)\]", prompt)))
+
+
+class TestAsyncRerankCache:
+    @pytest.mark.asyncio
+    async def test_cache_hit_reorders_without_llm(self, monkeypatch) -> None:
+        import simba.memory.rerank_cache as rcmod
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [_vec("a", 0.9), _vec("b", 0.8), _vec("c", 0.7)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cache = rcmod.RerankCache()
+        cache.put(cache.signature("q", ["a", "b", "c"]), ["c", "b", "a"])
+        client = _CountingRerankClient()
+        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
+            llm_client=client, rerank_cache=cache,
+        )
+        assert [r["id"] for r in results] == ["c", "b"]  # cached order applied
+        assert client.calls == 0  # no LLM call on a hit
+
+    @pytest.mark.asyncio
+    async def test_cache_miss_serves_fast_and_warms_cache(self, monkeypatch) -> None:
+        import asyncio as _aio
+
+        import simba.memory.rerank_cache as rcmod
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [_vec("a", 0.9), _vec("b", 0.8), _vec("c", 0.7)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cache = rcmod.RerankCache()
+        client = _CountingRerankClient()
+        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+        bg: set = set()
+
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
+            llm_client=client, rerank_cache=cache, bg_tasks=bg,
+        )
+        # miss → fast (un-reranked) order returned immediately
+        assert [r["id"] for r in results] == ["a", "b"]
+        # a background rerank was scheduled; drain it, then the cache is warm
+        assert bg
+        await _aio.gather(*bg)
+        cached = cache.get(cache.signature("q", ["a", "b", "c"]))
+        assert cached == ["c", "b", "a"]  # reranker reversed the pool
+        assert client.calls == 1

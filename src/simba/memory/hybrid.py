@@ -120,6 +120,8 @@ async def hybrid_search(
     candidate_pool: int | None = None,
     extra_embedding: list[float] | None = None,
     llm_client: typing.Any = None,
+    rerank_cache: typing.Any = None,
+    bg_tasks: set | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -182,16 +184,60 @@ async def hybrid_search(
         )
 
     # Optional LLM rerank of the candidate pool (cross-encoder role) before
-    # truncation. Runs in a worker thread (the client shells out, blocking) and
-    # is fail-open: any error returns the pre-rerank order.
+    # truncation. Two modes, both fail-open:
+    #   - cache wired (daemon): NON-BLOCKING — serve the fast order, rerank off
+    #     the hot path, cache the result keyed by (query, candidate-set).
+    #   - no cache (eval/CLI): synchronous rerank in a worker thread.
     if getattr(cfg, "llm_rerank_enabled", False) and llm_client is not None:
-        with contextlib.suppress(Exception):
-            fused = await asyncio.to_thread(
-                simba.memory.llm_rerank.rerank,
-                query_text,
-                fused,
-                client=llm_client,
-                max_candidates=getattr(cfg, "llm_rerank_candidates", 20),
-            )
+        max_cands = getattr(cfg, "llm_rerank_candidates", 20)
+        if rerank_cache is not None:
+            pool_ids = [r.get("id") for r in fused]
+            key = rerank_cache.signature(query_text, pool_ids)
+            cached = rerank_cache.get(key)
+            if cached is not None:
+                fused = simba.memory.llm_rerank.reorder_by_ids(fused, cached)
+            elif bg_tasks is not None:
+                task = asyncio.create_task(
+                    _bg_rerank(
+                        rerank_cache,
+                        key,
+                        query_text,
+                        list(fused),
+                        llm_client,
+                        max_cands,
+                    )
+                )
+                bg_tasks.add(task)
+                task.add_done_callback(bg_tasks.discard)
+            # miss with no task registry → serve the fast order unchanged
+        else:
+            with contextlib.suppress(Exception):
+                fused = await asyncio.to_thread(
+                    simba.memory.llm_rerank.rerank,
+                    query_text,
+                    fused,
+                    client=llm_client,
+                    max_candidates=max_cands,
+                )
 
     return fused[:max_results]
+
+
+async def _bg_rerank(
+    cache: typing.Any,
+    key: str,
+    query: str,
+    pool: list[dict[str, typing.Any]],
+    client: typing.Any,
+    max_candidates: int,
+) -> None:
+    """Rerank ``pool`` off the hot path and store the id order in ``cache``."""
+    with contextlib.suppress(Exception):
+        reordered = await asyncio.to_thread(
+            simba.memory.llm_rerank.rerank,
+            query,
+            pool,
+            client=client,
+            max_candidates=max_candidates,
+        )
+        cache.put(key, [r.get("id") for r in reordered])
