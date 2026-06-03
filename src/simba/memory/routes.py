@@ -284,10 +284,13 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     # Optional LLM reranker (cross-encoder role). Built only when enabled; the
     # call is fail-open and runs in a worker thread inside hybrid_search.
     llm_client = None
+    rerank_cache = None
     if config.hybrid_enabled and getattr(config, "llm_rerank_enabled", False):
         from simba.llm.client import get_client as _get_llm_client
 
         llm_client = _get_llm_client()
+        # Non-blocking: serve the fast order, rerank off the hot path, cache it.
+        rerank_cache = getattr(request.app.state, "rerank_cache", None)
 
     fts_path = getattr(request.app.state, "fts_path", None)
     if config.hybrid_enabled:
@@ -303,6 +306,8 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             candidate_pool=candidate_pool,
             extra_embedding=extra_embedding,
             llm_client=llm_client,
+            rerank_cache=rerank_cache,
+            bg_tasks=_background_tasks,
         )
     else:
         memories = await simba.memory.vector_db.search_memories(
