@@ -149,6 +149,46 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _project_entities(project_path: str) -> set[str]:
+    """Return the distinct subject/object surface forms already in the project."""
+    names: set[str] = set()
+    rows = KgEdge.select(KgEdge.subject, KgEdge.object).where(
+        KgEdge.project_path == project_path
+    )
+    for r in rows:
+        if r.subject:
+            names.add(r.subject)
+        if r.object:
+            names.add(r.object)
+    return names
+
+
+def _canonicalize(
+    subject: str, object: str, project_path: str
+) -> tuple[str, str]:
+    """Resolve subject/object to canonical entities when enabled (else passthrough).
+
+    Project-scoped: a variant only collapses to a canonical form already present
+    in the *same* project, so cross-project nodes never merge. Normalization-only
+    here (no embedder dependency in the store); synonym merging via embeddings is
+    available through ``entities.resolve(embed=...)`` for callers that have one.
+    """
+    import simba.config
+    import simba.kg.config  # registers the "kg" section
+    import simba.kg.entities
+
+    _ = simba.kg.config
+    cfg = simba.config.load("kg")
+    if not getattr(cfg, "entity_resolution_enabled", False):
+        return subject, object
+
+    existing = _project_entities(project_path)
+    canon_subject = simba.kg.entities.resolve(subject, existing)
+    # Let the object also resolve against the just-canonicalized subject.
+    canon_object = simba.kg.entities.resolve(object, existing | {canon_subject})
+    return canon_subject, canon_object
+
+
 def _row_to_dict(edge: KgEdge) -> dict[str, object]:
     """Project a ``KgEdge`` row into a stable public dict."""
     return {
@@ -195,6 +235,7 @@ def kg_add(
         project_path = simba.db.resolve_project_id()
     now = _now()
     with simba.db.connect():
+        subject, object = _canonicalize(subject, object, project_path)
         try:
             KgEdge.create(
                 subject=subject,

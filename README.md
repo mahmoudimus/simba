@@ -390,6 +390,16 @@ subject–predicate–object triples on **two independent time axes**:
 first connect). `simba db facts` lists currently-valid edges, printing the
 `occurred:` event date when known.
 
+#### Entity resolution
+
+Without resolution the graph fragments: `GITHUB_TOKEN`, `github_token`, and `the GITHUB_TOKEN` become three separate nodes. With **`kg.entity_resolution_enabled`** on, `kg_add` canonicalizes each subject/object against the entities **already in the same project** (case, articles, quotes, possessives, and trailing punctuation are normalized — code identifiers keep their underscores, so `github_token` and `github token` stay distinct). Resolution is **project-scoped**, so nodes never merge across repos. A surface-form variant collapses to the canonical name first seen.
+
+```bash
+simba config set kg.entity_resolution_enabled true   # collapse surface variants (opt-in)
+```
+
+The normalization layer (`kg/entities.py`) also exposes `resolve(name, existing, embed=…)` for **synonym** merges that don't share a normalized key (`Bob` ⇄ `Robert`) via embedding similarity — used by callers that have an embedder. LLM-based fact extraction (the opt-in `researcher` agent path) is fed the project's existing entity vocabulary so it **reuses** canonical names at the source, complementing the on-write merge.
+
 ```bash
 # Run the MCP server directly
 simba neuron run --root-dir .
