@@ -51,24 +51,27 @@ def rrf_fuse(
     k: int = 60,
     vector_weight: float = 1.0,
     keyword_weight: float = 1.0,
+    extra_vector_results: list[dict[str, typing.Any]] | None = None,
 ) -> list[dict[str, typing.Any]]:
-    """Reciprocal Rank Fusion of two ranked lists, deduped by memory id.
+    """Reciprocal Rank Fusion of the ranked arms, deduped by memory id.
 
     ``score(id) = Σ_arm weight_arm / (k + rank_arm(id))`` with 1-based ranks.
-    The vector arm is folded first, so when an id appears in both arms the
+    Vector arms are folded first, so when an id appears in several arms the
     richer vector record (real cosine ``similarity``) is kept while the score
-    still accumulates contributions from both arms.  Returns records ordered by
-    fused score (desc), each carrying an ``rrf_score``.
+    still accumulates contributions from each.  ``extra_vector_results`` is an
+    optional 2nd vector arm (the HyDE expansion arm), weighted like the primary.
+    Returns records ordered by fused score (desc), each carrying an ``rrf_score``.
     """
     scores: dict[str, float] = {}
     records: dict[str, dict[str, typing.Any]] = {}
 
-    for rank, item in enumerate(vector_results, start=1):
-        rid = item.get("id")
-        if not rid:
-            continue
-        scores[rid] = scores.get(rid, 0.0) + vector_weight / (k + rank)
-        records.setdefault(rid, _from_vector(item))
+    for arm in (vector_results, extra_vector_results or []):
+        for rank, item in enumerate(arm, start=1):
+            rid = item.get("id")
+            if not rid:
+                continue
+            scores[rid] = scores.get(rid, 0.0) + vector_weight / (k + rank)
+            records.setdefault(rid, _from_vector(item))
 
     for rank, item in enumerate(keyword_results, start=1):
         rid = item.get("memory_id")
@@ -111,6 +114,7 @@ async def hybrid_search(
     filters: dict[str, typing.Any] | None,
     cfg: typing.Any,
     candidate_pool: int | None = None,
+    extra_embedding: list[float] | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -127,6 +131,14 @@ async def hybrid_search(
     vector_results = await simba.memory.vector_db.search_memories(
         table, embedding, min_similarity, candidate_pool, filters
     )
+
+    # Optional 2nd vector arm (HyDE expansion): same floor/scope, separate query
+    # embedding (the focused-term string), folded into RRF alongside the primary.
+    extra_vector_results: list[dict[str, typing.Any]] | None = None
+    if extra_embedding is not None:
+        extra_vector_results = await simba.memory.vector_db.search_memories(
+            table, extra_embedding, min_similarity, candidate_pool, filters
+        )
 
     # The keyword arm is fed high-signal terms, not the whole query: a long
     # thinking block would otherwise OR together ~200 tokens and bm25 would
@@ -154,5 +166,6 @@ async def hybrid_search(
         k=cfg.rrf_k,
         vector_weight=cfg.vector_weight,
         keyword_weight=cfg.keyword_weight,
+        extra_vector_results=extra_vector_results,
     )
     return fused[:max_results]

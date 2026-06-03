@@ -28,3 +28,7 @@ class TestPhase0Defaults:
         cfg = config.MemoryConfig()
         assert cfg.max_results_broad > cfg.max_results
         assert cfg.fts_candidate_pool_broad > cfg.fts_candidate_pool
+
+    def test_expansion_disabled_by_default(self) -> None:
+        # The 2nd HyDE vector arm costs an extra embed; opt-in only.
+        assert config.MemoryConfig().expansion_enabled is False

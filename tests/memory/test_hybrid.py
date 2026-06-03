@@ -71,6 +71,24 @@ class TestRrfFuse:
         assert fused[0]["similarity"] == 0.0
         assert fused[0]["confidence"] == 0.7
 
+    def test_extra_vector_arm_is_folded(self) -> None:
+        # A 2nd (HyDE) vector arm contributes its own ids to the fusion.
+        fused = hybrid.rrf_fuse(
+            [_vec("a", 0.9)],
+            [_kw("b")],
+            extra_vector_results=[_vec("c", 0.8)],
+        )
+        assert {r["id"] for r in fused} == {"a", "b", "c"}
+
+    def test_extra_vector_arm_accumulates_score_for_shared_id(self) -> None:
+        # An id in both the primary and extra vector arms outranks singletons.
+        fused = hybrid.rrf_fuse(
+            [_vec("shared", 0.9), _vec("solo", 0.8)],
+            [],
+            extra_vector_results=[_vec("shared", 0.7)],
+        )
+        assert fused[0]["id"] == "shared"
+
 
 class TestHybridSearch:
     @pytest.mark.asyncio
@@ -129,6 +147,32 @@ class TestHybridSearch:
             cfg=cfg,
         )
         assert [r["id"] for r in results] == ["vec1", "vec2"]
+
+    @pytest.mark.asyncio
+    async def test_extra_embedding_runs_second_vector_arm(self, monkeypatch) -> None:
+        embeds: list[list[float]] = []
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            embeds.append(emb)
+            return [_vec("primary", 0.9)] if emb == [0.1] * 768 else [_vec("hyde", 0.8)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig()
+        results = await hybrid.hybrid_search(
+            None,
+            None,
+            [0.1] * 768,
+            "anything",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
+            extra_embedding=[0.2] * 768,
+        )
+        # Both the primary and the extra (HyDE) embeddings were searched.
+        assert [0.1] * 768 in embeds
+        assert [0.2] * 768 in embeds
+        assert {r["id"] for r in results} == {"primary", "hyde"}
 
     @pytest.mark.asyncio
     async def test_candidate_pool_param_widens_arms(self, monkeypatch) -> None:
