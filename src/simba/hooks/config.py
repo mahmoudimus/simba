@@ -70,3 +70,11 @@ class HooksConfig:
     # False (default): dispatch synchronously, Claude waits for extraction to complete
     # True: dispatch in background, Claude continues immediately
     learn_async: bool = False
+
+    # Tool-call redirect: steer bare commands to better tooling (cargo->soldr,
+    # python->uv run, ...). Rules from .simba/redirects.toml + the `simba rule
+    # redirect` store. No-op when there are no rules. "deny" blocks with the
+    # corrected command (model retries); "rewrite" substitutes it silently
+    # (PreToolUse updatedInput) for simple leading-program commands.
+    redirect_enabled: bool = True
+    redirect_mode: str = "deny"  # deny | rewrite

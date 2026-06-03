@@ -584,6 +584,34 @@ The sync pipeline:
 
 Sync can also be triggered via `POST /sync` on the daemon, which the SessionStart hook does automatically.
 
+## Tool-call redirect
+
+Steer bare commands to better tooling — e.g. `cargo …` → `soldr cargo …`, `python …` → `uv run python …`. A PreToolUse check parses each Bash command (handling `env VAR=…` prefixes, `&&`/`;`/`|` segments, nested `bash -c "…"`, and `uv run <tool>`) and matches the invoked program against your redirect rules.
+
+Two modes (`hooks.redirect_mode`):
+- **`deny`** (default) — blocks the call with a `permissionDecision: deny` whose reason names the corrected command; the model re-issues it. Works in every case.
+- **`rewrite`** — silently substitutes the command via PreToolUse `updatedInput` (no model retry) for simple leading-program commands (`cargo build` → `soldr cargo build`); anything fancier (env-prefixed, multi-segment, `uv run`, nested shell) safely falls back to `deny` so a broken command is never synthesized.
+
+Rules come from **both** a version-controlled `.simba/redirects.toml` and a CLI-managed store, merged and project-scoped:
+
+```bash
+simba rule redirect add cargo "soldr cargo" --reason "use the pinned toolchain"
+simba rule redirect add python "uv run python"
+simba rule redirect list
+simba rule redirect rm cargo
+simba config set hooks.redirect_mode rewrite   # opt into silent rewrite
+```
+
+```toml
+# .simba/redirects.toml
+[[redirect]]
+program = "cargo"
+replacement = "soldr cargo"
+reason = "use the pinned rustup toolchain"
+```
+
+No-op when there are no rules. This is the deterministic sibling of the semantic [tool-rule deny](#guardian--claudemd-rule-enforcement) (which blocks by similarity to learned errors).
+
 ## Guardian — CLAUDE.md Rule Enforcement
 
 Extracts content between `<!-- BEGIN SIMBA:core -->` tags from CLAUDE.md and injects it as context on every prompt. On session stop, checks whether Claude's response contains the `[✓ rules]` compliance signal.
