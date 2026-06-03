@@ -22,6 +22,7 @@ Usage:
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
+    simba eval <cmd>       Recall eval harness (run a benchmark dataset)
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
     simba orchestration <cmd> Agent orchestration server (MCP)
     simba config <cmd>     Unified configuration (get/set/list/show)
@@ -2014,6 +2015,71 @@ def _cmd_rule(args: list[str]) -> int:
     return simba.rules_cli.main(args)
 
 
+def _cmd_eval(args: list[str]) -> int:
+    """Run the recall eval harness against a benchmark dataset."""
+    import json as _json
+    import tempfile
+
+    import simba.config
+    import simba.eval.config  # registers the "eval" section
+    import simba.eval.report as report
+    import simba.eval.run as run
+    import simba.memory.config
+
+    if args and args[0] == "run":
+        args = args[1:]
+
+    dataset_arg = ""
+    ks_arg = ""
+    as_json = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--dataset" and i + 1 < len(args):
+            dataset_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--ks" and i + 1 < len(args):
+            ks_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--json":
+            as_json = True
+            i += 1
+        else:
+            print(f"Unknown eval option: {args[i]}", file=sys.stderr)
+            print("Usage: simba eval run [--dataset PATH] [--ks 1,3,5] [--json]")
+            return 1
+
+    ecfg = simba.config.load("eval")
+    dataset_path = dataset_arg or ecfg.dataset or str(report.default_dataset_path())
+    ks = (
+        simba.eval.config.EvalConfig(ks=ks_arg).ks_tuple()
+        if ks_arg
+        else ecfg.ks_tuple()
+    )
+
+    mcfg = simba.config.load("memory")
+    try:
+        embed_doc, embed_query = run.sync_embedders(mcfg)
+    except Exception as exc:  # model download/load failure
+        print(f"eval: could not load the embedding model: {exc}", file=sys.stderr)
+        return 1
+
+    with tempfile.TemporaryDirectory(prefix="simba-eval-") as td:
+        rep = run.run_dataset(
+            dataset_path,
+            ks=ks,
+            data_dir=td,
+            embed_doc=embed_doc,
+            embed_query=embed_query,
+            cfg=mcfg,
+        )
+
+    if as_json:
+        print(_json.dumps(rep.to_dict(), indent=2))
+    else:
+        print(report.format_report(rep, top_n_worst=5))
+    return 0
+
+
 def _cmd_episodes(args: list[str]) -> int:
     """Episodic consolidation control commands (job close, called by the agent)."""
     if not args or args[0] != "complete" or len(args) < 2:
@@ -2167,6 +2233,8 @@ def main() -> None:
         sys.exit(_cmd_rule(rest))
     elif cmd == "rlm":
         sys.exit(_cmd_rlm(rest))
+    elif cmd == "eval":
+        sys.exit(_cmd_eval(rest))
     elif cmd == "episodes":
         sys.exit(_cmd_episodes(rest))
     elif cmd == "db":
