@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 import time
+import typing
 
 import simba._vendor.peewee as pw
 import simba.db
@@ -189,6 +190,28 @@ def _canonicalize(
     return canon_subject, canon_object
 
 
+def _apply_temporal(
+    q: typing.Any,
+    *,
+    as_of: str | None,
+    include_expired: bool,
+    occurred_after: str | None,
+    occurred_before: str | None,
+) -> typing.Any:
+    """Apply the belief-time + event-time filters shared by query/traversal."""
+    if as_of is not None:
+        q = q.where(KgEdge.valid_from <= as_of).where(
+            KgEdge.valid_to.is_null() | (as_of < KgEdge.valid_to)
+        )
+    elif not include_expired:
+        q = q.where(KgEdge.valid_to.is_null())
+    if occurred_after is not None:
+        q = q.where(KgEdge.occurred_at >= occurred_after)
+    if occurred_before is not None:
+        q = q.where(KgEdge.occurred_at <= occurred_before)
+    return q
+
+
 def _row_to_dict(edge: KgEdge) -> dict[str, object]:
     """Project a ``KgEdge`` row into a stable public dict."""
     return {
@@ -285,6 +308,78 @@ def kg_invalidate(
         )
 
 
+def kg_neighbors(
+    entity: str,
+    *,
+    project_path: str | None = None,
+    depth: int = 1,
+    direction: str = "both",
+    as_of: str | None = None,
+    include_expired: bool = False,
+    occurred_after: str | None = None,
+    occurred_before: str | None = None,
+    max_edges: int | None = None,
+) -> list[dict[str, object]]:
+    """Breadth-first traversal of the graph outward from ``entity``.
+
+    Returns the edges reachable within ``depth`` hops, each annotated with its
+    1-based ``hop`` distance. ``direction`` follows ``out`` (subject→object),
+    ``in`` (object→subject), or ``both``. Bitemporal/event-time filters apply at
+    every hop (so a retracted edge cuts off the paths beyond it), results are
+    scoped to ``project_path`` when given (``None`` = all projects), and the
+    crawl is bounded by ``max_edges`` (defaults to ``kg.max_neighbor_edges``).
+    """
+    if max_edges is None:
+        import simba.kg.config as _kgcfg  # registers "kg"; aliased to not shadow simba
+        from simba.config import load as _load_section
+
+        _ = _kgcfg
+        max_edges = _load_section("kg").max_neighbor_edges
+
+    collected: dict[int, dict[str, object]] = {}
+    visited: set[str] = {entity}
+    frontier: set[str] = {entity}
+
+    with simba.db.connect():
+        for hop in range(1, depth + 1):
+            if not frontier or len(collected) >= max_edges:
+                break
+            names = list(frontier)
+            if direction == "out":
+                cond = KgEdge.subject.in_(names)
+            elif direction == "in":
+                cond = KgEdge.object.in_(names)
+            else:
+                cond = KgEdge.subject.in_(names) | KgEdge.object.in_(names)
+
+            q = KgEdge.select().where(cond)
+            if project_path:
+                q = q.where(KgEdge.project_path == project_path)
+            q = _apply_temporal(
+                q,
+                as_of=as_of,
+                include_expired=include_expired,
+                occurred_after=occurred_after,
+                occurred_before=occurred_before,
+            )
+
+            new_frontier: set[str] = set()
+            for edge in q:
+                if edge.id not in collected:
+                    row = _row_to_dict(edge)
+                    row["hop"] = hop
+                    collected[edge.id] = row
+                    if len(collected) >= max_edges:
+                        break
+                for end in (edge.subject, edge.object):
+                    if end and end not in visited:
+                        new_frontier.add(end)
+            visited |= new_frontier
+            frontier = new_frontier
+
+    return list(collected.values())
+
+
 def kg_query(
     query: str | None = None,
     subject: str | None = None,
@@ -296,6 +391,7 @@ def kg_query(
     occurred_after: str | None = None,
     occurred_before: str | None = None,
     limit: int = 10,
+    expand_hops: int = 0,
 ) -> list[dict[str, object]]:
     """Query the knowledge graph, with FTS/bm25 ranking and bitemporal filters.
 
@@ -333,18 +429,13 @@ def kg_query(
         if project_path:
             q = q.where(KgEdge.project_path == project_path)
 
-        if as_of is not None:
-            q = q.where(KgEdge.valid_from <= as_of).where(
-                KgEdge.valid_to.is_null() | (as_of < KgEdge.valid_to)
-            )
-        elif not include_expired:
-            q = q.where(KgEdge.valid_to.is_null())
-
-        # Event-time axis (NULL occurred_at excluded once a bound is set).
-        if occurred_after is not None:
-            q = q.where(KgEdge.occurred_at >= occurred_after)
-        if occurred_before is not None:
-            q = q.where(KgEdge.occurred_at <= occurred_before)
+        q = _apply_temporal(
+            q,
+            as_of=as_of,
+            include_expired=include_expired,
+            occurred_after=occurred_after,
+            occurred_before=occurred_before,
+        )
 
         if query:
             q = q.order_by(KgEdgeFTS.bm25())
@@ -354,4 +445,29 @@ def kg_query(
             rows = list(q)
         except Exception:
             return []
-    return [_row_to_dict(row) for row in rows]
+
+        result = [_row_to_dict(row) for row in rows]
+
+        # Multi-hop expansion: walk out from the seed edges' entities so a query
+        # returns the connected subgraph, not just the directly-matched edges.
+        if expand_hops > 0:
+            seen = {r["id"] for r in result}
+            seeds: set[str] = set()
+            for r in result:
+                for end in (r["subject"], r["object"]):
+                    if end:
+                        seeds.add(str(end))
+            for ent in seeds:
+                for nb in kg_neighbors(
+                    ent,
+                    project_path=project_path,
+                    depth=expand_hops,
+                    as_of=as_of,
+                    include_expired=include_expired,
+                    occurred_after=occurred_after,
+                    occurred_before=occurred_before,
+                ):
+                    if nb["id"] not in seen:
+                        seen.add(nb["id"])
+                        result.append(nb)
+    return result

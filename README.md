@@ -370,7 +370,8 @@ Neuron exposes verification + knowledge-graph tools via the Model Context Protoc
 | `truth_add` | Record a proven fact into the Truth DB (SQLite) |
 | `truth_query` | Query the Truth DB for existing proven facts |
 | `kg_add` | Insert an open temporal edge (subject/predicate/object + optional `occurred_at`) |
-| `kg_query` | FTS/bm25 + bitemporal query (`as_of`, `occurred_after`/`occurred_before`) |
+| `kg_query` | FTS/bm25 + bitemporal query (`as_of`, `occurred_after`/`occurred_before`, `expand_hops`) |
+| `kg_neighbors` | Multi-hop BFS traversal from an entity (`depth`, `direction`) |
 | `kg_invalidate` | Close matching open edges (stamp `valid_to`) |
 
 ### Temporal knowledge graph (bitemporal)
@@ -399,6 +400,10 @@ simba config set kg.entity_resolution_enabled true   # collapse surface variants
 ```
 
 The normalization layer (`kg/entities.py`) also exposes `resolve(name, existing, embed=…)` for **synonym** merges that don't share a normalized key (`Bob` ⇄ `Robert`) via embedding similarity — used by callers that have an embedder. LLM-based fact extraction (the opt-in `researcher` agent path) is fed the project's existing entity vocabulary so it **reuses** canonical names at the source, complementing the on-write merge.
+
+#### Multi-hop traversal
+
+`kg_query` matches edges directly; `kg_neighbors(entity, depth, direction)` walks the graph **outward** from an entity by breadth-first traversal, returning every edge reachable within `depth` hops (each tagged with its `hop` distance). `direction` is `out` (subject→object), `in`, or `both`. Bitemporal filters apply at **every** hop — a retracted edge cuts off the paths beyond it — and the crawl is project-scoped and bounded by `kg.max_neighbor_edges`. `kg_query(..., expand_hops=N)` composes the two: it returns the directly-matched edges **plus** the connected subgraph within `N` hops, turning a point lookup into multi-hop recall.
 
 ```bash
 # Run the MCP server directly

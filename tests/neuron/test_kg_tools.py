@@ -112,3 +112,34 @@ class TestKgInvalidate:
 
         assert json.loads(result) == {"closed": 3}
         assert captured["args"] == ("simba", "supports", "sqlite")
+
+
+class TestKgNeighbors:
+    def test_serializes_and_forwards(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_neighbors(entity, **kwargs):
+            captured["entity"] = entity
+            captured["kwargs"] = kwargs
+            return [{"subject": "A", "predicate": "uses", "object": "B", "hop": 1}]
+
+        monkeypatch.setattr(simba.kg.store, "kg_neighbors", fake_neighbors)
+        result = server.kg_neighbors("A", depth=2, direction="out")
+
+        assert json.loads(result)[0]["hop"] == 1
+        assert captured["entity"] == "A"
+        assert captured["kwargs"]["depth"] == 2
+        assert captured["kwargs"]["direction"] == "out"
+
+
+class TestKgQueryExpandForwarding:
+    def test_expand_hops_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_query(query=None, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        monkeypatch.setattr(simba.kg.store, "kg_query", fake_query)
+        server.kg_query(subject="A", expand_hops=2)
+        assert captured["expand_hops"] == 2
