@@ -20,6 +20,9 @@ class KgConfig:
     # of the same entity to one canonical node on kg_add. Opt-in.
     entity_resolution_enabled: bool = False
     entity_similarity_threshold: float = 0.9
+    # Multi-hop traversal: safety bound on edges returned by a single
+    # kg_neighbors / expand_hops traversal (guards against runaway subgraphs).
+    max_neighbor_edges: int = 200
 
 
 def load_config(**overrides: typing.Any) -> KgConfig:
