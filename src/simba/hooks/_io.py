@@ -43,6 +43,31 @@ def block(reason: str) -> str:
     return json.dumps({"decision": "block", "reason": reason})
 
 
+def pretool_deny(reason: str) -> str:
+    """Claude-shape PreToolUse deny (model sees ``reason`` and retries)."""
+    return json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+    )
+
+
+def pretool_rewrite(command: str, reason: str = "") -> str:
+    """Claude-shape PreToolUse silent rewrite: allow + updatedInput.command."""
+    out: dict[str, Any] = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": {"command": command},
+    }
+    if reason:
+        out["permissionDecisionReason"] = reason
+    return json.dumps({"hookSpecificOutput": out})
+
+
 def permission_decision(behavior: str, message: str = "") -> str:
     """Return a Codex PermissionRequest decision (allow/deny)."""
     decision: dict[str, Any] = {"behavior": behavior}
