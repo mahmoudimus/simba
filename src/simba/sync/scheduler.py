@@ -63,6 +63,8 @@ class SyncScheduler:
             ),
         )
 
+        epi = await loop.run_in_executor(None, self._maybe_consolidate)
+
         self._cycle_count += 1
         total_errors = idx.errors + ext.errors
 
@@ -81,6 +83,7 @@ class SyncScheduler:
                 "agent_dispatched": ext.agent_dispatched,
                 "errors": ext.errors,
             },
+            "episodes": {"dispatched": len(epi.get("dispatched", []))},
             "total_errors": total_errors,
         }
 
@@ -96,6 +99,19 @@ class SyncScheduler:
             )
 
         return summary
+
+    def _maybe_consolidate(self) -> dict:
+        """Consolidate eligible sessions for this project (engine-gated)."""
+        import simba.config
+        import simba.episodes.config  # registers the "episodes" section
+        import simba.episodes.consolidate
+
+        ecfg = simba.config.load("episodes")
+        if not ecfg.enabled or not ecfg.scheduler_enabled:
+            return {"dispatched": [], "skipped": 0}
+        return simba.episodes.consolidate.consolidate_eligible(
+            str(self.cwd), ecfg=ecfg, daemon_url=self.daemon_url
+        )
 
     async def run_forever(self) -> None:
         """Run sync cycles until stopped."""

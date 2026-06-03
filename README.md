@@ -405,7 +405,23 @@ simba rlm complete <id> --stored N       # the spawned agent calls this to close
 
 Guardrails: opt-in, cheap-by-default, **detached** (never blocks a hook), rate-limited (`engine_min_new_exchanges`), and deduped via the `rlm_jobs` table. Point it at a cheaper backend (DeepSeek/OpenRouter/local) with `engine_base_url` + `engine_api_key_env`.
 
-> **Roadmap:** Layers 1–2 (navigation + lossless recall) and the autonomous engine **Phase 1 (`claude-cli`)** are implemented. Planned: engine phases **`api`** (OpenAI-compatible / DeepSeek) and **`local-gguf`** (offline); **L3** hybrid BM25+vector recall; **L4** temporal entity-relationship knowledge graph.
+> **Roadmap:** RLM navigation + lossless recall, the autonomous engine **Phase 1 (`claude-cli`)**, **episodic consolidation (L2)**, **hybrid BM25+vector recall (L3)**, and the **temporal entity-relationship knowledge graph (L4)** are implemented. Planned: engine phases **`api`** (OpenAI-compatible / DeepSeek) and **`local-gguf`** (offline).
+
+### Episodic consolidation (L2)
+
+Raw memories are per-fact (≤200 chars). **Episodic consolidation** rolls a whole session's memories into one coarser `EPISODE` memory — a tier between per-fact memories and the L4 knowledge graph. It reuses the **same RLM engine** (so it is opt-in and agentless): the configured engine spawns a detached agent that reads the session's memories, synthesizes one episode, and stores it with `--type EPISODE`. Because an episode is a normal memory, it is embedded, project-scoped, and surfaced by ordinary (and hybrid) recall.
+
+```bash
+simba config set rlm.engine claude-cli              # episodes reuse the RLM engine (opt-in)
+simba memory consolidate                            # this project's eligible sessions
+simba memory consolidate --session <id>             # one session
+simba memory consolidate --all                      # every project's eligible sessions
+simba config set episodes.min_memories 5            # min memories before a session is worth an episode
+simba config set episodes.auto_on_precompact true   # auto at session end (default)
+simba config set episodes.scheduler_enabled true    # also via the sync scheduler (default)
+```
+
+A session is *eligible* once it has ≥ `episodes.min_memories` memories and no episode yet — that rule naturally defers a just-ended session until its memories land, so consolidation never races the digest. Dispatch is engine-gated (no engine ⇒ no-op), **detached** (never blocks a hook), and deduped via the `episode_jobs` table; the agent calls `simba episodes complete <id>` to close its job.
 
 ## Orchestration — Agent Dispatch Server
 
