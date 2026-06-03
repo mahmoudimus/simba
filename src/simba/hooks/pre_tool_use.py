@@ -23,6 +23,7 @@ import simba.db
 import simba.hooks._io
 import simba.hooks._kg_client
 import simba.hooks._memory_client
+import simba.redirect.check
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
@@ -234,6 +235,19 @@ def main(hook_input: dict) -> str:
     tool_input = hook_input.get("tool_input", {})
     transcript_path_str = hook_input.get("transcript_path", "")
     cwd_str = hook_input.get("cwd")
+
+    # --- Tool-call redirect (Bash): deny-with-correction or silent rewrite ---
+    # Runs first so a redirected command never proceeds to recall/injection.
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        decision = simba.redirect.check.check_command(
+            tool_input.get("command", ""), cwd_str
+        )
+        if decision is not None:
+            if decision.action == "rewrite":
+                return simba.hooks._io.pretool_rewrite(
+                    decision.command, decision.reason
+                )
+            return simba.hooks._io.pretool_deny(decision.reason)
 
     parts: list[str] = []
 

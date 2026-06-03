@@ -1594,6 +1594,7 @@ def _cmd_db(args: list[str]) -> int:
     import simba.episodes.jobs
     import simba.kg.store
     import simba.orchestration.agents
+    import simba.redirect.store
     import simba.rlm.jobs
     import simba.search.activity_tracker
     import simba.search.project_memory
@@ -1601,6 +1602,7 @@ def _cmd_db(args: list[str]) -> int:
 
     _use = (
         simba.episodes.jobs,
+        simba.redirect.store,
         simba.orchestration.agents,
         simba.kg.store,
         simba.search.activity_tracker,
@@ -2038,10 +2040,67 @@ def _cmd_markers(args: list[str]) -> int:
 
 
 def _cmd_rule(args: list[str]) -> int:
-    """Manage tool rules (auto-learned + manual)."""
+    """Manage tool rules (auto-learned + manual) and tool-call redirects."""
+    if args and args[0] == "redirect":
+        return _cmd_rule_redirect(args[1:])
+
     import simba.rules_cli
 
     return simba.rules_cli.main(args)
+
+
+def _cmd_rule_redirect(args: list[str]) -> int:
+    """Manage tool-call redirect rules (cargo->soldr, python->uv run, ...)."""
+    import simba.db
+    import simba.redirect.store as store
+
+    usage = (
+        "Usage:\n"
+        "  simba rule redirect add <program> <replacement> [--reason TEXT]\n"
+        "  simba rule redirect list\n"
+        "  simba rule redirect rm <program>"
+    )
+    if not args:
+        print(usage, file=sys.stderr)
+        return 1
+
+    cwd = pathlib.Path.cwd()
+    project_id = simba.db.resolve_project_id(cwd)
+    sub = args[0]
+
+    if sub == "add":
+        if len(args) < 3:
+            print(usage, file=sys.stderr)
+            return 1
+        program, replacement = args[1], args[2]
+        reason = ""
+        if "--reason" in args:
+            i = args.index("--reason")
+            reason = args[i + 1] if i + 1 < len(args) else ""
+        store.add(program, replacement, reason=reason, project_path=project_id, cwd=cwd)
+        print(f"redirect added: {program} -> {replacement}")
+        return 0
+
+    if sub == "list":
+        rules = store.load_rules(cwd, project_path=project_id)
+        if not rules:
+            print("no redirect rules (store or .simba/redirects.toml)")
+            return 0
+        for r in rules:
+            extra = f"  # {r.reason}" if r.reason else ""
+            print(f"[{r.source}] {r.program} -> {r.replacement}{extra}")
+        return 0
+
+    if sub == "rm":
+        if len(args) < 2:
+            print(usage, file=sys.stderr)
+            return 1
+        n = store.remove(args[1], project_path=project_id, cwd=cwd)
+        print(f"removed {n} rule(s) for {args[1]}")
+        return 0
+
+    print(usage, file=sys.stderr)
+    return 1
 
 
 def _cmd_eval(args: list[str]) -> int:
