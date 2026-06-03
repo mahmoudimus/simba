@@ -85,6 +85,7 @@ VALID_TYPES = [
     "PREFERENCE",
     "SYSTEM",
     "TOOL_RULE",
+    "EPISODE",
 ]
 
 

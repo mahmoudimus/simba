@@ -29,6 +29,24 @@ def test_get_engine_claude_cli():
     assert isinstance(engine.get_engine(_Cfg()), engine.ClaudeCliEngine)
 
 
+def test_run_spawns_detached_with_prompt(monkeypatch):
+    captured = {}
+
+    def fake_popen(argv, **kw):
+        captured["argv"] = argv
+        captured["kw"] = kw
+        return object()
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    engine.ClaudeCliEngine(_Cfg()).run("EPISODE-PROMPT", cwd="/proj")
+
+    argv = captured["argv"]
+    assert argv[0] == "claude"
+    assert "EPISODE-PROMPT" in argv
+    assert captured["kw"]["cwd"] == "/proj"
+    assert captured["kw"]["start_new_session"] is True
+
+
 def test_digest_spawns_detached_cheap(monkeypatch):
     captured = {}
 

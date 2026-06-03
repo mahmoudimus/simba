@@ -137,6 +137,25 @@ def _maybe_dispatch_rlm_digest(session_id: str, cwd: str, msg_count: int) -> Non
     engine.digest(session_id, "", cwd=project)
 
 
+def _maybe_consolidate_episodes(cwd: str) -> None:
+    """Opt-in: roll eligible past sessions into EPISODE memories (detached).
+
+    No-op unless episodes.auto_on_precompact and an RLM engine is configured.
+    Consolidates *eligible* sessions (>= min_memories, no EPISODE yet) for this
+    project — naturally deferring the just-ended session until its memories land.
+    """
+    import simba.config
+    import simba.episodes.config  # registers the "episodes" section
+    import simba.episodes.consolidate
+
+    ecfg = simba.config.load("episodes")
+    if not ecfg.enabled or not ecfg.auto_on_precompact:
+        return
+    simba.episodes.consolidate.consolidate_eligible(
+        cwd or str(pathlib.Path.cwd()), ecfg=ecfg
+    )
+
+
 def main(hook_input: dict) -> str:
     """Run the PreCompact hook pipeline. Returns JSON output string."""
     session_id = hook_input.get("session_id") or hook_input.get("sessionId") or ""
@@ -201,5 +220,9 @@ def main(hook_input: dict) -> str:
     # 5. Autonomous RLM digest (opt-in via rlm.engine; detached, never blocks)
     with contextlib.suppress(Exception):
         _maybe_dispatch_rlm_digest(session_id, cwd_str, msg_count)
+
+    # 6. Episodic consolidation (opt-in via episodes.auto_on_precompact; detached)
+    with contextlib.suppress(Exception):
+        _maybe_consolidate_episodes(cwd_str)
 
     return json.dumps({"suppressOutput": True})
