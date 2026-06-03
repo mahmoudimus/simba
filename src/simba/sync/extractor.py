@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 
+from simba.sync.dates import resolve_occurred_at
 from simba.sync.heuristics import extract_facts
 from simba.sync.watermarks import get_watermark, set_watermark
 
@@ -63,6 +64,7 @@ def _store_fact(
     proof: str,
     *,
     cwd: str,
+    occurred_at: str | None = None,
 ) -> str:
     """Store a fact triple into the knowledge graph (kg_edges)."""
     import simba.db
@@ -74,6 +76,7 @@ def _store_fact(
         obj,
         proof,
         project_path=simba.db.resolve_project_id(Path(cwd)),
+        occurred_at=occurred_at,
     )
     return "ok" if result == "added" else "duplicate"
 
@@ -154,6 +157,11 @@ def run_extract(
                 mem_id = mem.get("id", "")
 
                 triples = extract_facts(mem_type, content, context, mem_id)
+                # Event time (occurred_at): resolve a narrative date from the
+                # memory text, falling back to None when none is present.
+                occurred_at = resolve_occurred_at(
+                    f"{content} {context}", created_at=created
+                )
 
                 if dry_run:
                     for s, p, o, proof in triples:
@@ -167,7 +175,9 @@ def run_extract(
                     result.facts_extracted += len(triples)
                 else:
                     for s, p, o, proof in triples:
-                        status = _store_fact(s, p, o, proof, cwd=cwd_str)
+                        status = _store_fact(
+                            s, p, o, proof, cwd=cwd_str, occurred_at=occurred_at
+                        )
                         if status == "ok":
                             result.facts_extracted += 1
                         else:

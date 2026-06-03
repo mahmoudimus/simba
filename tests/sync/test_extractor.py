@@ -210,6 +210,34 @@ class TestRunExtract:
         assert result.facts_extracted == 0
 
     @patch("httpx.Client")
+    def test_occurred_at_populated_from_content(
+        self, mock_client_cls: MagicMock, db_dir: Path
+    ) -> None:
+        client = MagicMock()
+        mock_client_cls.return_value = client
+        memories = [
+            {
+                "id": "m1",
+                "type": "WORKING_SOLUTION",
+                "content": "use ruff for linting since 2025-03-01",
+                "context": "",
+                "createdAt": "2025-01-01T00:00:00",
+            },
+        ]
+        client.get.return_value = _mock_list_response(memories)
+
+        with patch(
+            "simba.db.get_db",
+            side_effect=lambda *a, **kw: _mock_get_db(db_dir),
+        ):
+            run_extract(db_dir)
+
+        project = simba.db.resolve_project_id(db_dir)
+        rows = simba.kg.store.kg_query(project_path=project)
+        assert rows, "expected an extracted edge"
+        assert rows[0]["occurred_at"] == "2025-03-01"
+
+    @patch("httpx.Client")
     def test_empty_response(self, mock_client_cls: MagicMock, db_dir: Path) -> None:
         client = MagicMock()
         mock_client_cls.return_value = client

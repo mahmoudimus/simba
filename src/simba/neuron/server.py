@@ -30,8 +30,13 @@ def kg_add(
     object_type: str = "concept",
     transcript_id: str | None = None,
     char_start: int | None = None,
+    occurred_at: str | None = None,
 ) -> str:
-    """Inserts an open temporal edge into the knowledge graph."""
+    """Inserts an open temporal edge into the knowledge graph.
+
+    ``occurred_at`` is the *event time* (when the fact was true in the world),
+    distinct from the belief time stamped automatically on insert.
+    """
     return json.dumps(
         simba.kg.store.kg_add(
             subject,
@@ -43,6 +48,7 @@ def kg_add(
             transcript_id=transcript_id,
             char_start=char_start,
             project_path=None,
+            occurred_at=occurred_at,
         )
     )
 
@@ -54,9 +60,15 @@ def kg_query(
     predicate: str | None = None,
     as_of: str | None = None,
     include_expired: bool = False,
+    occurred_after: str | None = None,
+    occurred_before: str | None = None,
     limit: int = 10,
 ) -> str:
-    """Queries the knowledge graph with FTS ranking and temporal filters."""
+    """Queries the knowledge graph with FTS ranking and bitemporal filters.
+
+    ``as_of`` snapshots belief time; ``occurred_after``/``occurred_before`` bound
+    event time (``occurred_at``). Returned facts include their ``occurred_at``.
+    """
     return json.dumps(
         simba.kg.store.kg_query(
             query,
@@ -64,6 +76,8 @@ def kg_query(
             predicate=predicate,
             as_of=as_of,
             include_expired=include_expired,
+            occurred_after=occurred_after,
+            occurred_before=occurred_before,
             limit=limit,
         )
     )
