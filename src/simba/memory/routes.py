@@ -289,8 +289,10 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         from simba.llm.client import get_client as _get_llm_client
 
         llm_client = _get_llm_client()
-        # Non-blocking: serve the fast order, rerank off the hot path, cache it.
-        rerank_cache = getattr(request.app.state, "rerank_cache", None)
+        # "async" (default): non-blocking — serve fast order, rerank off the hot
+        # path via the cache. "sync": block on the rerank every recall (no cache).
+        if getattr(config, "llm_rerank_mode", "async") != "sync":
+            rerank_cache = getattr(request.app.state, "rerank_cache", None)
 
     fts_path = getattr(request.app.state, "fts_path", None)
     if config.hybrid_enabled:
@@ -490,6 +492,36 @@ async def reindex(request: fastapi.Request) -> dict:
 
     indexed = await asyncio.to_thread(_rebuild)
     return {"status": "reindexed", "indexed": indexed}
+
+
+@router.post("/reembed")
+async def reembed(request: fastapi.Request) -> dict:
+    """Re-embed every memory with the current model and rebuild the table.
+
+    Needed after switching the embedder (a changed dimension requires rebuilding
+    the LanceDB table). Uses the daemon's loaded doc embedder, then rebuilds the
+    FTS mirror and swaps in the new table handle.
+    """
+    db_path = getattr(request.app.state, "db_path", None)
+    embed = getattr(request.app.state, "embed", None)
+    if not db_path or embed is None:
+        return {"status": "not_ready"}
+
+    new_table, count = await simba.memory.vector_db.reembed_table(db_path, embed)
+    request.app.state.table = new_table
+
+    fts_path = getattr(request.app.state, "fts_path", None)
+    if fts_path:
+        rows = await new_table.query().to_list()
+        non_system = [r for r in rows if r.get("type") != "SYSTEM"]
+
+        def _rebuild() -> int:
+            with simba.memory.fts.connect(fts_path):
+                return simba.memory.fts.rebuild(non_system)
+
+        await asyncio.to_thread(_rebuild)
+
+    return {"status": "reembedded", "count": count}
 
 
 class PatchRequest(pydantic.BaseModel):

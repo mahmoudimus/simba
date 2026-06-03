@@ -23,6 +23,15 @@ class MemoryConfig:
     model_path: str = ""
     n_gpu_layers: int = -1
     embed_url: str = ""
+    # Embedding backend: "gguf" (in-process llama-cpp, default), "http" (when
+    # embed_url is set), or "llm-cli" (shell `llm embed`; note: only as local as
+    # the chosen llm model — cloud models cross the no-external-service line).
+    embed_provider: str = "gguf"
+    # Asymmetric task prefixes (model-specific). nomic uses "search_document: " /
+    # "search_query: "; Qwen3-Embedding uses "" for docs and an "Instruct: …\n
+    # Query: " instruction for queries. Prepended to the text before embedding.
+    embed_doc_prefix: str = "search_document: "
+    embed_query_prefix: str = "search_query: "
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92
@@ -71,6 +80,9 @@ class MemoryConfig:
     # always fail-open (any error leaves the RRF + composite ordering intact).
     llm_rerank_enabled: bool = True
     llm_rerank_candidates: int = 20  # cap of candidates sent to the reranker
+    # "async" (default): non-blocking — serve fast order, rerank off the hot path
+    # via the cache. "sync": block on the rerank every recall (test/measure mode).
+    llm_rerank_mode: str = "async"
     # Async rerank: when a cache is wired (the daemon), recall never blocks on the
     # LLM — it serves the fast order and reranks off the hot path, caching the
     # result by (query, candidate-set) for the next recurrence. Cache capacity:

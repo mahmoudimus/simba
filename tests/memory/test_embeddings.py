@@ -301,3 +301,52 @@ class TestEmbeddingServiceHTTP:
         await service.stop()
         mock_client.aclose.assert_called_once()
         assert service._http_client is None
+
+
+class TestConfigurablePrefixes:
+    def test_doc_and_query_prefixes_applied(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(
+            embed_doc_prefix="DOC: ", embed_query_prefix="Q: "
+        )
+        svc = simba.memory.embeddings.EmbeddingService(cfg)
+        tt = simba.memory.embeddings.TaskType
+        assert svc._prefixed("hello", tt.DOCUMENT) == "DOC: hello"
+        assert svc._prefixed("hello", tt.QUERY) == "Q: hello"
+
+    def test_empty_doc_prefix_passes_text_through(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(embed_doc_prefix="")
+        svc = simba.memory.embeddings.EmbeddingService(cfg)
+        assert svc._prefixed("x", simba.memory.embeddings.TaskType.DOCUMENT) == "x"
+
+
+class TestLlmCliBackend:
+    def test_backend_resolves_to_llm_cli(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(embed_provider="llm-cli")
+        svc = simba.memory.embeddings.EmbeddingService(cfg)
+        assert svc._backend == "llm-cli"
+
+    def test_embed_llm_cli_argv_and_parse(self, monkeypatch) -> None:
+        import subprocess
+        import types
+
+        captured = {}
+
+        def fake_run(argv, **kw):
+            captured["argv"] = argv
+            return types.SimpleNamespace(
+                stdout="[0.1, 0.2, 0.3]", stderr="", returncode=0
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        cfg = simba.memory.config.MemoryConfig(
+            embed_provider="llm-cli",
+            embedding_model="my-embed",
+            embed_query_prefix="Q: ",
+        )
+        svc = simba.memory.embeddings.EmbeddingService(cfg)
+        vec = svc._embed_llm_cli("hi", simba.memory.embeddings.TaskType.QUERY)
+        assert vec == [0.1, 0.2, 0.3]
+        argv = captured["argv"]
+        assert argv[0] == "llm" and "embed" in argv
+        assert argv[argv.index("-m") + 1] == "my-embed"
+        assert "Q: hi" in argv  # prefixed content passed via -c
