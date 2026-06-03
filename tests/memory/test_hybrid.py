@@ -279,3 +279,56 @@ class TestKeywordArmFocus:
         )
         assert captured.get("calls", 0) == 0  # degraded to vector-only
         assert [r["id"] for r in results] == ["v"]
+
+
+def _vec_dated(mid: str, sim: float, created: str) -> dict:
+    return {
+        "id": mid,
+        "type": "PATTERN",
+        "content": f"vector {mid}",
+        "context": "",
+        "similarity": sim,
+        "confidence": 0.8,
+        "createdAt": created,
+        "projectPath": "proj-1",
+    }
+
+
+class TestScoringWiring:
+    @pytest.mark.asyncio
+    async def test_scoring_disabled_keeps_rrf_order(self, monkeypatch) -> None:
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [
+                _vec_dated("hi", 0.9, "2020-01-01T00:00:00Z"),
+                _vec_dated("lo", 0.85, "2026-05-30T00:00:00Z"),
+            ]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig(scoring_enabled=False)
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+        )
+        assert [r["id"] for r in results] == ["hi", "lo"]
+
+    @pytest.mark.asyncio
+    async def test_recency_weight_reorders(self, monkeypatch) -> None:
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [
+                _vec_dated("hi", 0.9, "2020-01-01T00:00:00Z"),  # higher rrf, very old
+                _vec_dated("lo", 0.85, "2026-05-30T00:00:00Z"),  # lower rrf, fresh
+            ]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig(
+            scoring_enabled=True,
+            score_weight_relevance=0.0,
+            score_weight_recency=1.0,
+            score_weight_importance=0.0,
+            recency_halflife_days=30.0,
+        )
+        results = await hybrid.hybrid_search(
+            None, None, [0.1] * 768, "q",
+            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+        )
+        assert [r["id"] for r in results] == ["lo", "hi"]  # recency flipped order

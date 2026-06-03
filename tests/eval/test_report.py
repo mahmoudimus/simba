@@ -43,3 +43,21 @@ def test_format_report_lists_worst_cases() -> None:
     rep = runner.run_eval(d, lambda q: ["m1"], ks=(1,))
     text = report.format_report(rep, top_n_worst=1)
     assert "miss" in text  # the failing case is surfaced
+
+
+def test_resolve_dataset_by_bundled_name() -> None:
+    assert report.resolve_dataset("seed").name == "seed.json"
+    assert report.resolve_dataset("temporal").name == "temporal.json"
+
+
+def test_resolve_dataset_by_path(tmp_path) -> None:
+    p = tmp_path / "custom.json"
+    p.write_text("{}")
+    assert report.resolve_dataset(str(p)) == p
+
+
+def test_resolve_dataset_unknown_raises() -> None:
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        report.resolve_dataset("does-not-exist")

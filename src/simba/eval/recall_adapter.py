@@ -35,8 +35,13 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _row(mem: Memory, vector: list[float]) -> dict[str, typing.Any]:
-    created = mem.created_at or _now()
+def _row(
+    mem: Memory, vector: list[float], default_created: str
+) -> dict[str, typing.Any]:
+    # A single stable timestamp for all undated rows (passed in), so a uniform
+    # corpus stays uniform — otherwise a slow embed loop would stamp later rows
+    # with a later second and leak a spurious recency signal into the eval.
+    created = mem.created_at or default_created
     return {
         "id": mem.id,
         "type": mem.type,
@@ -103,7 +108,8 @@ def build_retriever(
     db_path = data_dir / "memories.lance"
     fts_path = data_dir / simba.memory.fts.FTS_FILENAME
 
-    rows = [_row(m, embed_doc(m.content)) for m in dataset.corpus]
+    build_now = _now()
+    rows = [_row(m, embed_doc(m.content), build_now) for m in dataset.corpus]
     if not rows:
         return lambda query: []
 
