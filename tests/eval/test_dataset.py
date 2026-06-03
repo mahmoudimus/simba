@@ -67,3 +67,14 @@ def test_duplicate_corpus_id_raises(tmp_path: pathlib.Path) -> None:
 def test_corpus_ids(tmp_path: pathlib.Path) -> None:
     d = ds.load_dataset(_write(tmp_path, _RAW))
     assert d.corpus_ids() == {"m1", "m2", "m3"}
+
+
+def test_to_dict_round_trips(tmp_path: pathlib.Path) -> None:
+    d = ds.load_dataset(_write(tmp_path, _RAW))
+    out = tmp_path / "rt.json"
+    out.write_text(json.dumps(d.to_dict()))
+    d2 = ds.load_dataset(out)
+    assert d2.name == d.name
+    assert d2.corpus_ids() == d.corpus_ids()
+    assert [c.id for c in d2.cases] == [c.id for c in d.cases]
+    assert d2.cases[1].intent == "precise"

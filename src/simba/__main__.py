@@ -22,7 +22,7 @@ Usage:
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
-    simba eval <cmd>       Recall eval harness (run a benchmark dataset)
+    simba eval <cmd>       Recall eval harness (run | build from real corpus)
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
     simba orchestration <cmd> Agent orchestration server (MCP)
     simba config <cmd>     Unified configuration (get/set/list/show)
@@ -2055,11 +2055,14 @@ def _cmd_eval(args: list[str]) -> int:
     import simba.eval.run as run
     import simba.memory.config
 
+    if args and args[0] == "build":
+        return _eval_build(args[1:])
     if args and args[0] == "run":
         args = args[1:]
 
     dataset_arg = ""
     ks_arg = ""
+    split_arg = ""
     as_json = False
     i = 0
     while i < len(args):
@@ -2069,12 +2072,18 @@ def _cmd_eval(args: list[str]) -> int:
         elif args[i] == "--ks" and i + 1 < len(args):
             ks_arg = args[i + 1]
             i += 2
+        elif args[i] == "--split" and i + 1 < len(args):
+            split_arg = args[i + 1]
+            i += 2
         elif args[i] == "--json":
             as_json = True
             i += 1
         else:
             print(f"Unknown eval option: {args[i]}", file=sys.stderr)
-            print("Usage: simba eval run [--dataset NAME|PATH] [--ks 1,3,5] [--json]")
+            print(
+                "Usage: simba eval run [--dataset NAME|PATH] [--ks 1,3,5] "
+                "[--split dev|test] [--json]"
+            )
             return 1
 
     ecfg = simba.config.load("eval")
@@ -2108,12 +2117,80 @@ def _cmd_eval(args: list[str]) -> int:
             embed_doc=embed_doc,
             embed_query=embed_query,
             cfg=mcfg,
+            split=split_arg or None,
         )
 
     if as_json:
         print(_json.dumps(rep.to_dict(), indent=2))
     else:
         print(report.format_report(rep, top_n_worst=5))
+    return 0
+
+
+def _eval_build(args: list[str]) -> int:
+    """Build an eval dataset from the real memory corpus (LLM-generated queries)."""
+    import json as _json
+
+    import httpx
+
+    import simba.eval.build as build
+    import simba.hooks._memory_client
+    import simba.llm.client
+
+    n = 50
+    out = ""
+    project = ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--n" and i + 1 < len(args):
+            n = int(args[i + 1])
+            i += 2
+        elif args[i] == "--out" and i + 1 < len(args):
+            out = args[i + 1]
+            i += 2
+        elif args[i] == "--project-path" and i + 1 < len(args):
+            project = args[i + 1]
+            i += 2
+        else:
+            print(f"Unknown build option: {args[i]}", file=sys.stderr)
+            print("Usage: simba eval build --out PATH [--n 50] [--project-path P]")
+            return 1
+    if not out:
+        print("eval build: --out PATH is required", file=sys.stderr)
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.get(f"{url}/list", params={"limit": max(n * 3, 200)}, timeout=30)
+        resp.raise_for_status()
+        mems = resp.json().get("memories", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        print(f"eval build: daemon list failed: {exc}", file=sys.stderr)
+        return 1
+
+    mems = [m for m in mems if m.get("type") != "SYSTEM"]
+    if project:
+        mems = [m for m in mems if m.get("projectPath") == project]
+    if not mems:
+        print("eval build: no memories to build from", file=sys.stderr)
+        return 1
+
+    client = simba.llm.client.get_client()
+    if not client.available():
+        print(
+            "eval build needs an llm provider (simba config set llm.provider)",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        f"generating queries for up to {n} of {len(mems)} memories…", file=sys.stderr
+    )
+    dataset = build.build_from_memories(
+        mems, client=client, name=f"real-corpus-{n}", max_cases=n
+    )
+    pathlib.Path(out).write_text(_json.dumps(dataset.to_dict(), indent=2))
+    print(f"wrote {out}: {len(dataset.corpus)} memories, {len(dataset.cases)} cases")
     return 0
 
 
