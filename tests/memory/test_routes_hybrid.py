@@ -91,6 +91,7 @@ class TestRecallIntentAwareFloor:
             filters,
             cfg,
             candidate_pool=None,
+            extra_embedding=None,
         ):
             captured["min_similarity"] = min_similarity
             return []
@@ -171,6 +172,7 @@ class TestRecallBroadWidening:
             filters,
             cfg,
             candidate_pool=None,
+            extra_embedding=None,
         ):
             captured["max_results"] = max_results
             captured["candidate_pool"] = candidate_pool
@@ -224,6 +226,60 @@ class TestRecallBroadWidening:
         )
         assert resp.status_code == 200
         assert captured["max_results"] == 2
+
+
+class TestRecallExpansion:
+    """expansion_enabled adds a 2nd HyDE vector arm (extra embedding)."""
+
+    @staticmethod
+    def _capture(monkeypatch, captured: dict) -> None:
+        async def fake_hybrid(
+            table,
+            fts_path,
+            embedding,
+            query,
+            *,
+            min_similarity,
+            max_results,
+            filters,
+            cfg,
+            candidate_pool=None,
+            extra_embedding=None,
+        ):
+            captured["extra_embedding"] = extra_embedding
+            return []
+
+        monkeypatch.setattr("simba.memory.hybrid.hybrid_search", fake_hybrid)
+
+    @pytest.mark.asyncio
+    async def test_disabled_passes_no_extra_embedding(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.expansion_enabled = False
+        captured: dict = {}
+        self._capture(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={"query": "open hybrid_search in routes", "projectPath": "p1"},
+        )
+        assert resp.status_code == 200
+        assert captured["extra_embedding"] is None
+
+    @pytest.mark.asyncio
+    async def test_enabled_passes_extra_embedding(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.expansion_enabled = True
+        captured: dict = {}
+        self._capture(monkeypatch, captured)
+        resp = await ac.post(
+            "/recall",
+            json={"query": "open hybrid_search in routes", "projectPath": "p1"},
+        )
+        assert resp.status_code == 200
+        assert captured["extra_embedding"] is not None
 
 
 class TestDeleteSync:

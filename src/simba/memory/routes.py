@@ -22,6 +22,7 @@ import starlette.responses
 import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.intent
+import simba.memory.keywords
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -264,6 +265,19 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if body.project_path:
         filters["projectPath"] = body.project_path
 
+    # Multi-arm HyDE (opt-in): a 2nd vector arm over the focused-term string,
+    # which often nails identifiers/entities the full-query embedding blurs.
+    extra_embedding: list[float] | None = None
+    if config.hybrid_enabled and config.expansion_enabled:
+        kw_terms = simba.memory.keywords.focus_terms(
+            body.query, max_terms=config.fts_max_terms
+        )
+        if kw_terms:
+            try:
+                extra_embedding = await embed_query(" ".join(kw_terms))
+            except Exception:
+                extra_embedding = None
+
     fts_path = getattr(request.app.state, "fts_path", None)
     if config.hybrid_enabled:
         memories = await simba.memory.hybrid.hybrid_search(
@@ -276,6 +290,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             filters=filters,
             cfg=config,
             candidate_pool=candidate_pool,
+            extra_embedding=extra_embedding,
         )
     else:
         memories = await simba.memory.vector_db.search_memories(
