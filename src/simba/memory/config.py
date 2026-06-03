@@ -62,6 +62,12 @@ class MemoryConfig:
     score_weight_recency: float = 0.5
     score_weight_importance: float = 0.3  # uses the stored confidence as importance
     recency_halflife_days: float = 90.0
+    # LLM reranker: an LLM relevance pass over the candidate pool before truncating
+    # to max_results (the cross-encoder's role). Opt-in; needs an llm provider and
+    # adds one LLM round-trip per recall (latency), so it's off by default. Always
+    # fail-open: any error leaves the RRF + composite ordering intact.
+    llm_rerank_enabled: bool = False
+    llm_rerank_candidates: int = 20  # cap of candidates sent to the reranker
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
