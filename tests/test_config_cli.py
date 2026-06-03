@@ -17,6 +17,18 @@ class TestCmdList:
         # At least the "memory" section should appear (registered by import).
         assert "[memory]" in captured.out or "[test_section]" in captured.out
 
+    def test_all_sections_registered(self) -> None:
+        # Every @configurable section must be reachable via `simba config`
+        # (CORE rule). Regression guard: llm/episodes/eval were added later.
+        simba.config_cli._ensure_registry()
+        sections = simba.config.list_sections()
+        expected = (
+            "memory", "kg", "sync", "rlm", "hooks", "search",
+            "episodes", "eval", "llm",
+        )
+        for name in expected:
+            assert name in sections, f"{name!r} not registered for `simba config`"
+
 
 class TestCmdGet:
     def test_get_existing_key(

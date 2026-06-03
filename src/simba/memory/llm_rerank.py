@@ -20,6 +20,29 @@ _PROMPT = (
 )
 
 
+def reorder_by_ids(
+    records: list[dict[str, typing.Any]], order: list
+) -> list[dict[str, typing.Any]]:
+    """Reorder ``records`` to follow ``order`` (a list of ids); never drop/dup.
+
+    Ids in ``order`` come first (each once), then any record the order omitted in
+    its original position. Shared by the live reranker and the rerank cache.
+    """
+    by_id = {str(r.get("id")): r for r in records}
+    ranked: list[dict[str, typing.Any]] = []
+    seen: set[str] = set()
+    for rid in order:
+        key = str(rid)
+        rec = by_id.get(key)
+        if rec is not None and key not in seen:
+            ranked.append(rec)
+            seen.add(key)
+    for rec in records:
+        if str(rec.get("id")) not in seen:
+            ranked.append(rec)
+    return ranked
+
+
 def _build_prompt(query: str, candidates: list[dict[str, typing.Any]]) -> str:
     lines = []
     for c in candidates:
@@ -53,17 +76,4 @@ def rerank(
     if not isinstance(order, list):
         return candidates
 
-    by_id = {str(c.get("id")): c for c in head}
-    ranked: list[dict[str, typing.Any]] = []
-    seen: set[str] = set()
-    for rid in order:
-        key = str(rid)
-        cand = by_id.get(key)
-        if cand is not None and key not in seen:
-            ranked.append(cand)
-            seen.add(key)
-    # Append any head candidate the model omitted, preserving original order.
-    for cand in head:
-        if str(cand.get("id")) not in seen:
-            ranked.append(cand)
-    return ranked + tail
+    return reorder_by_ids(head, order) + tail

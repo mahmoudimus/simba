@@ -24,6 +24,7 @@ import simba.memory.config
 import simba.memory.diagnostics
 import simba.memory.embeddings
 import simba.memory.fts
+import simba.memory.rerank_cache
 import simba.memory.routes
 
 _DEFAULT_DB_DIR = ".simba/memory"
@@ -102,6 +103,10 @@ def create_app(
     app.state.embed_query = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
+    )
+    # Non-blocking LLM rerank cache (daemon-process lifetime).
+    app.state.rerank_cache = simba.memory.rerank_cache.RerankCache(
+        max_entries=config.rerank_cache_size,
     )
 
     return app
