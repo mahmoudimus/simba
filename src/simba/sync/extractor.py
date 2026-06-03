@@ -81,8 +81,65 @@ def _store_fact(
     return "ok" if result == "added" else "duplicate"
 
 
+def build_extraction_prompt(
+    memories: list[dict],
+    existing_entities: list[str],
+    *,
+    max_memories: int = 20,
+    max_entities: int = 60,
+) -> str:
+    """Build an entity-aware extraction prompt for the LLM agent.
+
+    The prompt asks for **typed** (subject, predicate, object) triples and, when
+    the project already has entities, lists them so the agent **reuses** those
+    canonical names instead of minting surface-form variants — entity resolution
+    at the source, complementing the normalization-based merge on ``kg_add``.
+    """
+    memory_text = "\n\n".join(
+        f"[{m.get('type', '?')}] {m.get('content', '')} "
+        f"(context: {m.get('context', '')})"
+        for m in memories[:max_memories]
+    )
+
+    vocab_block = ""
+    if existing_entities:
+        listed = ", ".join(existing_entities[:max_entities])
+        vocab_block = (
+            "\n\nThis project already has these canonical entities — REUSE the "
+            "exact existing name when you mean the same thing (do not invent a "
+            f"new variant):\n{listed}\n"
+        )
+
+    return (
+        "Extract typed (subject, predicate, object) fact triples from these "
+        "memories. Use short, canonical entity names; prefer a specific "
+        "predicate (uses, causes, fixes, prefers, depends_on, ...). For each "
+        "fact call:\n"
+        "  kg_add(subject, predicate, object, subject_type=<type>, "
+        'object_type=<type>, proof="researcher_extracted")\n'
+        "Skip generic knowledge; one triple per real relationship."
+        f"{vocab_block}\n"
+        f"Memories:\n{memory_text}"
+    )
+
+
+def _project_entity_vocab(cwd: str) -> list[str]:
+    """Best-effort: the distinct entity surface forms already in this project."""
+    try:
+        import simba.db
+        import simba.kg.store
+
+        pid = simba.db.resolve_project_id(Path(cwd))
+        with simba.db.connect(Path(cwd)):
+            names = sorted(simba.kg.store._project_entities(pid))
+        return names
+    except Exception:
+        logger.debug("entity-vocab lookup failed", exc_info=True)
+        return []
+
+
 def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
-    """Dispatch a researcher agent for deeper fact extraction.
+    """Dispatch a researcher agent for deeper, entity-aware fact extraction.
 
     Returns the ticket_id or None on failure.
     """
@@ -92,18 +149,7 @@ def _dispatch_claude_agent(memories: list[dict], *, cwd: str) -> str | None:
         logger.debug("orchestration.agents not available")
         return None
 
-    memory_text = "\n\n".join(
-        f"[{m.get('type', '?')}] {m.get('content', '')} "
-        f"(context: {m.get('context', '')})"
-        for m in memories[:20]
-    )
-    instructions = (
-        "Extract (subject, predicate, object) fact triples from "
-        "these memories. For each fact, call "
-        "kg_add(subject, predicate, object, "
-        'proof="researcher_extracted").\n\n'
-        f"Memories:\n{memory_text}"
-    )
+    instructions = build_extraction_prompt(memories, _project_entity_vocab(cwd))
     ticket_id = f"sync-facts-{len(memories)}"
     try:
         dispatch_agent("researcher", ticket_id, instructions, cwd=cwd)

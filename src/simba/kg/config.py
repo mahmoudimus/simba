@@ -16,6 +16,10 @@ class KgConfig:
     fts_tokenize: str = "trigram"
     default_subject_type: str = "concept"
     default_object_type: str = "concept"
+    # Entity resolution: collapse surface-form variants (case/articles/quotes)
+    # of the same entity to one canonical node on kg_add. Opt-in.
+    entity_resolution_enabled: bool = False
+    entity_similarity_threshold: float = 0.9
 
 
 def load_config(**overrides: typing.Any) -> KgConfig:
