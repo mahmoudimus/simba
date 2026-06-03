@@ -45,6 +45,8 @@ class MemoryConfig:
     # Broad-query widening (Phase 0.1): aggregation queries pull a wider net.
     max_results_broad: int = 8  # results returned for broad queries
     fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
+    # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
+    expansion_enabled: bool = False  # opt-in (costs one extra embed per recall)
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
