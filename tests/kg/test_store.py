@@ -318,3 +318,47 @@ class TestKgBitemporal:
         finally:
             conn.close()
         assert "occurred_at" in cols
+
+
+class TestEntityResolution:
+    def _enable(self, monkeypatch) -> None:
+        import simba.config
+        import simba.kg.config as kc
+
+        real = simba.config.load
+
+        def fake(section, *a, **k):
+            if section == "kg":
+                return kc.KgConfig(entity_resolution_enabled=True)
+            return real(section, *a, **k)
+
+        monkeypatch.setattr(simba.config, "load", fake)
+
+    def test_disabled_keeps_surface_forms(self) -> None:
+        kg_add("GITHUB_TOKEN", "causes", "401", "p", project_path="proj-1")
+        kg_add("the GITHUB_TOKEN", "causes", "errors", "p", project_path="proj-1")
+        subjects = {r["subject"] for r in kg_query(project_path="proj-1")}
+        assert subjects == {"GITHUB_TOKEN", "the GITHUB_TOKEN"}  # not merged
+
+    def test_enabled_canonicalizes_subject(self, monkeypatch) -> None:
+        self._enable(monkeypatch)
+        kg_add("GITHUB_TOKEN", "causes", "401", "p", project_path="proj-1")
+        # variant resolves to the existing canonical surface form
+        kg_add("the GITHUB_TOKEN", "blocks", "gh", "p", project_path="proj-1")
+        subjects = {r["subject"] for r in kg_query(project_path="proj-1")}
+        assert subjects == {"GITHUB_TOKEN"}  # collapsed to one node
+
+    def test_enabled_canonicalizes_object(self, monkeypatch) -> None:
+        self._enable(monkeypatch)
+        kg_add("gh", "uses", "GITHUB_TOKEN", "p", project_path="proj-1")
+        kg_add("daemon", "reads", "the github_token", "p", project_path="proj-1")
+        objects = {r["object"] for r in kg_query(project_path="proj-1")}
+        assert objects == {"GITHUB_TOKEN"}
+
+    def test_resolution_is_project_scoped(self, monkeypatch) -> None:
+        self._enable(monkeypatch)
+        kg_add("GITHUB_TOKEN", "causes", "401", "p", project_path="proj-1")
+        # different project: must NOT borrow proj-1's canonical form
+        kg_add("the github_token", "blocks", "gh", "p", project_path="proj-2")
+        subj2 = {r["subject"] for r in kg_query(project_path="proj-2")}
+        assert subj2 == {"the github_token"}
