@@ -99,6 +99,45 @@ async def search_memories(
         return []
 
 
+async def reembed_table(
+    db_path: typing.Any,
+    embed_fn: typing.Callable[[str], typing.Awaitable[list[float]]],
+) -> tuple[typing.Any, int]:
+    """Re-embed every memory's content and rewrite the table at the new dim.
+
+    Reads all rows from the ``memories`` table, re-embeds ``content`` (+ context
+    when present) with ``embed_fn`` (the daemon's doc embedder — async), drops and
+    recreates the table so a changed embedding dimension takes effect, and returns
+    ``(new_table, count)``. The caller is responsible for rebuilding the FTS
+    mirror and swapping the app's table handle. A per-row embed failure keeps the
+    old vector so one bad row can't abort the rebuild.
+    """
+    import lancedb
+
+    db = await lancedb.connect_async(str(db_path))
+    table = await db.open_table("memories")
+    rows = await table.query().to_list()
+
+    new_rows = []
+    for raw in rows:
+        row = dict(raw)
+        row.pop("_distance", None)
+        text = (row.get("content") or "").strip()
+        ctx = (row.get("context") or "").strip()
+        if ctx:
+            text = f"{text} {ctx}".strip()
+        if text:
+            try:
+                row["vector"] = await embed_fn(text)
+            except Exception:
+                logger.warning("reembed failed for %s; kept old vector", row.get("id"))
+        new_rows.append(row)
+
+    await db.drop_table("memories")
+    new_table = await db.create_table("memories", new_rows)
+    return new_table, len(new_rows)
+
+
 async def compact_table(table: typing.Any) -> bool:
     """Compact table fragments to improve search performance.
 

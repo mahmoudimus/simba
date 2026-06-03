@@ -228,6 +228,23 @@ simba server --embed-url http://localhost:8080
 
 Works with llama-cpp-python server, vLLM, text-embeddings-inference, or any OpenAI-compatible endpoint.
 
+### Swapping the embedder
+
+The embedder is fully `simba config`-driven (`embed_provider`, `model_repo`/`model_file`/`embedding_dims`, and the per-model task prefixes). Backends: `gguf` (in-process, default), `http` (`embed_url`), or `llm-cli` (`llm embed`; note: only as local as the chosen `llm` model — cloud models cross the no-external-service line). Example — switch to **Qwen3-Embedding-0.6B**:
+
+```bash
+simba config set memory.model_repo Qwen/Qwen3-Embedding-0.6B-GGUF
+simba config set memory.model_file Qwen3-Embedding-0.6B-Q8_0.gguf
+simba config set memory.embedding_dims 1024
+simba config set memory.embed_doc_prefix ""
+simba config set memory.embed_query_prefix "Instruct: Given a query, retrieve relevant memories
+Query: "
+# restart the daemon (loads the new model), then rebuild the corpus at the new dim:
+simba memory reembed
+```
+
+A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `scripts/embedder_bakeoff.py` scores candidates on the eval datasets. On the current (small, saturating) datasets nomic-Q8 and Qwen3-0.6B are **a wash vs nomic-Q4** (Q8 even regressed the temporal set), so the default stays nomic-Q4 — a real embedder decision needs the hardened/real-corpus eval.
+
 ### Endpoints
 
 | Method | Path | Description |
@@ -334,7 +351,7 @@ Measured with the eval harness (live embedder): on the time-sensitive `simba-tem
 
 Simba can call an LLM for two memory tasks via a small **CLI-backed client** (`simba.llm`) — no SDK dependency, fully `simba config`-driven, and **fail-open** (any error degrades to the non-LLM path):
 
-- **Reranker** (`memory.llm_rerank_enabled`) — the cross-encoder's role: after RRF + composite scoring, the LLM re-orders the candidate pool by relevance before truncation. Measured on `simba-seed` with `claude`/haiku it lifts **recall@1 0.71 → 0.90** and **MRR 0.90 → 1.00**, fixing exactly the confusable cases dense recall missed. **Non-blocking in the daemon:** reranking can't be precomputed like sync (it's query-specific), so recall serves the fast RRF+composite order *immediately* and reranks **off the hot path**, caching the result by (query, candidate-set) — a recurring query/candidate-set is then served the reranked order with no LLM call. So novel queries pay no latency (and get the fast order); recurring ones get the rerank for free. The eval harness / explicit CLI recall use the **synchronous** path (no cache) so they measure the rerank ceiling.
+- **Reranker** (`memory.llm_rerank_enabled`) — the cross-encoder's role: after RRF + composite scoring, the LLM re-orders the candidate pool by relevance before truncation. Measured on `simba-seed` with `claude`/haiku it lifts **recall@1 0.71 → 0.90** and **MRR 0.90 → 1.00**, fixing exactly the confusable cases dense recall missed. **Non-blocking in the daemon:** reranking can't be precomputed like sync (it's query-specific), so recall serves the fast RRF+composite order *immediately* and reranks **off the hot path**, caching the result by (query, candidate-set) — a recurring query/candidate-set is then served the reranked order with no LLM call. So novel queries pay no latency (and get the fast order); recurring ones get the rerank for free. Set **`memory.llm_rerank_mode=sync`** to instead block on the rerank every recall (useful for testing/measuring a model live — at the cost of latency on every hook). The eval harness / explicit CLI recall always use the **synchronous** path (no cache) so they measure the rerank ceiling.
 - **Extraction** (`sync.llm_extract_enabled`) — for memories the regex heuristics miss, the LLM extracts typed `(subject, predicate, object)` triples (reusing the project's existing entity vocabulary). Runs in the background sync pipeline, not the hot path.
 
 Providers (`llm.provider`): `claude-cli`, `llm-cli` (cloud), and **100% local** `llama-cli` (llama.cpp) or `mlx-lm` (Apple MLX) — set `llm.model_path` to a GGUF/model. A DeepSeek-style backend works via `llm.base_url` (claude-cli) or the `llm` CLI.

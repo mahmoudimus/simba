@@ -975,6 +975,7 @@ Subcommands:
     prune    Bulk-delete memories by age / confidence / type
     update   Update memory metadata
     reindex  Rebuild the hybrid-recall FTS keyword mirror from LanceDB
+    reembed  Re-embed the whole corpus with the current model (after a swap)
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
 
 store options:
@@ -1058,6 +1059,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_update(rest)
     elif subcmd == "reindex":
         return _memory_reindex(rest)
+    elif subcmd == "reembed":
+        return _memory_reembed(rest)
     elif subcmd == "consolidate":
         return _memory_consolidate(rest)
     else:
@@ -1088,6 +1091,32 @@ def _memory_reindex(args: list[str]) -> int:
         print("no FTS mirror configured (hybrid recall disabled?)")
         return 0
     print(f"reindexed: {body.get('indexed', 0)} memories")
+    return 0
+
+
+def _memory_reembed(args: list[str]) -> int:
+    """Re-embed the whole corpus with the current model (after an embedder swap)."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    url = simba.hooks._memory_client.daemon_url()
+    print("re-embedding the corpus (this can take a while)…", file=sys.stderr)
+    try:
+        resp = httpx.post(f"{url}/reembed", timeout=3600.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    if body.get("status") == "not_ready":
+        print("daemon not ready (no table/embedder)")
+        return 1
+    print(f"reembedded: {body.get('count', 0)} memories")
     return 0
 
 

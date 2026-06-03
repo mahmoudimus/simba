@@ -47,14 +47,34 @@ class EmbeddingService:
 
     @property
     def is_http_mode(self) -> bool:
-        return bool(self.config.embed_url)
+        return self._backend == "http"
+
+    @property
+    def _backend(self) -> str:
+        """Resolve the embedding backend: llm-cli | http | gguf."""
+        if self.config.embed_provider == "llm-cli":
+            return "llm-cli"
+        if self.config.embed_url:
+            return "http"
+        return "gguf"
+
+    def _prefixed(self, text: str, task: TaskType) -> str:
+        """Prepend the configured doc/query task prefix to the text."""
+        prefix = (
+            self.config.embed_doc_prefix
+            if task is TaskType.DOCUMENT
+            else self.config.embed_query_prefix
+        )
+        return f"{prefix}{text}"
 
     async def start(self) -> None:
         """Load the model or connect to the HTTP server, then start the queue."""
-        if self.is_http_mode:
+        backend = self._backend
+        if backend == "http":
             await self._start_http()
-        else:
+        elif backend == "gguf":
             await self._start_local()
+        # llm-cli: nothing to load; each embed shells out per-call.
         self._task = asyncio.create_task(self._process_loop())
 
     async def _start_local(self) -> None:
@@ -101,8 +121,11 @@ class EmbeddingService:
         while True:
             text, task, future = await self._queue.get()
             try:
-                if self.is_http_mode:
+                backend = self._backend
+                if backend == "http":
                     result = await self._embed_http(text, task)
+                elif backend == "llm-cli":
+                    result = await asyncio.to_thread(self._embed_llm_cli, text, task)
                 else:
                     result = await asyncio.to_thread(self._embed_sync, text, task)
                 future.set_result(result)
@@ -157,7 +180,7 @@ class EmbeddingService:
     def _embed_sync(self, text: str, task: TaskType) -> list[float]:
         """Synchronous embedding call (runs in executor thread)."""
         assert self._model is not None
-        prefixed = f"{task.value}: {text}"
+        prefixed = self._prefixed(text, task)
         result = self._model.create_embedding(prefixed)
         embedding = result["data"][0]["embedding"]
         assert isinstance(embedding, list)
@@ -165,10 +188,36 @@ class EmbeddingService:
 
     # ── HTTP (external server) backend ──────────────────────────────
 
+    def _embed_llm_cli(self, text: str, task: TaskType) -> list[float]:
+        """Embed via the `llm` CLI (`llm embed -c <text> -f json`).
+
+        As local as the chosen `llm` embedding model — a cloud model here would
+        cross the no-external-embedding-services line, so this is opt-in. The
+        model name comes from ``config.embedding_model``.
+        """
+        import json
+        import subprocess
+
+        prefixed = self._prefixed(text, task)
+        argv = [
+            "llm", "embed",
+            "-m", self.config.embedding_model,
+            "-c", prefixed,
+            "-f", "json",
+        ]
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0:
+            msg = f"llm embed failed: {proc.stderr.strip()[:200]}"
+            raise RuntimeError(msg)
+        vec = json.loads(proc.stdout.strip())
+        if not isinstance(vec, list):
+            raise ValueError("llm embed did not return a JSON list")
+        return [float(x) for x in vec]
+
     async def _embed_http(self, text: str, task: TaskType) -> list[float]:
         """Call the external OpenAI-compatible embedding endpoint."""
         assert self._http_client is not None
-        prefixed = f"{task.value}: {text}"
+        prefixed = self._prefixed(text, task)
         response = await self._http_client.post(
             "/v1/embeddings",
             json={
