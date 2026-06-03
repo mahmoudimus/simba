@@ -22,3 +22,11 @@ class SyncConfig:
     # (experimental); runs in the background sync pipeline, not the hot path.
     llm_extract_enabled: bool = True
     llm_extract_max_triples: int = 8
+    # Extraction strategy for the KG feed: "regex" (heuristics only), "llm"
+    # (LLM only), or "llm+regex" (both, unioned — the primary feed). Default
+    # "llm+regex" so the KG is richly fed; degrades to regex when no llm provider.
+    extract_strategy: str = "llm+regex"
+    # Safety cap: max memories LLM-extracted per cycle (0 = unlimited). Bounds the
+    # cost of the first sweep over a large backlog; the rest are picked up next
+    # cycle (the watermark only advances past processed memories).
+    llm_extract_max_per_cycle: int = 100

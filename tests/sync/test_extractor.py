@@ -13,6 +13,26 @@ from simba.sync.extractor import ExtractResult, run_extract
 from simba.sync.watermarks import _init_schema
 
 
+@pytest.fixture(autouse=True)
+def _no_live_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force regex-only extraction in these legacy pipeline tests.
+
+    With ``extract_strategy=llm+regex`` (default) and a configured llm provider,
+    ``run_extract`` would make real LLM calls — nondeterministic and dependent on
+    local provider availability. These tests exercise the regex/pipeline mechanics,
+    so make the llm client unavailable. (The LLM path is covered by
+    test_extract_strategy.py and test_run_extract_llm.)
+    """
+
+    class _Unavailable:
+        def available(self) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        "simba.llm.client.get_client", lambda *a, **k: _Unavailable()
+    )
+
+
 @pytest.fixture()
 def db_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create a test DB with watermarks and the kg_edges schema.
@@ -250,3 +270,64 @@ class TestRunExtract:
             result = run_extract(db_dir)
         assert result.memories_processed == 0
         assert result.errors == 0
+
+
+class _FakeLlm:
+    def __init__(self, triple=("gh", "causes", "401")):
+        self._triple = triple
+
+    def available(self) -> bool:
+        return True
+
+    def complete_json(self, prompt):
+        s, p, o = self._triple
+        return [{"subject": s, "predicate": p, "object": o}]
+
+
+class TestRunExtractLlm:
+    @patch("httpx.Client")
+    def test_llm_plus_regex_unions_and_stores(
+        self, mock_client_cls: MagicMock, db_dir: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr("simba.llm.client.get_client", lambda *a, **k: _FakeLlm())
+        client = MagicMock()
+        mock_client_cls.return_value = client
+        # content matches the regex ("use X for Y"); llm adds a second triple
+        memories = [{
+            "id": "m1", "type": "WORKING_SOLUTION",
+            "content": "use ruff for linting", "context": "",
+            "createdAt": "2025-01-01T00:00:00",
+        }]
+        client.get.return_value = _mock_list_response(memories)
+        with patch(
+            "simba.db.get_db", side_effect=lambda *a, **kw: _mock_get_db(db_dir)
+        ):
+            result = run_extract(db_dir)
+        # regex (ruff,solves,linting) + llm (gh,causes,401), unioned
+        assert result.memories_processed == 1
+        assert result.facts_extracted == 2
+
+    @patch("httpx.Client")
+    def test_per_cycle_cap_limits_llm(
+        self, mock_client_cls: MagicMock, db_dir: Path, monkeypatch
+    ) -> None:
+        import simba.sync.config as sc
+
+        monkeypatch.setattr(
+            "simba.sync.extractor._sync_cfg",
+            lambda: sc.SyncConfig(extract_strategy="llm", llm_extract_max_per_cycle=1),
+        )
+        monkeypatch.setattr("simba.llm.client.get_client", lambda *a, **k: _FakeLlm())
+        client = MagicMock()
+        mock_client_cls.return_value = client
+        memories = [
+            {"id": f"m{i}", "type": "PATTERN", "content": f"fact {i}",
+             "context": "", "createdAt": f"2025-01-0{i}T00:00:00"}
+            for i in (1, 2, 3)
+        ]
+        client.get.return_value = _mock_list_response(memories)
+        with patch(
+            "simba.db.get_db", side_effect=lambda *a, **kw: _mock_get_db(db_dir)
+        ):
+            result = run_extract(db_dir)
+        assert result.memories_processed == 1  # cap stopped the cycle after one
