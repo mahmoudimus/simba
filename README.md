@@ -287,6 +287,11 @@ inside hooks with no extra model call:
   `created` date and the most-recently-created one is flagged `recency="newest"`,
   so the model can prefer fresher facts when two memories conflict (the relevance
   order itself is untouched).
+- **Multi-arm HyDE** *(opt-in)* — with `memory.expansion_enabled`, a **second
+  vector arm** embeds the focused-term string as its own query and is fused into
+  RRF alongside the full-query vector arm and the keyword arm. It often nails
+  identifiers/entities the full-query embedding blurs, at the cost of one extra
+  embed per recall (off by default).
 
 ```bash
 simba config set memory.intent_aware true           # adapt breadth to query intent
@@ -294,6 +299,22 @@ simba config set memory.min_similarity_broad 0.28   # cosine floor for broad que
 simba config set memory.max_results_broad 8         # results returned for broad queries
 simba config set memory.fts_candidate_pool_broad 40 # RRF candidate pool for broad queries
 simba config set memory.fts_max_terms 12            # cap on high-signal keyword-arm terms
+simba config set memory.expansion_enabled true      # 2nd HyDE vector arm (opt-in)
+```
+
+### Supersession on store
+
+By default `/store` rejects an exact duplicate (cosine ≥ `duplicate_threshold`,
+0.92). With **`memory.supersede_enabled`** on, a *near*-duplicate of the **same
+type and project** — similarity in `[supersede_threshold, duplicate_threshold)` —
+**replaces** the older memory instead of appending another near-copy: the old row
+is deleted from both LanceDB and the keyword mirror and `/store` returns
+`{"status": "superseded", "supersededId": ...}`. This keeps the freshest version
+of an evolving note. Off by default.
+
+```bash
+simba config set memory.supersede_enabled true    # replace near-dupes (opt-in)
+simba config set memory.supersede_threshold 0.85  # band floor (below duplicate_threshold)
 ```
 
 ## Neuron — Neuro-Symbolic Logic Server
@@ -309,18 +330,34 @@ simba neuron install
 
 ### MCP Tools
 
-Neuron exposes 4 verification tools via the Model Context Protocol (plus 6 RLM recall tools — see [RLM](#rlm--lossless-transcript-recall) below):
+Neuron exposes verification + knowledge-graph tools via the Model Context Protocol (plus 6 RLM recall tools — see [RLM](#rlm--lossless-transcript-recall) below):
 
 | Tool | Purpose |
 |------|---------|
-| `truth_add` | Record a proven fact into the Truth DB (SQLite) |
-| `truth_query` | Query the Truth DB for existing proven facts |
 | `verify_z3` | Execute a Z3 proof script in an isolated process |
 | `analyze_datalog` | Run a Souffle Datalog analysis program |
+| `truth_add` | Record a proven fact into the Truth DB (SQLite) |
+| `truth_query` | Query the Truth DB for existing proven facts |
+| `kg_add` | Insert an open temporal edge (subject/predicate/object + optional `occurred_at`) |
+| `kg_query` | FTS/bm25 + bitemporal query (`as_of`, `occurred_after`/`occurred_before`) |
+| `kg_invalidate` | Close matching open edges (stamp `valid_to`) |
 
-### Truth Database
+### Temporal knowledge graph (bitemporal)
 
-A local SQLite database (`.simba/simba.db`, `proven_facts` table) that stores proven facts as subject-predicate-object triples with their proof text. Claude queries this before making assumptions about the codebase.
+The KG (`.simba/simba.db`, `kg_edges` + an FTS5/bm25 mirror) stores facts as
+subject–predicate–object triples on **two independent time axes**:
+
+- **Belief time** — `valid_from` / `valid_to`: when the fact was on record.
+  `kg_query(as_of=…)` snapshots it; an edge with `valid_to = NULL` is currently
+  valid, and `kg_invalidate` closes it.
+- **Event time** — `occurred_at`: when the fact was true in the world. Populated
+  from narrative dates during fact extraction (e.g. "shipped March 5, 2024" or
+  "yesterday" resolved against the memory's timestamp) and bounded with
+  `kg_query(occurred_after=…, occurred_before=…)`.
+
+`kg_edges` supersedes the legacy `proven_facts` table (migrated automatically on
+first connect). `simba db facts` lists currently-valid edges, printing the
+`occurred:` event date when known.
 
 ```bash
 # Run the MCP server directly
@@ -533,6 +570,20 @@ Manual skill for auditing the memory database:
 
 Use when memory quality degrades or after bulk extraction sessions.
 
+### `/memories-recall-verify` — Self-Correcting Recall
+
+Use before answering a memory-dependent question when the recalled memories look
+**ambiguous, conflicting, scope-mismatched, or insufficient**. Instead of
+answering from the first plausible hit, the skill drives a correction loop:
+
+1. Recall via `simba memory recall "<question>"`.
+2. Detect the failure mode (multiple instances of a generic referent, conflicting
+   values, wrong-entity match, or nothing relevant).
+3. **Re-query** with a narrower entity/attribute; broaden only if empty.
+4. Resolve conflicts by recency (`recency="newest"` / KG `valid_to`).
+5. Answer with a clear winner, **ask** to disambiguate when still unclear, or say
+   "not in memory" — never fabricate.
+
 ### Memory Pipeline Flow
 
 ```
@@ -705,6 +756,8 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall (precise queries) |
 | `max_results` | 3 | Maximum memories returned per query (precise queries) |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
+| `supersede_enabled` | false | Replace a near-duplicate same-type memory on store |
+| `supersede_threshold` | 0.85 | Supersede band floor (below `duplicate_threshold`) |
 | `max_content_length` | 200 | Maximum memory content length (chars) |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
@@ -720,12 +773,13 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `max_results_broad` | 8 | Maximum memories returned for broad queries |
 | `fts_candidate_pool_broad` | 40 | Candidate pool for broad queries |
 | `fts_max_terms` | 12 | Cap on high-signal terms fed to the keyword arm |
+| `expansion_enabled` | false | 2nd HyDE vector arm over the focused-term string |
 
 ### Neuron
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `db_path` | `.simba/simba.db` | Truth database (proven_facts table) |
+| `db_path` | `.simba/simba.db` | Truth DB + temporal knowledge graph (`kg_edges`) |
 
 ### Orchestration
 
