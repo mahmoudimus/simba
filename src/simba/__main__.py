@@ -2045,11 +2045,19 @@ def _cmd_eval(args: list[str]) -> int:
             i += 1
         else:
             print(f"Unknown eval option: {args[i]}", file=sys.stderr)
-            print("Usage: simba eval run [--dataset PATH] [--ks 1,3,5] [--json]")
+            print("Usage: simba eval run [--dataset NAME|PATH] [--ks 1,3,5] [--json]")
             return 1
 
     ecfg = simba.config.load("eval")
-    dataset_path = dataset_arg or ecfg.dataset or str(report.default_dataset_path())
+    dataset_ref = dataset_arg or ecfg.dataset
+    if dataset_ref:
+        try:
+            dataset_path = str(report.resolve_dataset(dataset_ref))
+        except FileNotFoundError as exc:
+            print(f"eval: {exc}", file=sys.stderr)
+            return 1
+    else:
+        dataset_path = str(report.default_dataset_path())
     ks = (
         simba.eval.config.EvalConfig(ks=ks_arg).ks_tuple()
         if ks_arg

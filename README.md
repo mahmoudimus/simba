@@ -317,20 +317,34 @@ simba config set memory.supersede_enabled true    # replace near-dupes (opt-in)
 simba config set memory.supersede_threshold 0.85  # band floor (below duplicate_threshold)
 ```
 
+### Composite scoring (recency + importance)
+
+RRF orders purely by relevance. With **`memory.scoring_enabled`** on, a post-fusion step blends that relevance with **recency** (exponential decay on `createdAt`) and **importance** (the stored `confidence`) so the freshest / most-trusted memory wins a near-tie — the [Generative Agents](https://arxiv.org/abs/2304.03442) retrieval idea. Relevance stays **dominant**: recency/importance are tie-breakers, never the sole signal (a recency-only ranker just returns the newest memory regardless of the query).
+
+```bash
+simba config set memory.scoring_enabled true        # opt in to the measured blend
+simba config set memory.score_weight_recency 0.5    # tie-breaker weights (defaults shown)
+simba config set memory.score_weight_importance 0.3
+simba config set memory.recency_halflife_days 90
+```
+
+Measured with the eval harness (live embedder): on the time-sensitive `simba-temporal` set — each query's answer is the *fresh* version of a near-duplicate fact — scoring lifts **recall@1 from 0.63 → 1.00** (MRR 0.81 → 1.00); on the general `simba-seed` set (uniform dates) it is an exact **no-op**. Off by default.
+
 ## Eval — Recall Benchmark
 
 Recall quality used to be unmeasured — every ranking change was a guess. The eval harness fixes that: it scores the **real** recall stack (`plan_recall` → `hybrid_search` → RRF, the exact path `/recall` uses) against a curated dataset and reports standard IR metrics.
 
 ```bash
 simba eval run                          # score the bundled simba-seed dataset
-simba eval run --dataset path/to.json   # a custom dataset
+simba eval run --dataset temporal       # a bundled dataset by name
+simba eval run --dataset path/to.json   # a custom dataset by path
 simba eval run --ks 1,3,5 --json        # custom cutoffs / machine-readable
 ```
 
 - **Metrics**: `recall@k`, `precision@k`, `hit@k`, `ndcg@k`, and `mrr` (means over cases); the text report also lists the worst cases by MRR so failures are visible, not averaged away.
 - **In-process & non-invasive**: the harness builds a throwaway LanceDB table + FTS mirror from the dataset corpus — it never touches your real memory store — and embeds with the same local GGUF model as production.
 - **Dataset format** — one JSON file: `{"corpus": [{id, content, type}...], "cases": [{id, query, relevant_ids}...]}`. Loading validates that every `relevant_id` resolves and corpus ids are unique, so a typo fails loudly instead of silently scoring zero.
-- **The bundled `simba-seed`** is deliberately hard (tight clusters that share an entity but differ in the fact, adversarial keyword-overlap distractors, broad multi-relevant aggregation cases) — a perfect score would mean the dataset is too easy, not that recall is solved.
+- **Bundled datasets**: `simba-seed` is deliberately hard (tight clusters that share an entity but differ in the fact, adversarial keyword-overlap distractors, broad multi-relevant aggregation cases) — a perfect score would mean the dataset is too easy, not that recall is solved. `simba-temporal` pairs each fact with the stale version it superseded, to measure recency/importance scoring.
 
 Config: `eval.ks` (default `1,3,5,10`) and `eval.dataset` (empty ⇒ bundled seed), both via `simba config`.
 

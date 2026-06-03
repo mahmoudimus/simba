@@ -51,6 +51,17 @@ class MemoryConfig:
     fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
     # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
     expansion_enabled: bool = False  # opt-in (costs one extra embed per recall)
+    # Composite re-scoring: blend RRF relevance with recency + importance after
+    # fusion. Opt-in (scoring_enabled). The default weights are the measured-good
+    # blend — relevance-dominant, with recency + importance as tie-breakers
+    # (never the sole signal, which would ignore the query) — so flipping the
+    # flag activates a benefit on time-sensitive recall and is a no-op when a
+    # corpus has uniform dates/confidence. See datasets/temporal.json.
+    scoring_enabled: bool = False
+    score_weight_relevance: float = 1.0
+    score_weight_recency: float = 0.5
+    score_weight_importance: float = 0.3  # uses the stored confidence as importance
+    recency_halflife_days: float = 90.0
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

@@ -34,6 +34,20 @@ class TestPhase0Defaults:
         assert config.MemoryConfig().expansion_enabled is False
 
 
+class TestScoringDefaults:
+    def test_scoring_off_by_default(self) -> None:
+        assert config.MemoryConfig().scoring_enabled is False
+
+    def test_relevance_dominant_blend(self) -> None:
+        # Enabling the flag should activate the measured-good blend: relevance
+        # dominant, recency + importance as tie-breakers (never the sole signal).
+        cfg = config.MemoryConfig()
+        assert cfg.score_weight_relevance == 1.0
+        assert 0.0 < cfg.score_weight_recency < cfg.score_weight_relevance
+        assert 0.0 < cfg.score_weight_importance < cfg.score_weight_relevance
+        assert cfg.recency_halflife_days > 0
+
+
 class TestSupersedeDefaults:
     def test_supersede_off_by_default(self) -> None:
         assert config.MemoryConfig().supersede_enabled is False

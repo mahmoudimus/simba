@@ -1,0 +1,32 @@
+{
+  "name": "simba-temporal",
+  "description": "Recency/importance benchmark: each cluster pairs a STALE fact (old, low confidence) with the FRESH fact that superseded it (recent, high confidence). The two are near-identical in wording, so cosine relevance can't tell them apart — only recency/importance can. The gold answer is always the fresh one. Use it to measure composite scoring: run with memory.scoring_enabled off vs on.",
+  "corpus": [
+    {"id": "floor_old", "type": "DECISION", "content": "the recall cosine similarity floor is 0.40", "created_at": "2025-01-15T00:00:00Z", "confidence": 0.60},
+    {"id": "floor_new", "type": "DECISION", "content": "the recall cosine similarity floor is 0.35", "created_at": "2026-05-20T00:00:00Z", "confidence": 0.97},
+    {"id": "port_old", "type": "DECISION", "content": "the memory daemon listens on port 8765", "created_at": "2024-11-01T00:00:00Z", "confidence": 0.55},
+    {"id": "port_new", "type": "DECISION", "content": "the memory daemon listens on port 8741", "created_at": "2026-05-22T00:00:00Z", "confidence": 0.98},
+    {"id": "model_old", "type": "PATTERN", "content": "simba embeds text with the all-MiniLM-L6-v2 sentence-transformer model", "created_at": "2024-09-10T00:00:00Z", "confidence": 0.50},
+    {"id": "model_new", "type": "PATTERN", "content": "simba embeds text with the nomic-embed-text-v1.5 GGUF model via llama-cpp-python", "created_at": "2026-05-18T00:00:00Z", "confidence": 0.96},
+    {"id": "dup_old", "type": "DECISION", "content": "the duplicate-detection cosine threshold is 0.95", "created_at": "2025-02-01T00:00:00Z", "confidence": 0.58},
+    {"id": "dup_new", "type": "DECISION", "content": "the duplicate-detection cosine threshold is 0.92", "created_at": "2026-05-21T00:00:00Z", "confidence": 0.95},
+    {"id": "cap_old", "type": "DECISION", "content": "memory content is capped at 1000 characters", "created_at": "2025-03-01T00:00:00Z", "confidence": 0.52},
+    {"id": "cap_new", "type": "DECISION", "content": "memory content is capped at 200 characters", "created_at": "2026-05-19T00:00:00Z", "confidence": 0.97},
+    {"id": "rrf_old", "type": "PATTERN", "content": "Reciprocal Rank Fusion uses rrf_k = 40 to dampen low-ranked items", "created_at": "2025-04-01T00:00:00Z", "confidence": 0.60},
+    {"id": "rrf_new", "type": "PATTERN", "content": "Reciprocal Rank Fusion uses rrf_k = 60 to dampen low-ranked items", "created_at": "2026-05-23T00:00:00Z", "confidence": 0.95},
+    {"id": "engine_old", "type": "DECISION", "content": "the RLM autonomous engine defaults to the opus model for transcript digests", "created_at": "2025-01-20T00:00:00Z", "confidence": 0.50},
+    {"id": "engine_new", "type": "DECISION", "content": "the RLM autonomous engine defaults to the cheap haiku model, never opus", "created_at": "2026-05-24T00:00:00Z", "confidence": 0.96},
+    {"id": "poll_old", "type": "PATTERN", "content": "the SessionStart hook polls the daemon 8 times at 500ms before giving up", "created_at": "2025-02-15T00:00:00Z", "confidence": 0.55},
+    {"id": "poll_new", "type": "PATTERN", "content": "the SessionStart hook polls the daemon 15 times at 300ms before giving up", "created_at": "2026-05-25T00:00:00Z", "confidence": 0.95}
+  ],
+  "cases": [
+    {"id": "tc_floor", "query": "what is the recall cosine similarity floor", "relevant_ids": ["floor_new"], "intent": "precise"},
+    {"id": "tc_port", "query": "what port does the memory daemon listen on", "relevant_ids": ["port_new"], "intent": "precise"},
+    {"id": "tc_model", "query": "which model does simba use to embed text", "relevant_ids": ["model_new"], "intent": "precise"},
+    {"id": "tc_dup", "query": "what cosine threshold marks a duplicate memory", "relevant_ids": ["dup_new"], "intent": "precise"},
+    {"id": "tc_cap", "query": "how many characters can a memory hold", "relevant_ids": ["cap_new"], "intent": "precise"},
+    {"id": "tc_rrf", "query": "what value of rrf_k does reciprocal rank fusion use", "relevant_ids": ["rrf_new"], "intent": "precise"},
+    {"id": "tc_engine", "query": "which model does the RLM autonomous engine use by default", "relevant_ids": ["engine_new"], "intent": "precise"},
+    {"id": "tc_poll", "query": "how many times does SessionStart poll the daemon and at what interval", "relevant_ids": ["poll_new"], "intent": "precise"}
+  ]
+}

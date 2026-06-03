@@ -9,9 +9,32 @@ if TYPE_CHECKING:
     from simba.eval.runner import EvalReport
 
 
+def _datasets_dir() -> pathlib.Path:
+    return pathlib.Path(__file__).parent / "datasets"
+
+
 def default_dataset_path() -> pathlib.Path:
     """Path to the bundled seed dataset."""
-    return pathlib.Path(__file__).parent / "datasets" / "seed.json"
+    return _datasets_dir() / "seed.json"
+
+
+def resolve_dataset(name_or_path: str) -> pathlib.Path:
+    """Resolve a dataset reference: an existing path, or a bundled name.
+
+    Tries ``name_or_path`` as a filesystem path first, then a bundled dataset
+    (``datasets/<name>.json`` or ``datasets/<name>``). Raises FileNotFoundError
+    if neither resolves.
+    """
+    direct = pathlib.Path(name_or_path)
+    if direct.is_file():
+        return direct
+    for candidate in (
+        _datasets_dir() / f"{name_or_path}.json",
+        _datasets_dir() / name_or_path,
+    ):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"no dataset found for {name_or_path!r}")
 
 
 def format_report(rep: EvalReport, *, top_n_worst: int = 0) -> str:
