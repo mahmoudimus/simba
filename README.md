@@ -374,13 +374,20 @@ Recall quality used to be unmeasured — every ranking change was a guess. The e
 simba eval run                          # score the bundled simba-seed dataset
 simba eval run --dataset temporal       # a bundled dataset by name
 simba eval run --dataset path/to.json   # a custom dataset by path
+simba eval run --split test             # score only the held-out test split
 simba eval run --ks 1,3,5 --json        # custom cutoffs / machine-readable
+
+# Build a benchmark from your REAL corpus (LLM-generated queries, real distractors):
+simba eval build --n 50 --out real.json   # samples memories, makes a question per one
+simba eval run --dataset real.json --split test
 ```
 
 - **Metrics**: `recall@k`, `precision@k`, `hit@k`, `ndcg@k`, and `mrr` (means over cases); the text report also lists the worst cases by MRR so failures are visible, not averaged away.
 - **In-process & non-invasive**: the harness builds a throwaway LanceDB table + FTS mirror from the dataset corpus — it never touches your real memory store — and embeds with the same local GGUF model as production.
 - **Dataset format** — one JSON file: `{"corpus": [{id, content, type}...], "cases": [{id, query, relevant_ids}...]}`. Loading validates that every `relevant_id` resolves and corpus ids are unique, so a typo fails loudly instead of silently scoring zero.
 - **Bundled datasets**: `simba-seed` is deliberately hard (tight clusters that share an entity but differ in the fact, adversarial keyword-overlap distractors, broad multi-relevant aggregation cases) — a perfect score would mean the dataset is too easy, not that recall is solved. `simba-temporal` pairs each fact with the stale version it superseded, to measure recency/importance scoring.
+- **Real-corpus builder** (`simba eval build`): samples your actual memories and asks the LLM to write a natural question each one answers — the source memory is the gold, the rest of the sample are real distractors. This measures recall on real content with non-author-biased queries, instead of small synthetic sets that saturate.
+- **Held-out split**: every case is deterministically assigned to `dev` or `test` (stable hash of its id, unless it pins `"split"`). Tune on `--split dev`, report on `--split test`, so tuning can't silently overfit the number you quote.
 
 Config: `eval.ks` (default `1,3,5,10`) and `eval.dataset` (empty ⇒ bundled seed), both via `simba config`.
 

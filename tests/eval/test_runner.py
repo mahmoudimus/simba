@@ -65,3 +65,23 @@ def test_empty_dataset_safe() -> None:
     rep = runner.run_eval(empty, _retriever, ks=(1,))
     assert rep.n_cases == 0
     assert rep.aggregate["recall@1"] == 0.0
+
+
+def test_run_eval_split_filters_cases() -> None:
+    import simba.eval.splits as sp
+
+    cases = [
+        ds.EvalCase(id="a", query="qa", relevant_ids=["m1"], split="dev"),
+        ds.EvalCase(id="b", query="qb", relevant_ids=["m2"], split="test"),
+        ds.EvalCase(id="c", query="qc", relevant_ids=["m3"], split="test"),
+    ]
+    dset = ds.Dataset(
+        name="s",
+        corpus=[ds.Memory(id=f"m{i}", content="x") for i in (1, 2, 3)],
+        cases=cases,
+    )
+    rep = runner.run_eval(dset, lambda q: ["m1"], ks=(1,), split="test")
+    assert rep.n_cases == 2  # only the two 'test' cases scored
+    assert {c.case_id for c in rep.per_case} == {"b", "c"}
+    # sanity: select agrees
+    assert len(sp.select(cases, "test")) == 2

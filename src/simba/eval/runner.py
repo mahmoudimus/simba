@@ -75,10 +75,15 @@ def run_eval(
     ks: tuple[int, ...] = _DEFAULT_KS,
     *,
     keep_top: int = 20,
+    split: str | None = None,
+    test_ratio: float = 0.5,
 ) -> EvalReport:
-    """Run ``retriever`` over every case and return an aggregated report."""
+    """Run ``retriever`` over the cases (optionally a dev/test split) and report."""
+    import simba.eval.splits
+
+    cases = simba.eval.splits.select(dataset.cases, split, test_ratio=test_ratio)
     per_case: list[CaseResult] = []
-    for case in dataset.cases:
+    for case in cases:
         ranked = list(retriever(case.query))
         cm = _case_metrics(ranked, set(case.relevant_ids), ks)
         per_case.append(

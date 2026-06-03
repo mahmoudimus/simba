@@ -29,8 +29,13 @@ def run_dataset(
     embed_query: EmbedFn,
     cfg: typing.Any | None = None,
     llm_client: typing.Any = None,
+    split: str | None = None,
 ) -> simba.eval.runner.EvalReport:
-    """Load a dataset, build the real recall retriever, and score it."""
+    """Load a dataset, build the real recall retriever, and score it.
+
+    ``split`` ("dev"/"test"/None) scores only that held-out partition; the
+    retriever is still built over the full corpus (all memories as distractors).
+    """
     cfg = cfg or simba.memory.config.MemoryConfig()
     dataset = simba.eval.dataset.load_dataset(dataset_path)
     retriever = simba.eval.recall_adapter.build_retriever(
@@ -41,7 +46,7 @@ def run_dataset(
         data_dir=data_dir,
         llm_client=llm_client,
     )
-    return simba.eval.runner.run_eval(dataset, retriever, ks=ks)
+    return simba.eval.runner.run_eval(dataset, retriever, ks=ks, split=split)
 
 
 def sync_embedders(cfg: typing.Any) -> tuple[EmbedFn, EmbedFn]:
