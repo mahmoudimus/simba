@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import shlex
 
 _SHELL_WRAPPERS = {"cmd", "powershell", "pwsh", "bash", "sh", "zsh"}
 _UV_RUN_OPTS_WITH_VALUE = {
@@ -78,7 +79,20 @@ def split_segments(command: str) -> list[str]:
 
 
 def tokenize(segment: str) -> list[str]:
-    """Split a segment into words, stripping quotes."""
+    """Split a segment into words — quote/escape-aware via shlex.
+
+    Uses ``shlex.split`` (POSIX) for correct handling of quotes and escapes.
+    Falls back to a lenient char-split on malformed input (unbalanced quotes)
+    so the hook can never crash on a weird command.
+    """
+    try:
+        return shlex.split(segment, posix=True)
+    except ValueError:
+        return _lenient_tokenize(segment)
+
+
+def _lenient_tokenize(segment: str) -> list[str]:
+    """Fallback tokenizer that never raises (best-effort on malformed quotes)."""
     words, buf, quote = [], [], None
     for ch in segment:
         if quote is not None:
