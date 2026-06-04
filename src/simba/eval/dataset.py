@@ -54,6 +54,7 @@ class EvalCase:
     intent: str = ""
     note: str = ""
     split: str = ""  # "dev" | "test" | "" (auto-assigned deterministically)
+    answer: str = ""  # gold answer (for the LLM-judge QA layer; "" = no gold)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> EvalCase:
@@ -64,6 +65,7 @@ class EvalCase:
             intent=raw.get("intent", ""),
             note=raw.get("note", ""),
             split=raw.get("split", ""),
+            answer=raw.get("answer", ""),
         )
 
 
@@ -101,6 +103,7 @@ class Dataset:
                     "intent": c.intent,
                     "note": c.note,
                     "split": c.split,
+                    "answer": c.answer,
                 }
                 for c in self.cases
             ],
