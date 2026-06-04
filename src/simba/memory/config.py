@@ -88,6 +88,17 @@ class MemoryConfig:
     # result by (query, candidate-set) for the next recurrence. Cache capacity:
     rerank_cache_size: int = 256
 
+    # KG-into-recall (the multi-hop bridge): seed from the top vector hits, walk
+    # the KG to entity-connected memories (the GraphRAG "COOCCURS" expansion), and
+    # fold those bridged memories into RRF as another ranked arm. Off by default
+    # (opt-in until measured on the benchmark); fail-open (no KG / any error leaves
+    # the vector+keyword fusion intact).
+    kg_recall_enabled: bool = False
+    kg_recall_seed_top_n: int = 5  # how many top vector hits seed the KG walk
+    kg_recall_hops: int = 1  # neighbor depth in the KG traversal
+    kg_recall_max_neighbors: int = 20  # cap of bridged memories folded in
+    kg_recall_weight: float = 1.0  # RRF weight of the KG arm
+
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
     """Load config from TOML files, then apply CLI/keyword overrides."""
