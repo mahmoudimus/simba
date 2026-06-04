@@ -9,7 +9,16 @@ Check the dispatch mode:
 simba config get hooks.learn_async
 ```
 
-Then read ~/.claude/transcripts/latest.json to get the transcript path, session ID, and project path.
+Resolve the transcript for THIS project (never the global `latest.json` — it is a
+single symlink overwritten by whichever session compacted last, across all
+projects, so it cross-wires sessions):
+```bash
+simba transcript pending --json
+```
+This prints the newest `pending_extraction` transcript whose `project_path` matches
+the current working directory: `{transcript_path, session_id, project_path}` (or
+`{}` + exit 1 if there is nothing to extract for this project — in that case stop,
+there is no work to do). Use those three values below.
 
 Build this Task prompt:
 ```
@@ -42,3 +51,10 @@ Extract 5-15 quality learnings.
 Dispatch using the Task tool with subagent_type=memory-extractor:
 - If hooks.learn_async is "true": set run_in_background=true (fire and forget)
 - Otherwise: dispatch normally and wait for completion
+
+After the extractor finishes (synchronous mode only), mark the transcript done so
+it isn't re-extracted on the next run:
+```bash
+simba transcript mark-extracted <SESSION_ID>
+```
+(In async mode, skip this — the background agent owns completion.)
