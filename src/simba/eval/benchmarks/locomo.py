@@ -68,6 +68,7 @@ def load_locomo_data(
                     query=str(qa.get("question", "")),
                     relevant_ids=gold,
                     intent=_CATEGORY.get(category, str(category)),
+                    answer=str(qa.get("answer") or ""),
                 )
             )
         if corpus and cases:
