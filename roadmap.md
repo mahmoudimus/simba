@@ -11,8 +11,9 @@ resolution** (#19), **multi-hop KG** traversal (#20), the **LLM reranker + extra
 local providers** with experimental defaults on (#21), the **non-blocking rerank
 cache** (#22), the **swappable embedder** (#23), **eval hardening** — real-corpus
 builder + dev/test split (#24), **LLM extraction as the primary KG feed** (Phase 3,
-#25), and the **tool-call redirect** layer (#26/#27). In flight on `feat/benchmarks`:
-the **LoCoMo / LongMemEval recall@k harness** (`simba.eval.benchmarks`).
+#25), and the **tool-call redirect** layer (#26/#27). Then the **external benchmark
+harness** — LoCoMo / LongMemEval recall@k + LLM-judge QA (#28) — and the **eval
+infra** that makes reruns cheap: embedding + judge caches + dataset fetch (#29).
 
 Honest standing: the *architecture* is at/near SOTA on most axes; the **evidence**
 is firming up — the authored eval datasets saturate (MRR→1.0), but the new external
@@ -43,6 +44,82 @@ The consistent headline across all three: **multi-hop / cross-session is the wea
 axis** — exactly what the KG (#4/#19/#20) should win and doesn't yet feed recall.
 Caveats: numbers are recall@k / deepseek-judged (not GPT-4-judged like Mem0/Zep);
 LongMemEval is oracle (not full `longmemeval_s`).
+
+## Eval execution program (active — 2026-06-04)
+
+Turn the harness from a one-off spike into a disciplined program, then close the
+gaps as **measured deltas**. Approved decisions: **local-only judge** (a different
+local model than the answerer, to cut self-grading bias); **balanced sequencing**
+(thin infra + the first lever in parallel); **attack all the levers**.
+
+**Discipline (every item):** tune on dev, report on test (`eval/splits.py`); never
+tune to saturate ([[eval-do-not-chase-1.0]]); each lever = one PR off `main` (no
+stacking) with an **ablation table** (baseline vs +lever, test split) for its target
+category **+ latency p50/p95** (the daemon is the product). Levers plug into
+`plan_recall` + `hybrid_search`, shared by the live `routes.py` path and the eval
+`recall_adapter.py`, so the benchmark measures what ships.
+
+### Done — Workstream A infra (shipped)
+- **A1+A2 (#29):** `scripts/fetch_benchmarks.sh` (gitignored `.simba/benchmarks/`,
+  checksums) + persistent **embedding cache** (`memory/embedding_cache.py`, sqlite,
+  `sha1(model_id|prefix|content)→vector`) wired into `eval/run.sync_embedders`.
+- **A3 (#29):** **judge-verdict cache** (`eval/benchmarks/judge_cache.py`,
+  `sha1(judge_model|q|gold|pred)→bool`) wired into `judge.score_case`/`run_qa`.
+
+### Next — Workstream A (remaining)
+- **A4 — `simba eval bench` CLI.** Config-driven subcommand in `__main__.py` mirroring
+  `eval run`/`eval build`: `simba eval bench locomo|longmemeval [--qa] [--n|--per N]
+  [--k] [--split test] [--json]`. Reads `eval`/`memory`/`judge` sections (no hidden
+  constants). Replaces the ad-hoc `scripts/run_*.py`.
+- **A5 — results store + leaderboard.** Append every run (git SHA, config snapshot,
+  metrics) to `.simba/eval/results.jsonl` (append-only); `simba eval leaderboard`
+  renders a committed `BENCHMARKS.md` (current vs baseline). Reuse
+  `EvalReport.to_dict()`.
+- **A6 — CI smoke.** Tiny synthetic fixture run in CI so the harness never rots; full
+  runs stay manual/local.
+
+### Workstream B — honest baselines (lock the test-split numbers)
+- **B1 — configurable local judge.** New `judge` `@configurable` section
+  (provider/model/thinking/timeout); `get_client(judge_cfg)` already accepts a cfg.
+  Default a *different* local model from the answerer (reduce self-grading bias); note
+  it in the report.
+- **B2 — full LoCoMo** QA + recall@k on the test split → lock in results.jsonl /
+  BENCHMARKS.md.
+- **B3 — full `longmemeval_s`** (real haystack, not oracle): recall@k + QA +
+  **abstention accuracy** for `_abs` questions. Label oracle vs s explicitly.
+- **B4 — exact leaderboard metrics + latency.** LoCoMo per-category J; LongMemEval
+  per-type accuracy + abstention; per-query latency p50/p95 added to `runner.py`
+  CaseResult. Everything after B is a delta vs these.
+
+### Workstream C — close the gaps (levers, each a measured-delta PR)
+- **C1 — KG-into-recall (the #1 lever).** *Approach (2026-06-04): borrow GraphQLite's
+  `llm-graphrag` retrieval pipeline, not a graph library* ([[graph-lib-eval-borrow-not-vendor]]
+  — vendoring GraphQLite (C ext) / graphdb (stale, pickle) rejected; simba's `kg_edges`
+  is already richer). Replicate the HippoRAG-style pipeline on simba's existing BFS:
+  **(1) vector/RRF seed → (2) graph traversal over `kg_edges` (`kg_neighbors` /
+  `kg_query(expand_hops)`, `kg/store.py`) → (3) community signal → (4) merge neighbor
+  source-memory ids into candidates** after `rrf_fuse` (`hybrid.py:170`), before
+  `composite_rescore`; fail-open. Config `kg_recall_enabled` / `kg_recall_hops` /
+  `kg_recall_max_neighbors`. **Community detection** starts as pure-Python
+  **label-propagation** (~40 LOC, no deps) — simpler than Louvain, upgrade later;
+  **PPR deferred**. **Risk:** bench corpora have no KG — to measure, `recall_adapter`
+  must build a *throwaway KG* from the corpus (regex extractor for speed); if it's too
+  sparse to help, that itself is the finding (KG density is the bottleneck). Highest
+  value, riskiest — do first within C.
+- **C2 — reranker ON.** Config flip (`llm_rerank_enabled=True`, `mode=sync`) + pass
+  `llm_client` (already plumbed in `recall_adapter`). Measure precision/MRR/QA delta +
+  latency cost. Cheapest lever.
+- **C3 — true LLM HyDE** (this is **Phase 4**, reframed as a measured lever). New
+  `hyde_mode` (`keyword`|`llm`); when `llm`, generate a hypothetical answer via
+  `llm.client`, embed it as the 2nd vector arm (`extra_embedding`). Reuse the
+  non-blocking cache so it's off the daemon hot path; sync in bench. Measure
+  open-domain.
+
+> **C4 — query decomposition** (split multi-hop queries → sub-queries → RRF-fuse;
+> complements C1) remains in the approved plan as a follow-on after C1–C3 land.
+
+**Sequencing:** A4→A5 (+A6) ‖ C1 scaffolding; then B (baselines, cheap now that
+caches exist); then C2 → C3, each updating BENCHMARKS.md.
 
 ## Next → Phase 4 (Phase 3 shipped in #25)
 
