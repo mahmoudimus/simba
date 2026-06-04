@@ -12,6 +12,7 @@ so the grading flow is unit-tested with fakes (no LanceDB, no live model).
 
 from __future__ import annotations
 
+import dataclasses
 import tempfile
 import typing
 
@@ -84,6 +85,50 @@ def aggregate(rows: list[tuple[str, bool]]) -> dict[str, typing.Any]:
             for cat, xs in sorted(by_cat.items())
         },
     }
+
+
+def sample_cases(
+    datasets: list[Dataset],
+    *,
+    n: int | None = None,
+    per_category: int | None = None,
+) -> list[Dataset]:
+    """Select answerable cases, returning datasets with only the picked cases.
+
+    ``per_category``: balanced — up to that many cases per intent, pooled across
+    all datasets (representative). ``n``: the first n answerable cases in order.
+    Datasets with no picks are dropped; each kept dataset keeps its full corpus.
+    """
+    selected: set[str] = set()
+    if per_category is not None:
+        counts: dict[str, int] = {}
+        for dset in datasets:
+            for c in dset.cases:
+                if not c.answer.strip():
+                    continue
+                intent = c.intent or "?"
+                if counts.get(intent, 0) < per_category:
+                    counts[intent] = counts.get(intent, 0) + 1
+                    selected.add(c.id)
+    else:
+        limit = n if n is not None else 0
+        count = 0
+        for dset in datasets:
+            for c in dset.cases:
+                if count >= limit:
+                    break
+                if c.answer.strip():
+                    selected.add(c.id)
+                    count += 1
+            if count >= limit:
+                break
+
+    out: list[Dataset] = []
+    for dset in datasets:
+        kept = [c for c in dset.cases if c.id in selected]
+        if kept:
+            out.append(dataclasses.replace(dset, cases=kept))
+    return out
 
 
 def run_qa(
