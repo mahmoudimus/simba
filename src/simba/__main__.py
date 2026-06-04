@@ -451,40 +451,31 @@ def _bundled_skill_names() -> list[str]:
     """Return names of all bundled skills."""
     import importlib.resources
 
+    import simba.skill_install as si
+
     skills_pkg = importlib.resources.files("simba") / "skills"
     if not skills_pkg.is_dir():
         return []
     return [
         d.name
         for d in skills_pkg.iterdir()
-        if d.is_dir() and (d / "skill.md").is_file()
+        if d.is_dir() and si.find_skill_md(d) is not None
     ]
 
 
 def _install_skills(skills_dir: pathlib.Path) -> int:
-    """Copy bundled skills into *skills_dir*."""
+    """Install/refresh bundled skills into *skills_dir* (updates changed ones)."""
     import importlib.resources
 
-    skills_pkg = importlib.resources.files("simba") / "skills"
-    if not skills_pkg.is_dir():
-        return 0
+    import simba.skill_install as si
 
-    copied = 0
-    for skill_dir in skills_pkg.iterdir():
-        if not skill_dir.is_dir():
-            continue
-        skill_md = skill_dir / "skill.md"
-        if not skill_md.is_file():
-            continue
-        dest_dir = skills_dir / skill_dir.name
-        dest_file = dest_dir / "skill.md"
-        if dest_file.exists():
-            continue
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_file.write_text(skill_md.read_text())
-        print(f"  + skill: /{skill_dir.name}")
-        copied += 1
-    return copied
+    src = importlib.resources.files("simba") / "skills"
+    installed, updated = si.sync_skills(src, skills_dir)
+    if installed:
+        print(f"  + {installed} skill(s) installed")
+    if updated:
+        print(f"  ~ {updated} skill(s) updated")
+    return installed + updated
 
 
 def _remove_skills(skills_dir: pathlib.Path) -> int:
@@ -505,52 +496,31 @@ def _bundled_codex_skill_names() -> list[str]:
     """Return names of bundled Codex skills (SKILL.md)."""
     import importlib.resources
 
+    import simba.skill_install as si
+
     skills_pkg = importlib.resources.files("simba") / "codex_skills"
     if not skills_pkg.is_dir():
         return []
     return [
         d.name
         for d in skills_pkg.iterdir()
-        if d.is_dir() and (d / "SKILL.md").is_file()
+        if d.is_dir() and si.find_skill_md(d) is not None
     ]
 
 
 def _install_codex_skills(skills_dir: pathlib.Path) -> int:
-    """Copy bundled Codex skills (SKILL.md + agents metadata)."""
+    """Install/refresh bundled Codex skills (whole dir incl. agents metadata)."""
     import importlib.resources
 
-    skills_pkg = importlib.resources.files("simba") / "codex_skills"
-    if not skills_pkg.is_dir():
-        return 0
+    import simba.skill_install as si
 
-    installed = 0
-    for skill_dir in skills_pkg.iterdir():
-        if not skill_dir.is_dir():
-            continue
-        src_skill = skill_dir / "SKILL.md"
-        if not src_skill.is_file():
-            continue
-
-        dest_dir = skills_dir / skill_dir.name
-        dest_skill = dest_dir / "SKILL.md"
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        if not dest_skill.exists():
-            dest_skill.write_text(src_skill.read_text())
-            print(f"  + codex skill: {skill_dir.name}")
-            installed += 1
-
-        src_agents = skill_dir / "agents"
-        if src_agents.is_dir():
-            for src_file in src_agents.rglob("*"):
-                if not src_file.is_file():
-                    continue
-                rel_path = src_file.relative_to(skill_dir)
-                dst_file = dest_dir / rel_path
-                if dst_file.exists():
-                    continue
-                dst_file.parent.mkdir(parents=True, exist_ok=True)
-                dst_file.write_text(src_file.read_text())
-    return installed
+    src = importlib.resources.files("simba") / "codex_skills"
+    installed, updated = si.sync_skills(src, skills_dir)
+    if installed:
+        print(f"  + {installed} codex skill(s) installed")
+    if updated:
+        print(f"  ~ {updated} codex skill(s) updated")
+    return installed + updated
 
 
 def _remove_codex_skills(skills_dir: pathlib.Path) -> int:

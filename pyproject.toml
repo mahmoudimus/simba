@@ -29,6 +29,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 simba = [
     "skills/**/*.md",
+    "skills/**/*.yaml",
     "codex_skills/**/*.md",
     "codex_skills/**/*.yaml",
     "eval/datasets/*.json",
