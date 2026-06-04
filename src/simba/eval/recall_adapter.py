@@ -19,6 +19,7 @@ import time
 import typing
 
 import simba.memory.config
+import simba.memory.decompose
 import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.recall_plan
@@ -122,14 +123,24 @@ def build_retriever(
     with simba.memory.fts.connect(fts_path, cfg.fts_tokenize):
         simba.memory.fts.rebuild(rows)
 
-    def retriever(query: str) -> list[str]:
-        plan = simba.memory.recall_plan.plan_recall(query, cfg)
-        embedding = embed_query(query)
+    def _retrieve_one(q: str) -> list[str]:
+        plan = simba.memory.recall_plan.plan_recall(q, cfg)
+        embedding = embed_query(q)
         extra = embed_query(plan.expansion_terms) if plan.expansion_terms else None
         return asyncio.run(
-            _search(
-                db_path, str(fts_path), cfg, query, embedding, extra, plan, llm_client
-            )
+            _search(db_path, str(fts_path), cfg, q, embedding, extra, plan, llm_client)
         )
+
+    def retriever(query: str) -> list[str]:
+        # C4 query decomposition: retrieve each sub-query, RRF-fuse the rankings.
+        # "none" -> single-query recall (no behaviour change).
+        if getattr(cfg, "decompose_mode", "none") == "llm" and llm_client is not None:
+            queries = simba.memory.decompose.decompose(
+                query, llm_client, max_sub=getattr(cfg, "decompose_max_sub", 4)
+            )
+        else:
+            queries = [query]
+        rankings = [_retrieve_one(q) for q in queries]
+        return simba.memory.decompose.fuse_rankings(rankings, k=cfg.rrf_k)
 
     return retriever

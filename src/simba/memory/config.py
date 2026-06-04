@@ -88,6 +88,14 @@ class MemoryConfig:
     # result by (query, candidate-set) for the next recurrence. Cache capacity:
     rerank_cache_size: int = 256
 
+    # Query decomposition (C4): split a multi-hop query into single-fact
+    # sub-queries (via the llm client), retrieve each, and RRF-fuse the ranked
+    # lists — so each evidence piece gets its own targeted retrieval. "none"
+    # (default) keeps single-query recall; "llm" decomposes. Needs an llm
+    # provider; fail-open to the original query.
+    decompose_mode: str = "none"  # "none" | "llm"
+    decompose_max_sub: int = 4  # cap on sub-queries (besides the original)
+
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
     """Load config from TOML files, then apply CLI/keyword overrides."""
