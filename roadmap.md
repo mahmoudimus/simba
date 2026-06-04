@@ -19,13 +19,30 @@ is firming up — the authored eval datasets saturate (MRR→1.0), but the new e
 benchmark harness measures recall@k against labelled evidence on real conversations
 (first LoCoMo numbers below). The phases below remain unproven until measured there.
 
-## First external numbers — LoCoMo recall@k (2026-06-03)
+## First external numbers (2026-06-03)
 
-Deterministic recall of gold `dia_id` evidence (no LLM judge), hybrid recall with
-reranker/scoring/expansion off, 2-conversation subset (301 questions):
-`OVERALL r@1=0.365 r@5=0.579 r@10=0.674 mrr=0.491`; single-hop r@5=0.921, but
-multi-hop r@5=0.255 and open-domain r@5=0.182 — the multi-hop gap is the headline.
-Full 10-conv run + the deepseek LLM-judge accuracy layer are the next deliverables.
+Harness: `src/simba/eval/benchmarks/` (locomo, longmemeval, run, judge); scripts
+`run_locomo.py` / `run_longmemeval.py` / `run_qa.py`. Hybrid recall only
+(reranker/scoring/expansion off) unless noted. Turns carry their session date so
+relative time is groundable (a loader fix that lifted QA 0.082 → 0.280; see below).
+
+**LoCoMo recall@k of gold `dia_id` evidence** (no LLM judge), 10 convs / 1977 Q:
+`OVERALL r@1=0.334 r@5=0.573 r@10=0.682 mrr=0.490`; single-hop r@5=0.684,
+single-hop-factual 0.663, adversarial 0.554, **multi-hop 0.305, open-domain 0.270**.
+
+**LongMemEval recall@k** (turn-level, **oracle haystack = upper bound**), 470 Q:
+`OVERALL r@1=0.368 r@5=0.779 r@10=0.893`; weakest arm **multi-session r@5=0.624**.
+
+**LoCoMo QA accuracy** (deepseek-v4-flash answer + judge), stratified 50/category
+(202 Q): `OVERALL 0.391` balanced — single-hop-factual 0.60, single-hop 0.54,
+multi-hop 0.24, open-domain 0.16. Distribution-weighted (single-hop-factual is
+43% of real Q) ≈ **0.50**. The session-date fix was decisive: 0.082 → 0.280 on
+the conv-1 sample before stratification.
+
+The consistent headline across all three: **multi-hop / cross-session is the weak
+axis** — exactly what the KG (#4/#19/#20) should win and doesn't yet feed recall.
+Caveats: numbers are recall@k / deepseek-judged (not GPT-4-judged like Mem0/Zep);
+LongMemEval is oracle (not full `longmemeval_s`).
 
 ## Next → Phase 4 (Phase 3 shipped in #25)
 
