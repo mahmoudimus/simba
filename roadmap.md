@@ -92,14 +92,20 @@ category **+ latency p50/p95** (the daemon is the product). Levers plug into
   CaseResult. Everything after B is a delta vs these.
 
 ### Workstream C — close the gaps (levers, each a measured-delta PR)
-- **C1 — KG-into-recall (the #1 lever).** New config `kg_recall_enabled` /
-  `kg_recall_hops` / `kg_recall_max_neighbors`. After `rrf_fuse` (`hybrid.py:170`):
-  extract entities from top-N fused hits, call `kg_neighbors` / `kg_query(expand_hops)`
-  (`kg/store.py`), map neighbor edges back to source memory ids, fold into candidates
-  before `composite_rescore`; fail-open. **Risk:** bench corpora have no KG — to
-  measure, `recall_adapter` must build a *throwaway KG* from the corpus (regex
-  extractor for speed); if it's too sparse to help, that itself is the finding (KG
-  density is the bottleneck). Highest value, riskiest — do first within C.
+- **C1 — KG-into-recall (the #1 lever).** *Approach (2026-06-04): borrow GraphQLite's
+  `llm-graphrag` retrieval pipeline, not a graph library* ([[graph-lib-eval-borrow-not-vendor]]
+  — vendoring GraphQLite (C ext) / graphdb (stale, pickle) rejected; simba's `kg_edges`
+  is already richer). Replicate the HippoRAG-style pipeline on simba's existing BFS:
+  **(1) vector/RRF seed → (2) graph traversal over `kg_edges` (`kg_neighbors` /
+  `kg_query(expand_hops)`, `kg/store.py`) → (3) community signal → (4) merge neighbor
+  source-memory ids into candidates** after `rrf_fuse` (`hybrid.py:170`), before
+  `composite_rescore`; fail-open. Config `kg_recall_enabled` / `kg_recall_hops` /
+  `kg_recall_max_neighbors`. **Community detection** starts as pure-Python
+  **label-propagation** (~40 LOC, no deps) — simpler than Louvain, upgrade later;
+  **PPR deferred**. **Risk:** bench corpora have no KG — to measure, `recall_adapter`
+  must build a *throwaway KG* from the corpus (regex extractor for speed); if it's too
+  sparse to help, that itself is the finding (KG density is the bottleneck). Highest
+  value, riskiest — do first within C.
 - **C2 — reranker ON.** Config flip (`llm_rerank_enabled=True`, `mode=sync`) + pass
   `llm_client` (already plumbed in `recall_adapter`). Measure precision/MRR/QA delta +
   latency cost. Cheapest lever.
