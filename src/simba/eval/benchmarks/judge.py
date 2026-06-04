@@ -54,17 +54,30 @@ def score_case(
     llm: typing.Any,
     *,
     k: int = 10,
+    cache: typing.Any = None,
+    judge_model: str = "",
 ) -> bool | None:
-    """Retrieve top-k, generate an answer, grade it. None = couldn't grade."""
+    """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
+
+    When ``cache`` is a ``JudgeCache``, an identical (judge_model, question, gold,
+    predicted) verdict is served from disk instead of re-calling the judge LLM.
+    """
     ids = retriever(case.query)[:k]
     contexts = [id2content[i] for i in ids if i in id2content]
     predicted = llm.complete(build_answer_prompt(case.query, contexts))
     if not predicted or not predicted.strip():
         return None
+    if cache is not None:
+        hit = cache.get(judge_model, case.query, case.answer, predicted)
+        if hit is not None:
+            return hit
     verdict = llm.complete_json(build_judge_prompt(case.query, case.answer, predicted))
     if not isinstance(verdict, dict) or "correct" not in verdict:
         return None
-    return bool(verdict["correct"])
+    correct = bool(verdict["correct"])
+    if cache is not None:
+        cache.put(judge_model, case.query, case.answer, predicted, correct)
+    return correct
 
 
 def aggregate(rows: list[tuple[str, bool]]) -> dict[str, typing.Any]:
@@ -140,6 +153,8 @@ def run_qa(
     llm: typing.Any,
     k: int = 10,
     answerable_only: bool = True,
+    cache: typing.Any = None,
+    judge_model: str = "",
 ) -> dict[str, typing.Any]:
     """Run the full retrieve -> answer -> grade loop over datasets, aggregate."""
     rows: list[tuple[str, bool]] = []
@@ -155,7 +170,10 @@ def run_qa(
                 if answerable_only and not case.answer.strip():
                     skipped += 1
                     continue
-                correct = score_case(case, retriever, id2content, llm, k=k)
+                correct = score_case(
+                    case, retriever, id2content, llm, k=k,
+                    cache=cache, judge_model=judge_model,
+                )
                 if correct is None:
                     skipped += 1
                     continue

@@ -49,11 +49,17 @@ def run_dataset(
     return simba.eval.runner.run_eval(dataset, retriever, ks=ks, split=split)
 
 
-def sync_embedders(cfg: typing.Any) -> tuple[EmbedFn, EmbedFn]:
+def sync_embedders(
+    cfg: typing.Any, *, cache: typing.Any = None
+) -> tuple[EmbedFn, EmbedFn]:
     """Load the GGUF model once; return synchronous (embed_doc, embed_query).
 
     Reuses ``EmbeddingService``'s model resolution + sync embed path so the eval
     uses exactly the production embeddings (same model, same task prefixes).
+
+    When ``cache`` is an ``EmbeddingCache``, both embedders are wrapped read-through
+    (keyed by model + task prefix + content), so re-running a benchmark over an
+    unchanged corpus skips the GGUF embed entirely.
     """
     import simba.memory.embeddings as emb
 
@@ -66,5 +72,18 @@ def sync_embedders(cfg: typing.Any) -> tuple[EmbedFn, EmbedFn]:
 
     def embed_query(text: str) -> list[float]:
         return service._embed_sync(text, emb.TaskType.QUERY)
+
+    if cache is not None:
+        import simba.memory.embedding_cache as ec
+
+        model_id = f"{getattr(cfg, 'model_repo', '')}/{getattr(cfg, 'model_file', '')}"
+        doc_prefix = getattr(cfg, "embed_doc_prefix", "")
+        query_prefix = getattr(cfg, "embed_query_prefix", "")
+        embed_doc = ec.cached_embedder(
+            embed_doc, cache, model_id=model_id, prefix=doc_prefix
+        )
+        embed_query = ec.cached_embedder(
+            embed_query, cache, model_id=model_id, prefix=query_prefix
+        )
 
     return embed_doc, embed_query
