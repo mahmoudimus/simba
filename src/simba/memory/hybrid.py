@@ -56,6 +56,8 @@ def rrf_fuse(
     vector_weight: float = 1.0,
     keyword_weight: float = 1.0,
     extra_vector_results: list[dict[str, typing.Any]] | None = None,
+    kg_results: list[dict[str, typing.Any]] | None = None,
+    kg_weight: float = 1.0,
 ) -> list[dict[str, typing.Any]]:
     """Reciprocal Rank Fusion of the ranked arms, deduped by memory id.
 
@@ -83,6 +85,16 @@ def rrf_fuse(
             continue
         scores[rid] = scores.get(rid, 0.0) + keyword_weight / (k + rank)
         records.setdefault(rid, _from_keyword(item))
+
+    # KG arm: memories bridged in via the knowledge graph (vector-shaped rows,
+    # already ranked by the KG walk). Folded like a vector arm so a bridged hit
+    # that no direct arm surfaced still earns rank in the fusion.
+    for rank, item in enumerate(kg_results or [], start=1):
+        rid = item.get("id")
+        if not rid:
+            continue
+        scores[rid] = scores.get(rid, 0.0) + kg_weight / (k + rank)
+        records.setdefault(rid, _from_vector(item))
 
     ordered = sorted(records.values(), key=lambda r: scores[r["id"]], reverse=True)
     for r in ordered:
@@ -122,6 +134,7 @@ async def hybrid_search(
     llm_client: typing.Any = None,
     rerank_cache: typing.Any = None,
     bg_tasks: set | None = None,
+    kg_arm: typing.Any = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -167,6 +180,20 @@ async def hybrid_search(
         except Exception:
             keyword_results = []
 
+    # KG arm (multi-hop bridge): seed from the strongest vector hits, hand them to
+    # the injected kg_arm (it walks the KG and returns the bridged memory rows).
+    # Fail-open: any error / no KG leaves the vector+keyword fusion untouched.
+    kg_results: list[dict[str, typing.Any]] | None = None
+    if getattr(cfg, "kg_recall_enabled", False) and kg_arm is not None:
+        seed_ids = [
+            r["id"]
+            for r in vector_results[: getattr(cfg, "kg_recall_seed_top_n", 5)]
+            if r.get("id")
+        ]
+        if seed_ids:
+            with contextlib.suppress(Exception):
+                kg_results = await kg_arm(seed_ids)
+
     fused = rrf_fuse(
         vector_results,
         keyword_results,
@@ -174,6 +201,8 @@ async def hybrid_search(
         vector_weight=cfg.vector_weight,
         keyword_weight=cfg.keyword_weight,
         extra_vector_results=extra_vector_results,
+        kg_results=kg_results,
+        kg_weight=getattr(cfg, "kg_recall_weight", 1.0),
     )
 
     # Optional composite re-scoring: blend RRF relevance with recency +
