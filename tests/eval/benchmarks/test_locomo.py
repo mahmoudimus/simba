@@ -36,11 +36,13 @@ def test_one_dataset_per_conversation() -> None:
     assert dsets[0].name == "conv-1"
 
 
-def test_turns_become_corpus_with_speaker() -> None:
+def test_turns_become_corpus_with_speaker_and_session_date() -> None:
     d = locomo.load_locomo_data([_SAMPLE])[0]
     assert d.corpus_ids() == {"D1:1", "D1:3", "D2:1"}
     d13 = next(m for m in d.corpus if m.id == "D1:3")
     assert "Caroline" in d13.content and "Went to group" in d13.content
+    # session date is prefixed so relative time ("yesterday") can be grounded
+    assert "8 May" in d13.content
 
 
 def test_cases_keep_resolvable_evidence_drop_dangling() -> None:

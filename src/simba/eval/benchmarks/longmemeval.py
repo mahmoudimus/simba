@@ -25,14 +25,19 @@ import typing
 from simba.eval.dataset import Dataset, EvalCase, Memory
 
 
-def _session_turns(session_id: str, turns: list[dict[str, typing.Any]]) -> list[Memory]:
+def _session_turns(
+    session_id: str, turns: list[dict[str, typing.Any]], date: str = ""
+) -> list[Memory]:
     out: list[Memory] = []
+    date = date.strip()
     for i, turn in enumerate(turns):
         content = (turn.get("content") or "").strip()
         if not content:
             continue
         role = turn.get("role", "")
-        text = f"{role}: {content}" if role else content
+        body = f"{role}: {content}" if role else content
+        # prefix the session date so relative time ("last week") is groundable
+        text = f"[{date}] {body}" if date else body
         out.append(Memory(id=f"{session_id}#{i}", content=text, type="PATTERN"))
     return out
 
@@ -49,12 +54,14 @@ def load_longmemeval_data(
 
         session_ids = q.get("haystack_session_ids", [])
         sessions = q.get("haystack_sessions", [])
+        dates = q.get("haystack_dates", [])
 
         corpus: list[Memory] = []
         gold: list[str] = []
-        for sid, turns in zip(session_ids, sessions, strict=False):
+        for idx, (sid, turns) in enumerate(zip(session_ids, sessions, strict=False)):
             sid = str(sid)
-            corpus.extend(_session_turns(sid, turns))
+            date = str(dates[idx]) if idx < len(dates) else ""
+            corpus.extend(_session_turns(sid, turns, date))
             for i, turn in enumerate(turns):
                 if turn.get("has_answer") and (turn.get("content") or "").strip():
                     gold.append(f"{sid}#{i}")

@@ -14,6 +14,7 @@ _SAMPLE = [
         "question": "What car issue did I have?",
         "answer": "GPS not working",
         "haystack_session_ids": ["s1", "s2"],
+        "haystack_dates": ["2023/05/01 (Mon) 09:00", "2023/05/02 (Tue) 10:00"],
         "haystack_sessions": [
             [
                 {"role": "user", "content": "GPS stopped working", "has_answer": True},
@@ -69,7 +70,8 @@ def test_turns_become_corpus_with_role_and_session_keyed_ids() -> None:
     ids = {m.id for m in ds.corpus}
     assert ids == {"s1#0", "s1#1", "s2#0"}
     first = next(m for m in ds.corpus if m.id == "s1#0")
-    assert first.content == "user: GPS stopped working"
+    # session date prefixed so relative time can be grounded
+    assert first.content == "[2023/05/01 (Mon) 09:00] user: GPS stopped working"
 
 
 def test_gold_is_has_answer_turns() -> None:

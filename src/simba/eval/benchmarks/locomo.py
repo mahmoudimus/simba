@@ -32,13 +32,18 @@ def _conversation_turns(conversation: dict[str, typing.Any]) -> list[Memory]:
     for key, value in conversation.items():
         if not _SESSION_KEY.match(key) or not isinstance(value, list):
             continue
+        # LoCoMo turns use relative time ("yesterday"); the absolute session date
+        # lives in a sibling "<key>_date_time" field. Prefix it so the gold
+        # (absolute) answers are resolvable — both at recall and QA-judge time.
+        date = str(conversation.get(f"{key}_date_time", "")).strip()
         for turn in value:
             dia_id = turn.get("dia_id")
             text = (turn.get("text") or "").strip()
             if not dia_id or not text:
                 continue
             speaker = turn.get("speaker", "")
-            content = f"{speaker}: {text}" if speaker else text
+            body = f"{speaker}: {text}" if speaker else text
+            content = f"[{date}] {body}" if date else body
             turns.append(Memory(id=str(dia_id), content=content, type="PATTERN"))
     return turns
 
