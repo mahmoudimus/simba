@@ -2359,6 +2359,52 @@ def _cmd_rlm(args: list[str]) -> int:
     return 0
 
 
+def _cmd_transcript(args: list[str]) -> int:
+    """Project-scoped transcript resolution for learning extraction.
+
+    `simba transcript pending [--project P] [--json]` — newest pending-extraction
+    transcript for the current project (not the global latest.json, which cross-wires
+    sessions). `simba transcript mark-extracted <session_id>` — flip its status.
+    """
+    import simba.transcripts as _tr
+
+    sub = args[0] if args else ""
+    if sub == "pending":
+        project = str(pathlib.Path.cwd())
+        if "--project" in args:
+            i = args.index("--project")
+            if i + 1 < len(args):
+                project = args[i + 1]
+        meta = _tr.find_pending(project)
+        if not meta:
+            print("{}" if "--json" in args else f"No pending transcript for {project}")
+            return 1
+        if "--json" in args:
+            clean = {k: v for k, v in meta.items() if not k.startswith("_")}
+            print(json.dumps(clean))
+        else:
+            print(f"transcript_path: {meta.get('transcript_path', '')}")
+            print(f"session_id: {meta.get('session_id', '')}")
+            print(f"project_path: {meta.get('project_path', '')}")
+            print(f"metadata_path: {meta.get('_metadata_path', '')}")
+        return 0
+    if sub == "mark-extracted":
+        if len(args) < 2:
+            print("usage: simba transcript mark-extracted <session_id>")
+            return 1
+        meta_path = _tr.default_transcripts_dir() / args[1] / "metadata.json"
+        if _tr.mark_extracted(meta_path):
+            print(f"marked extracted: {args[1]}")
+            return 0
+        print(f"could not mark extracted: {meta_path}")
+        return 1
+    print(
+        "usage: simba transcript {pending [--project P] [--json] "
+        "| mark-extracted <session_id>}"
+    )
+    return 1
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -2412,6 +2458,8 @@ def main() -> None:
         sys.exit(_cmd_episodes(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
+    elif cmd == "transcript":
+        sys.exit(_cmd_transcript(rest))
     else:
         print(__doc__)
         sys.exit(1)
