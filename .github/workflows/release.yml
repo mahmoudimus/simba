@@ -1,0 +1,91 @@
+name: Release
+
+# Cut a GitHub Release from a `v*` tag: build the sdist + wheel, pull the matching
+# CHANGELOG section as the release notes, and attach the artifacts. Tag a commit on
+# main that already carries the bumped version + CHANGELOG entry, e.g.:
+#   git tag -a v0.2.0 -m "v0.2.0" && git push origin v0.2.0
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Release tag (e.g. v0.2.0)"
+                required: true
+
+permissions:
+    contents: write
+
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Resolve tag + version
+              id: ver
+              run: |
+                  if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+                      TAG="${{ github.event.inputs.tag }}"
+                  else
+                      TAG="${GITHUB_REF#refs/tags/}"
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+                  echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+            - name: Skip if the release already exists
+              id: guard
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  if gh release view "${{ steps.ver.outputs.tag }}" \
+                      --repo "${{ github.repository }}" >/dev/null 2>&1; then
+                      echo "exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "exists=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Install uv
+              if: steps.guard.outputs.exists == 'false'
+              run: |
+                  curl -LsSf https://astral.sh/uv/install.sh | sh
+                  echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+            - name: Build sdist + wheel
+              if: steps.guard.outputs.exists == 'false'
+              run: uv build
+
+            - name: Extract CHANGELOG section for this version
+              if: steps.guard.outputs.exists == 'false'
+              run: |
+                  # Print lines between "## [<version>]" and the next "## [" header.
+                  awk -v v="${{ steps.ver.outputs.version }}" '
+                      /^## \[/ { if (found) exit;
+                                 if (index($0, "[" v "]")) { found=1; next } }
+                      found { print }
+                  ' CHANGELOG.md > notes.md
+                  if [ ! -s notes.md ]; then
+                      echo "See [CHANGELOG.md](CHANGELOG.md)." > notes.md
+                  fi
+                  echo "----- release notes -----"; cat notes.md
+
+            - name: Create GitHub Release
+              if: steps.guard.outputs.exists == 'false'
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.ver.outputs.tag }}
+                  name: ${{ steps.ver.outputs.tag }}
+                  body_path: notes.md
+                  files: dist/*
+                  draft: false
+                  prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

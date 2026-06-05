@@ -1,28 +1,63 @@
 # Changelog
 
-## [Unreleased] — 2025-02-08
+## [Unreleased]
+
+## [0.2.0] — 2026-06-05
 
 ### Added
 
-- **`simba config` CLI**: Unified configuration system with TOML-backed
-  persistence. `@configurable` decorator registers dataclass config models
-  into a global registry. Git-style scoping: `~/.config/simba/config.toml`
-  (global) vs `.simba/config.toml` (local). Subcommands: `list`, `get`,
-  `set [--global]`, `reset`, `show`, `edit`. 34+ hardcoded constants now
-  configurable across 4 sections (memory, hooks, sync, search). 560 tests.
-
-- **`simba markers` CLI**: New subcommand to discover, audit, and update
-  `<!-- BEGIN SIMBA:name -->` markers across `.md` files. Subcommands: `list`,
-  `audit` (unused/orphaned/stale detection), `update` (bulk template refresh),
-  `show` (print raw template content).
+- **Hybrid recall (L3)**: RRF fusion of the LanceDB vector arm + a SQLite FTS5
+  bm25 keyword arm, with an intent-aware similarity floor, broad-query widening,
+  and a multi-arm HyDE expansion arm.
+- **Temporal knowledge graph (L4)**: bitemporal `kg_edges` (belief-time
+  `valid_from`/`valid_to` + event-time `occurred_at`), entity resolution
+  (normalize + embedding-synonym merge), and multi-hop traversal
+  (`kg_neighbors` / `kg_query(expand_hops)`).
+- **LLM layer (`simba.llm`)**: CLI-backed client (`claude-cli`, `llm-cli` cloud;
+  `llama-cli`, `mlx-lm` 100%-local), fail-open. Powers the **LLM reranker**
+  (cross-encoder role over the candidate pool; non-blocking read-through cache on
+  the daemon), **LLM fact extraction** as the primary KG feed
+  (`sync.extract_strategy`), and composite recency+importance scoring.
+- **Swappable embedder**: `embed_provider` (gguf | llm-cli) + configurable task
+  prefixes + `simba memory reembed`.
+- **Episodic consolidation** (L2): session-summary EPISODE memories.
+- **Eval program**: in-process recall harness (recall@k / MRR / nDCG, dev/test
+  split, real-corpus builder) **plus an external benchmark suite** —
+  `simba.eval.benchmarks` over LoCoMo / LongMemEval (recall@k of labelled
+  evidence + an LLM-judge QA layer), a persistent **embedding cache** + **judge
+  cache** so reruns are cheap, and `scripts/fetch_benchmarks.sh`.
+- **Tool-call redirect**: PreToolUse steering of bare commands to better tooling
+  (deny + opt-in silent rewrite), shlex-tokenized; rules from
+  `.simba/redirects.toml` + a project-scoped DB store. Supports **program rules**
+  (swap a leading command) and **regex pattern rules** (flag-level fixes, e.g.
+  `rg -rln` → `rg -l`).
+- **`simba config` CLI**: TOML-backed configuration. `@configurable` dataclasses
+  in a global registry; git-style scoping (`~/.config/simba/config.toml` vs
+  `.simba/config.toml`); `list`/`get`/`set [--global]`/`reset`/`show`/`edit`.
+- **`simba markers` CLI**: discover/audit/update `<!-- BEGIN SIMBA:name -->`
+  markers across `.md` files.
+- **`simba transcript` CLI**: project-scoped resolution of pending transcripts
+  for learning extraction (`pending` / `mark-extracted`).
 
 ### Changed
 
-- **Extract orchestration from neuron**: Agent dispatch, status tracking, process
-  management, templates, proxy, and install routines moved from `simba.neuron` to
-  new `simba.orchestration` package. Neuron now contains only formal verification
-  tools (truth DB, Z3, Datalog). CLI: `simba orchestration {install,run,proxy,
-  status,agents,sync}`. All 516 tests pass.
+- **Context-low warning** now measures transcript bytes **since the last
+  compaction** (the live-context proxy) instead of cumulative file size, and is
+  recalibrated for large (~1M-token) windows (`hooks.context_low_bytes` default
+  8 MB, configurable). Fixes false alarms after compaction.
+- **Skill packaging**: bundled skills relocated under the package
+  (`src/simba/skills/`, repo-root `skills/` symlinked); the installer now
+  **updates** changed skills (was create-only) and matches `SKILL.md`.
+- **Orchestration extracted from neuron** into a `simba.orchestration` package;
+  neuron keeps only the formal-verification tools (truth DB, Z3, Datalog).
+
+### Fixed
+
+- **`/memories-learn` cross-wiring**: it resolved transcripts via a single global
+  `latest.json` symlink, so running it in one project extracted another project's
+  transcript. Now resolved by the current project + pending status, and the
+  transcript is marked `extracted` so it isn't re-extracted.
+- Config-CLI section registry, redirect, and `simba`-shadow import bugs.
 
 ## [0.1.0] — 2025-02-06
 
