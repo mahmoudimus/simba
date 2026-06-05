@@ -30,7 +30,10 @@ class HooksConfig:
     # there is no general-recall floor here — only the strict rule gate below.
     thinking_chars: int = 1500
     dedup_ttl: int = 60
-    context_low_bytes: int = 20_000_000
+    # Context-low warning threshold, measured as transcript bytes SINCE the last
+    # compaction (the live-context proxy), NOT cumulative file size. Calibrated for
+    # a large (~1M-token) window; tune via `simba config set hooks.context_low_bytes`.
+    context_low_bytes: int = 8_000_000
 
     # Tool rules (auto-learning from failures)
     rule_check_enabled: bool = True

@@ -3,7 +3,7 @@
 Reads stdin JSON with tool_name, tool_input, and transcript_path.
 
 Pipeline (in order):
-1. Context-low warning (transcript size check, once per session)
+1. Context-low warning (bytes since last compaction; once per compaction segment)
 2. Tool-rule check (query TOOL_RULE memories matching current tool call)
 3. Truth DB check (query proven facts for Bash commands)
 4. Memory recall (extract thinking block, query general memories)
@@ -102,38 +102,82 @@ def _save_hash(text: str) -> None:
         )
 
 
-def _check_context_low(transcript_path: pathlib.Path) -> str | None:
-    """Return a warning string if transcript size indicates context is near limit.
+_COMPACT_MARKER = b'"isCompactSummary":true'
 
-    Uses ``os.stat()`` (no file reading) and a flag file so the warning
-    fires at most once per transcript.
+
+def _post_compaction_tail_bytes(transcript_path: pathlib.Path) -> tuple[int, int]:
+    """Bytes of the transcript *since the last compaction* (the live-context proxy).
+
+    The transcript JSONL is append-only, so its total size keeps growing across
+    compactions and badly overcounts the in-context window. We return
+    ``(tail_bytes, last_compaction_offset)`` where the tail is measured from the
+    start of the last ``isCompactSummary`` line to EOF (0 offset = never
+    compacted, tail == total).
     """
+    try:
+        data = transcript_path.read_bytes()
+    except OSError:
+        return (0, 0)
+    total = len(data)
+    idx = data.rfind(_COMPACT_MARKER.replace(b" ", b""))
+    if idx == -1:
+        # tolerate whitespace variants ("isCompactSummary": true)
+        loose = data.rfind(b'"isCompactSummary"')
+        idx = loose if loose != -1 else -1
+    if idx == -1:
+        return (total, 0)
+    line_start = data.rfind(b"\n", 0, idx) + 1  # 0 if marker is on the first line
+    return (total - line_start, line_start)
+
+
+def _check_context_low(transcript_path: pathlib.Path) -> str | None:
+    """Warn when the *live* context (bytes since the last compaction) nears the
+    window. Re-arms after each new compaction so it can fire again per segment.
+
+    Threshold is ``hooks.context_low_bytes`` (configurable). Cheap-gated on total
+    size — only reads the file once the total could possibly exceed the threshold.
+    """
+    threshold = _hooks_cfg().context_low_bytes
     try:
         size = transcript_path.stat().st_size
     except OSError:
         return None
 
-    if size < _hooks_cfg().context_low_bytes:
+    # tail <= total, so if total < threshold the tail can't exceed it (cheap path).
+    if size < threshold:
         return None
 
-    # Only warn once per transcript.
+    tail, offset = _post_compaction_tail_bytes(transcript_path)
+    if tail < threshold:
+        return None  # a compaction shrank the live context — no false alarm
+
+    # Warn once per (transcript, compaction boundary); a new compaction re-arms.
     try:
         flag = json.loads(_CONTEXT_LOW_FLAG.read_text())
-        if flag.get("transcript") == str(transcript_path):
+        if (
+            flag.get("transcript") == str(transcript_path)
+            and flag.get("offset") == offset
+        ):
             return None
     except (json.JSONDecodeError, OSError):
         pass
 
     with contextlib.suppress(OSError):
         _CONTEXT_LOW_FLAG.write_text(
-            json.dumps({"transcript": str(transcript_path), "timestamp": time.time()})
+            json.dumps(
+                {
+                    "transcript": str(transcript_path),
+                    "offset": offset,
+                    "timestamp": time.time(),
+                }
+            )
         )
 
-    size_mb = size / 1_000_000
+    tail_mb = tail / 1_000_000
     return (
         "<context-low-warning>\n"
-        f"Session transcript has reached {size_mb:.1f}MB — "
-        "context is approaching the auto-compact threshold.\n\n"
+        f"~{tail_mb:.1f}MB of transcript since last compaction — "
+        "the live context is getting large.\n\n"
         "RECOMMENDED: Prepare for context compaction now.\n"
         "1. Summarize your current work state "
         "(what's done, what's pending)\n"
