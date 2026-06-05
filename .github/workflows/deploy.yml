@@ -1,0 +1,48 @@
+name: Publish to PyPI
+
+# Pure-Python package -> one universal wheel + sdist (no cibuildwheel).
+#
+# DORMANT BY DEFAULT. Publishing requires three things first, so it never breaks a
+# release until you opt in:
+#   1. A PyPI project name that is available + a Trusted Publisher configured for
+#      this repo (https://docs.pypi.org/trusted-publishers/). NOTE: "simba" is
+#      already taken on PyPI — set [project].name to an available dist name (e.g.
+#      "simba-cc") before enabling.
+#   2. Set the repo variable PUBLISH_TO_PYPI=true
+#      (`gh variable set PUBLISH_TO_PYPI --body true`).
+# Until then this job is skipped, so tagged releases still build + attach wheels
+# to the GitHub Release (see release.yml).
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+
+concurrency:
+    group: pypi-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    publish:
+        if: >
+            vars.PUBLISH_TO_PYPI == 'true' &&
+            github.repository_owner == 'mahmoudimus'
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write # mandatory for PyPI Trusted Publishing
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  persist-credentials: false
+
+            - name: Install uv
+              run: |
+                  curl -LsSf https://astral.sh/uv/install.sh | sh
+                  echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+            - name: Build sdist + wheel
+              run: uv build
+
+            - name: Publish to PyPI (Trusted Publishing)
+              uses: pypa/gh-action-pypi-publish@release/v1
+              with:
+                  skip-existing: true

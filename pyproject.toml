@@ -1,6 +1,6 @@
 [project]
 name = "simba"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unified Claude Code plugin — semantic memory, rule enforcement, neuro-symbolic logic, and project search"
 license = "MIT"
 requires-python = ">=3.13"

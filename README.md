@@ -44,8 +44,27 @@ The `simba` binary is installed to `~/.local/bin/simba` (ensure this is on your 
 ### Install from git
 
 ```bash
+# latest main
 uv tool install git+https://github.com/mahmoudimus/simba.git
+# a specific release
+uv tool install git+https://github.com/mahmoudimus/simba.git@v0.2.0
 ```
+
+### Upgrading
+
+An **editable** install (`uv tool install -e .`) picks up source changes whenever
+its checkout is updated — no reinstall. A **non-editable** install is a frozen
+copy: upgrade it explicitly, and re-run `simba install` so the new hooks + skills
+are written into `~/.claude/` (the installer now *updates* existing skills):
+
+```bash
+uv tool upgrade simba          # or: uv tool install --reinstall git+...@v0.2.0
+simba install --global         # refresh hooks + bundled skills
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for what's in each release. Releases are cut from
+`v*` tags (`.github/workflows/release.yml`): the tag builds the wheel + sdist and
+publishes a GitHub Release with the matching CHANGELOG section.
 
 ### Register hooks
 
