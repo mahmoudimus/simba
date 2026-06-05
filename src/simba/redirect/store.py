@@ -43,6 +43,18 @@ def load_toml(path: pathlib.Path) -> list[RedirectRule]:
         return []
     rules = []
     for entry in data.get("redirect", []):
+        reason = (entry.get("reason") or "").strip()
+        pat = (entry.get("pattern") or "").strip()
+        if pat:  # pattern (regex) rule — flag-level fixes
+            rules.append(
+                RedirectRule(
+                    pattern=pat,
+                    rewrite=(entry.get("rewrite") or "").strip(),
+                    reason=reason,
+                    source="toml",
+                )
+            )
+            continue
         prog = (entry.get("program") or "").strip()
         repl = (entry.get("replacement") or "").strip()
         if prog and repl:
@@ -50,7 +62,7 @@ def load_toml(path: pathlib.Path) -> list[RedirectRule]:
                 RedirectRule(
                     program=prog,
                     replacement=repl,
-                    reason=(entry.get("reason") or "").strip(),
+                    reason=reason,
                     source="toml",
                 )
             )
