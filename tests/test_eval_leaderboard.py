@@ -114,7 +114,21 @@ def test_render_markdown_contains_recall5() -> None:
 def test_render_markdown_no_qa_section_when_qa_is_none() -> None:
     groups = latest_two_by_group([_record("locomo", 1.0, 0.57, qa=None)])
     md = render_markdown(groups)
-    assert "accuracy" not in md
+    # No QA *table* when qa is None. (The static methodology footer may mention
+    # QA in prose, so assert on the section header, not the bare word.)
+    assert "### QA" not in md
+
+
+def test_render_markdown_includes_methodology_caveats() -> None:
+    # The committed BENCHMARKS.md is a standalone artifact, so it must carry the
+    # caveats that make the numbers honest: what "(full)" means, that the
+    # longmemeval oracle haystack is an upper bound, and that QA is LLM-judged.
+    md = render_markdown(latest_two_by_group([_record("locomo", 1.0, 0.57)]))
+    low = md.lower()
+    assert "methodology" in low
+    assert "no dev/test split" in low  # clarifies the "(full)" group label
+    assert "oracle" in low  # upper bound vs the full _s haystack
+    assert "judge" in low  # QA is LLM-judged (answerer != judge)
 
 
 def test_write_leaderboard_creates_file(tmp_path) -> None:
