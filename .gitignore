@@ -30,4 +30,6 @@ src/simba/memory/data/
 # OS
 .DS_Store
 .claude
-docs/
+docs/*
+# ...but track implementation plans (handed to implementers / smaller models).
+!docs/plans/
