@@ -6,7 +6,6 @@ gathers tailor session context, outputs combined additionalContext.
 
 from __future__ import annotations
 
-import json
 import pathlib
 import subprocess
 import time
@@ -62,22 +61,24 @@ def _auto_start_daemon() -> bool:
 
 
 def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
-    """Check if there's a pending transcript extraction and return instructions."""
-    transcripts_dir = pathlib.Path.home() / ".claude" / "transcripts"
-    latest = transcripts_dir / "latest.json"
-    if not latest.exists():
-        return ""
+    """Return extraction instructions for THIS project's pending transcript.
 
-    try:
-        metadata = json.loads(latest.read_text())
-    except (json.JSONDecodeError, OSError):
-        return ""
+    Project-scoped (via ``transcripts.find_pending``) — never the global
+    ``latest.json``, which is overwritten by whichever session compacted last
+    across all projects, so it cross-wired sessions (a session in project A would
+    be told to extract project B's transcript, mis-attributing the memories).
+    """
+    import simba.transcripts as _transcripts
 
-    if metadata.get("status") != "pending_extraction":
+    if not cwd:
+        return ""
+    metadata = _transcripts.find_pending(cwd)
+    if not metadata:
         return ""
 
     transcript_path = metadata.get("transcript_path", "")
     export_session = metadata.get("session_id", session_id)
+    cwd = metadata.get("project_path", cwd)  # the resolved (matching) project
     url = simba.hooks._memory_client.daemon_url()
 
     return (
