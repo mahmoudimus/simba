@@ -105,20 +105,25 @@ class TestSessionStartHook:
             result = json.loads(simba.hooks.session_start.main({"cwd": str(tmp_path)}))
         assert "hookSpecificOutput" in result
 
-    def test_pending_extraction_included(self, tmp_path):
-        # Create fake latest.json
-        transcripts_dir = tmp_path / ".claude" / "transcripts"
-        transcripts_dir.mkdir(parents=True)
-        latest = transcripts_dir / "latest.json"
-        latest.write_text(
+    def _write_meta(self, tmp_path, sid, project, transcript):
+        # Project-scoped resolution reads <session>/metadata.json, NOT latest.json.
+        d = tmp_path / ".claude" / "transcripts" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "metadata.json").write_text(
             json.dumps(
                 {
                     "status": "pending_extraction",
-                    "session_id": "test-123",
-                    "transcript_path": "/tmp/test.md",
+                    "session_id": sid,
+                    "project_path": project,
+                    "transcript_path": transcript,
+                    "exported_at": "2026-06-05T01:00:00Z",
                 }
             )
         )
+
+    def test_pending_extraction_included(self, tmp_path):
+        proj = str(tmp_path / "proj")
+        self._write_meta(tmp_path, "sess-A", proj, "/tmp/a.md")
 
         with (
             unittest.mock.patch(
@@ -127,11 +132,33 @@ class TestSessionStartHook:
             unittest.mock.patch("pathlib.Path.home", return_value=tmp_path),
         ):
             result = json.loads(
-                simba.hooks.session_start.main({"session_id": "test-123"})
+                simba.hooks.session_start.main({"session_id": "sess-A", "cwd": proj})
             )
         ctx = result["hookSpecificOutput"]["additionalContext"]
         assert "learning-extraction-required" in ctx
+        assert "/tmp/a.md" in ctx  # this project's transcript
+        assert proj in ctx  # --project-path is the resolved (correct) project
         # Extraction-quality rules borrowed from agent-oss.
         assert "Preserve proper nouns" in ctx
         assert "Preserve numeric precision" in ctx
         assert "Resolve relative dates" in ctx
+
+    def test_pending_extraction_is_project_scoped(self, tmp_path):
+        # A transcript pending for project B must NOT be offered to a session in
+        # project A (the cross-wiring bug). A has nothing pending -> no reminder.
+        self._write_meta(tmp_path, "sess-B", str(tmp_path / "projB"), "/tmp/b.md")
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+            unittest.mock.patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = json.loads(
+                simba.hooks.session_start.main(
+                    {"session_id": "x", "cwd": str(tmp_path / "projA")}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "learning-extraction-required" not in ctx
+        assert "/tmp/b.md" not in ctx  # never another project's transcript
