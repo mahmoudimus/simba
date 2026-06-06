@@ -951,6 +951,7 @@ Subcommands:
     reindex  Rebuild the hybrid-recall FTS keyword mirror from LanceDB
     reembed  Re-embed the whole corpus with the current model (after a swap)
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
+    feedback Mark a recalled memory as good or bad (feeds decay ranking)
 
 store options:
     --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
@@ -981,6 +982,9 @@ prune options (at least one filter required):
 
 update:
     simba memory update <memory_id> [--project-path PATH] [--session-source ID]
+
+feedback:
+    simba memory feedback <memory_id> good|bad [--weight 0.3]
 """
 
 _VALID_MEMORY_TYPES = {
@@ -1037,6 +1041,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_reembed(rest)
     elif subcmd == "consolidate":
         return _memory_consolidate(rest)
+    elif subcmd == "feedback":
+        return _memory_feedback(rest)
     else:
         print(f"Unknown memory subcommand: {subcmd}")
         print(_MEMORY_USAGE)
@@ -1294,6 +1300,66 @@ def _memory_delete(args: list[str]) -> int:
         return 1
 
     print(f"deleted: {body.get('id', memory_id)}")
+    return 0
+
+
+def _memory_feedback(args: list[str]) -> int:
+    """Mark a memory as good or bad.
+
+    Usage: simba memory feedback <id> good|bad [--weight 0.3]
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+
+    usage = "Usage: simba memory feedback <memory_id> good|bad [--weight 0.3]"
+    if len(args) < 2 or args[0].startswith("--"):
+        print(usage, file=sys.stderr)
+        return 1
+
+    memory_id = args[0]
+    signal = args[1]
+    if signal not in ("good", "bad"):
+        print(usage, file=sys.stderr)
+        return 1
+
+    weight: float | None = None
+    rest = args[2:]
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--weight" and i + 1 < len(rest):
+            try:
+                weight = float(rest[i + 1])
+            except ValueError:
+                print(f"Error: invalid --weight: {rest[i + 1]}", file=sys.stderr)
+                return 1
+            i += 2
+        else:
+            print(f"Error: unknown option: {rest[i]}", file=sys.stderr)
+            return 1
+
+    payload: dict[str, object] = {"signal": signal}
+    if weight is not None:
+        payload["weight"] = weight
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(
+            f"{url}/memory/{memory_id}/feedback", json=payload, timeout=10.0
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"feedback recorded: {body.get('id', memory_id)} "
+        f"-> feedback_score={body.get('feedback_score', 0.0)}"
+    )
     return 0
 
 

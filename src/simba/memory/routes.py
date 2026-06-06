@@ -69,6 +69,30 @@ def _fts_set_project(fts_path: str, memory_id: str, project_path: str) -> None:
         simba.memory.fts.set_project(memory_id, project_path)
 
 
+async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> None:
+    """Bump access stats in ``memory_usage`` for recalled ids. Fire-and-forget.
+
+    The sqlite ``memory_usage`` table is the authoritative ranking sidecar; this
+    runs alongside the LanceDB fire-and-forget ``update_access_tracking``. Any
+    failure is swallowed (recall must never break on a usage write).
+    """
+    if not memory_ids:
+        return
+
+    import simba.db
+    import simba.memory.usage
+
+    def _sync() -> None:
+        try:
+            with simba.db.connect(cwd):
+                for mid in memory_ids:
+                    simba.memory.usage.bump_access(mid, now)
+        except Exception:
+            logger.debug("[recall] usage bump failed", exc_info=True)
+
+    await asyncio.to_thread(_sync)
+
+
 class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
     """Record every request and emit diagnostics reports at intervals."""
 
@@ -336,6 +360,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         rerank_cache = getattr(request.app.state, "rerank_cache", None)
 
     fts_path = getattr(request.app.state, "fts_path", None)
+    recall_cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
     if config.hybrid_enabled:
         memories = await simba.memory.hybrid.hybrid_search(
             table,
@@ -351,11 +376,16 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             llm_client=llm_client,
             rerank_cache=rerank_cache,
             bg_tasks=_background_tasks,
+            cwd=recall_cwd,
         )
     else:
         memories = await simba.memory.vector_db.search_memories(
             table, embedding, min_sim, max_res, filters
         )
+        if getattr(config, "dormant_filter_enabled", True):
+            memories = await asyncio.to_thread(
+                simba.memory.hybrid._filter_dormant, memories, recall_cwd
+            )
 
     results = [
         {
@@ -393,11 +423,20 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     # Fire-and-forget: update access tracking for returned memories.
     if results:
         recalled_ids = [r["id"] for r in results]
-        task = asyncio.create_task(
+        now_epoch = time.time()
+        cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+
+        # Existing LanceDB access tracking (kept; never read for ranking).
+        task1 = asyncio.create_task(
             simba.memory.vector_db.update_access_tracking(table, recalled_ids)
         )
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        _background_tasks.add(task1)
+        task1.add_done_callback(_background_tasks.discard)
+
+        # Authoritative sqlite usage store (drives decay/feedback ranking).
+        task2 = asyncio.create_task(_bump_usage(recalled_ids, now_epoch, cwd))
+        _background_tasks.add(task2)
+        task2.add_done_callback(_background_tasks.discard)
 
     return {"memories": results, "queryTimeMs": query_time_ms}
 
@@ -596,6 +635,57 @@ async def patch_memory(
             logger.debug("[patch] fts mirror project update failed", exc_info=True)
 
     return {"status": "updated", "id": memory_id, "fields": list(updates.keys())}
+
+
+class FeedbackRequest(pydantic.BaseModel):
+    """Outcome-feedback signal for a recalled memory."""
+
+    signal: str  # "good" or "bad"
+    weight: float | None = None  # override; None → cfg.feedback_default_weight
+
+
+@router.post("/memory/{memory_id}/feedback")
+async def memory_feedback(
+    memory_id: str,
+    body: FeedbackRequest,
+    request: fastapi.Request,
+) -> dict:
+    """Adjust ``feedback_score`` for a memory. Never deletes, never touches LanceDB.
+
+    ``good`` adds ``+weight`` and ``bad`` adds ``-weight`` (clamped to
+    ``[-1, 1]`` by the usage store). ``weight`` is clamped to ``[0, 1]`` so an
+    adversarial value cannot cause an outsized jump. The new score feeds
+    ``compute_strength`` on the next decay pass.
+    """
+    cfg = request.app.state.config
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+
+    if body.signal not in ("good", "bad"):
+        raise fastapi.HTTPException(
+            status_code=400, detail="signal must be 'good' or 'bad'"
+        )
+
+    weight = (
+        body.weight
+        if body.weight is not None
+        else getattr(cfg, "feedback_default_weight", 0.3)
+    )
+    weight = max(0.0, min(1.0, float(weight)))
+    delta = weight if body.signal == "good" else -weight
+
+    import simba.db
+    import simba.memory.usage
+
+    now = time.time()
+
+    def _apply() -> float:
+        with simba.db.connect(cwd):
+            simba.memory.usage.apply_feedback(memory_id, delta, now=now)
+            rows = simba.memory.usage.get_many([memory_id])
+            return rows[memory_id].feedback_score if memory_id in rows else 0.0
+
+    new_score = await asyncio.to_thread(_apply)
+    return {"status": "ok", "id": memory_id, "feedback_score": new_score}
 
 
 @router.delete("/memory/{memory_id}")

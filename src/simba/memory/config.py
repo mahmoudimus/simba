@@ -96,6 +96,31 @@ class MemoryConfig:
     # LLM — it serves the fast order and reranks off the hot path, caching the
     # result by (query, candidate-set) for the next recurrence. Cache capacity:
     rerank_cache_size: int = 256
+    # Decay / forgetting + feedback-aware ranking (Phase 6). Mutable per-memory
+    # ranking signals live in the sqlite ``memory_usage`` table; these tunables
+    # drive how strength decays over time, how access reinforces it, and how
+    # outcome feedback nudges it. The scheduler runs a periodic decay pass.
+    decay_enabled: bool = True  # master switch for all decay/dormancy updates
+    # Time (days) at which an unaccessed memory's decay factor reaches 0.5.
+    decay_half_life_days: float = 30.0
+    # How much each access "lifts" strength (logistic scale). Smaller saturates
+    # faster: with scale=0.5, 1 access → ~0.86, 2 → ~0.98, 3 → ~1.00.
+    reinforcement_scale: float = 0.5
+    # Weight applied to feedback_score when computing final strength:
+    # final = base * (1 + feedback_weight * feedback_score), feedback ∈ [-1, 1].
+    feedback_weight: float = 0.2
+    # Memories whose strength falls below this after a decay pass become dormant.
+    strength_dormancy_threshold: float = 0.1
+    # Max non-dormant memories per (type, project_path). 0 = unlimited. When > 0,
+    # the weakest memories beyond this cap are set dormant.
+    decay_capacity_per_type: int = 0
+    # Weight of the strength term in composite_rescore. Missing usage rows score
+    # 1.0 (no penalty for never-recalled memories).
+    score_weight_strength: float = 0.4
+    # When True, dormant memories are excluded from recall results.
+    dormant_filter_enabled: bool = True
+    # Default delta applied per good/bad feedback signal. Overridable per-call.
+    feedback_default_weight: float = 0.3
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

@@ -95,6 +95,7 @@ class TestRecallIntentAwareFloor:
             llm_client=None,
             rerank_cache=None,
             bg_tasks=None,
+            cwd=None,
         ):
             captured["min_similarity"] = min_similarity
             return []
@@ -179,6 +180,7 @@ class TestRecallBroadWidening:
             llm_client=None,
             rerank_cache=None,
             bg_tasks=None,
+            cwd=None,
         ):
             captured["max_results"] = max_results
             captured["candidate_pool"] = candidate_pool
@@ -254,6 +256,7 @@ class TestRecallExpansion:
             llm_client=None,
             rerank_cache=None,
             bg_tasks=None,
+            cwd=None,
         ):
             captured["extra_embedding"] = extra_embedding
             return []

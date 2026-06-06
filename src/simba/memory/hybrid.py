@@ -10,14 +10,55 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 import typing
 
+import simba.db
 import simba.memory.fts
 import simba.memory.keywords
 import simba.memory.llm_rerank
 import simba.memory.scoring
+import simba.memory.usage
 import simba.memory.vector_db
+
+if typing.TYPE_CHECKING:
+    import pathlib
+
+logger = logging.getLogger("simba.memory")
+
+
+class _FAKE_NON_DORMANT:  # noqa: N801  # sentinel name fixed by the Phase 6 spec
+    """Sentinel for records with no usage row — treated as non-dormant."""
+
+    dormant = False
+
+
+def _filter_dormant(
+    records: list[dict[str, typing.Any]],
+    cwd: pathlib.Path,
+) -> list[dict[str, typing.Any]]:
+    """Remove records whose ``memory_usage.dormant`` is True.
+
+    Missing rows (no usage record yet) are treated as non-dormant. Runs sync
+    sqlite, so callers wrap it in ``asyncio.to_thread``. Fail-open: if the DB
+    read raises, return ``records`` unchanged (prefer showing a dormant memory
+    over dropping every result).
+    """
+    ids = [r["id"] for r in records if r.get("id")]
+    if not ids:
+        return records
+    try:
+        with simba.db.connect(cwd):
+            usage_map = simba.memory.usage.get_many(ids)
+    except Exception:
+        logger.debug("[recall] dormant filter failed (fail-open)", exc_info=True)
+        return records
+    return [
+        r
+        for r in records
+        if not usage_map.get(r.get("id", ""), _FAKE_NON_DORMANT).dormant
+    ]
 
 
 def _from_vector(item: dict[str, typing.Any]) -> dict[str, typing.Any]:
@@ -122,6 +163,7 @@ async def hybrid_search(
     llm_client: typing.Any = None,
     rerank_cache: typing.Any = None,
     bg_tasks: set | None = None,
+    cwd: pathlib.Path | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -177,10 +219,24 @@ async def hybrid_search(
     )
 
     # Optional composite re-scoring: blend RRF relevance with recency +
-    # importance over the full fused candidate set, then truncate.
+    # importance + strength over the full fused candidate set, then truncate.
     if getattr(cfg, "scoring_enabled", False):
+        usage_map: dict[str, typing.Any] = {}
+        w_str = float(getattr(cfg, "score_weight_strength", 0.0))
+        if w_str and cwd is not None:
+
+            def _load_usage() -> dict[str, typing.Any]:
+                ids = [r.get("id") for r in fused if r.get("id")]
+                try:
+                    with simba.db.connect(cwd):
+                        return simba.memory.usage.get_many(ids)
+                except Exception:
+                    logger.debug("[recall] usage load failed", exc_info=True)
+                    return {}
+
+            usage_map = await asyncio.to_thread(_load_usage)
         fused = simba.memory.scoring.composite_rescore(
-            fused, cfg=cfg, now=time.time()
+            fused, cfg=cfg, now=time.time(), usage_map=usage_map
         )
 
     # Optional LLM rerank of the candidate pool (cross-encoder role) before
@@ -219,6 +275,10 @@ async def hybrid_search(
                     client=llm_client,
                     max_candidates=max_cands,
                 )
+
+    # Drop dormant memories (forgotten by the decay pass) before truncation.
+    if getattr(cfg, "dormant_filter_enabled", True) and cwd is not None:
+        fused = await asyncio.to_thread(_filter_dormant, fused, cwd)
 
     return fused[:max_results]
 
