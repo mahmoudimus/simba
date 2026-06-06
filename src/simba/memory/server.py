@@ -24,6 +24,7 @@ import simba.memory.config
 import simba.memory.diagnostics
 import simba.memory.embeddings
 import simba.memory.fts
+import simba.memory.hyde_cache
 import simba.memory.rerank_cache
 import simba.memory.routes
 
@@ -107,6 +108,10 @@ def create_app(
     # Non-blocking LLM rerank cache (daemon-process lifetime).
     app.state.rerank_cache = simba.memory.rerank_cache.RerankCache(
         max_entries=config.rerank_cache_size,
+    )
+    # Non-blocking HyDE answer cache (daemon-process lifetime).
+    app.state.hyde_cache = simba.memory.hyde_cache.HydeCache(
+        max_entries=config.hyde_cache_size,
     )
 
     return app
