@@ -995,6 +995,7 @@ _VALID_MEMORY_TYPES = {
     "FAILURE",
     "PREFERENCE",
     "EPISODE",
+    "REFLECTION",  # cross-session synthesized insight (Phase 5)
 }
 
 

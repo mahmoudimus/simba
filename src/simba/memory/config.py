@@ -43,6 +43,13 @@ class MemoryConfig:
     max_content_length: int = 200
     auto_start: bool = True
     diagnostics_after: int = 50
+    # Max latency samples kept per endpoint for p50/p95 in /metrics.
+    diagnostics_reservoir_size: int = 1000
+    # Memory hygiene (Phase 7 ops): expire stale TOOL_RULE memories older than
+    # this many days (0 = disabled). Solves the stale false-warning injection.
+    tool_rule_max_age_days: int = 30
+    # Let the background sync scheduler run the hygiene pass.
+    hygiene_scheduler_enabled: bool = True
     sync_interval: int = 0
     shutdown_timeout: int = 10
     # Hybrid recall (L3): a BM25 keyword arm fused with the vector arm via RRF.

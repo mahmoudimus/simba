@@ -22,8 +22,11 @@ _EXT = "simba.sync.scheduler.run_extract"
 
 def _ok_index(**kwargs) -> IndexResult:
     defaults = dict(
-        tables_polled=1, rows_indexed=2, rows_exported=1,
-        duplicates=0, errors=0,
+        tables_polled=1,
+        rows_indexed=2,
+        rows_exported=1,
+        duplicates=0,
+        errors=0,
     )
     defaults.update(kwargs)
     return IndexResult(**defaults)
@@ -31,8 +34,11 @@ def _ok_index(**kwargs) -> IndexResult:
 
 def _ok_extract(**kwargs) -> ExtractResult:
     defaults = dict(
-        memories_processed=3, facts_extracted=1,
-        facts_duplicate=0, agent_dispatched=False, errors=0,
+        memories_processed=3,
+        facts_extracted=1,
+        facts_duplicate=0,
+        agent_dispatched=False,
+        errors=0,
     )
     defaults.update(kwargs)
     return ExtractResult(**defaults)
@@ -56,7 +62,9 @@ class TestRunOnce:
     @patch(_EXT, side_effect=_ext_side_effect)
     @patch(_IDX, side_effect=_idx_side_effect)
     async def test_returns_summary(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         scheduler = SyncScheduler(interval_seconds=1)
         summary = await scheduler.run_once()
@@ -70,7 +78,9 @@ class TestRunOnce:
     @patch(_EXT, side_effect=_ext_side_effect)
     @patch(_IDX, side_effect=_idx_side_effect)
     async def test_cycle_count_increments(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         scheduler = SyncScheduler(interval_seconds=1)
         await scheduler.run_once()
@@ -81,11 +91,36 @@ class TestRunOnce:
     @patch(_EXT, side_effect=lambda *a, **kw: _ok_extract(errors=1))
     @patch(_IDX, side_effect=lambda *a, **kw: _ok_index(errors=2))
     async def test_total_errors_aggregated(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         scheduler = SyncScheduler(interval_seconds=1)
         summary = await scheduler.run_once()
         assert summary["total_errors"] == 3
+
+    @pytest.mark.asyncio
+    @patch(_EXT, side_effect=_ext_side_effect)
+    @patch(_IDX, side_effect=_idx_side_effect)
+    @patch(
+        "simba.sync.scheduler.SyncScheduler._maybe_reflect",
+        return_value={"status": "disabled"},
+    )
+    @patch(
+        "simba.sync.scheduler.SyncScheduler._maybe_consolidate",
+        return_value={"dispatched": []},
+    )
+    async def test_summary_includes_reflection(
+        self,
+        mock_cons,
+        mock_ref,
+        mock_index,
+        mock_extract,
+    ) -> None:
+        scheduler = SyncScheduler(interval_seconds=1)
+        summary = await scheduler.run_once()
+        assert "reflection" in summary
+        assert summary["reflection"]["status"] == "disabled"
 
 
 class TestRunForever:
@@ -93,7 +128,9 @@ class TestRunForever:
     @patch(_EXT, side_effect=_ext_side_effect)
     @patch(_IDX, side_effect=_idx_side_effect)
     async def test_stop_ends_run_forever(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         scheduler = SyncScheduler(interval_seconds=600)
 
@@ -114,7 +151,9 @@ class TestRunForever:
     @patch(_EXT, side_effect=RuntimeError("boom"))
     @patch(_IDX, side_effect=RuntimeError("boom"))
     async def test_run_forever_handles_errors(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         """run_forever should not crash when run_once raises."""
         scheduler = SyncScheduler(interval_seconds=600)
@@ -135,7 +174,9 @@ class TestRunForever:
     @patch(_EXT, side_effect=_ext_side_effect)
     @patch(_IDX, side_effect=_idx_side_effect)
     async def test_running_property(
-        self, mock_index, mock_extract,
+        self,
+        mock_index,
+        mock_extract,
     ) -> None:
         scheduler = SyncScheduler(interval_seconds=600)
         assert scheduler.running is False

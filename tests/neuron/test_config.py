@@ -21,3 +21,21 @@ class TestServerConfig:
         )
         assert cfg.python_cmd == "/usr/bin/python3"
         assert cfg.souffle_cmd is None
+
+
+def test_neuron_config_has_phase7_fields() -> None:
+    import simba.neuron.config as nc
+
+    cfg = nc.NeuronConfig()
+    assert cfg.derive_enabled is True
+    assert cfg.verify_timeout_seconds == 30
+    assert cfg.induce_min_activations == 3
+
+
+def test_neuron_config_via_simba_config(monkeypatch) -> None:
+    import simba.config
+    import simba.neuron.config  # registers section
+
+    _ = simba.neuron.config
+    cfg = simba.config.load("neuron")
+    assert hasattr(cfg, "contradiction_sample_size")
