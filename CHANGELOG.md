@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-06
+
+### Fixed
+
+- **Blank PyPI project page**: `pyproject.toml` was missing `[project].readme`, so
+  no long-description metadata was uploaded. Declared `readme = "README.md"` — the
+  README now renders on PyPI.
+
 ## [0.2.0] — 2026-06-05
 
 ### Added
