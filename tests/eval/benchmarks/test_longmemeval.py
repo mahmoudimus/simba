@@ -83,3 +83,11 @@ def test_gold_is_has_answer_turns() -> None:
 def test_intent_is_question_type() -> None:
     ds = next(d for d in lme.load_longmemeval_data(_SAMPLE) if d.name == "q1")
     assert ds.cases[0].intent == "single-session-user"
+
+
+def test_is_abstention_detects_abs_suffix() -> None:
+    from simba.eval.benchmarks.longmemeval import is_abstention
+
+    assert is_abstention("q1_abs") is True
+    assert is_abstention("q1") is False
+    assert is_abstention("abs_q1") is False  # only suffix counts
