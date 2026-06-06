@@ -56,9 +56,20 @@ Published as **`simba-ai`** (the name `simba` was taken); the import package and
 the CLI are still `simba`:
 
 ```bash
-uv tool install simba-ai      # or: pip install simba-ai
+uv tool install simba-ai          # or: pip install simba-ai
 simba install --global
 ```
+
+The **core** install (KG, sync, config CLI, hooks, neuro-symbolic logic) has no
+heavy ML dependencies. The in-process semantic-memory daemon needs the optional
+`embed` extra (LanceDB + llama-cpp-python + huggingface-hub):
+
+```bash
+uv tool install 'simba-ai[embed]'   # or: pip install 'simba-ai[embed]'
+```
+
+Without `[embed]`, `simba memory start` exits with a clear ImportError telling
+you to install the extra; everything else works.
 
 ### Upgrading
 

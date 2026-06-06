@@ -106,6 +106,7 @@ def create_app(
     app.state.embed_query = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
+        reservoir_size=config.diagnostics_reservoir_size,
     )
     # Non-blocking LLM rerank cache (daemon-process lifetime).
     app.state.rerank_cache = simba.memory.rerank_cache.RerankCache(
@@ -130,7 +131,13 @@ async def init_database(
     app: fastapi.FastAPI, data_dir: pathlib.Path | None = None
 ) -> None:
     """Initialize LanceDB and attach to app state."""
-    import lancedb
+    try:
+        import lancedb
+    except ImportError as exc:  # core-only install (no `embed` extra)
+        raise ImportError(
+            "The semantic-memory daemon needs the optional ML dependencies. "
+            "Install them with: pip install 'simba-ai[embed]'"
+        ) from exc
 
     config: simba.memory.config.MemoryConfig = app.state.config
 

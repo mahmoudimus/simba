@@ -105,9 +105,11 @@ class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
         ],
     ) -> starlette.responses.Response:
         diag = getattr(request.app.state, "diagnostics", None)
+        t0 = time.monotonic()
         response = await call_next(request)
         if diag is not None:
             diag.record_request(request.url.path)
+            diag.record_latency(request.url.path, (time.monotonic() - t0) * 1000)
             if diag.should_report():
                 table = getattr(request.app.state, "table", None)
                 task = asyncio.create_task(diag.emit_report(table))
@@ -126,6 +128,7 @@ VALID_TYPES = [
     "SYSTEM",
     "TOOL_RULE",
     "EPISODE",
+    "REFLECTION",  # cross-session synthesized insight (Phase 5)
 ]
 
 
@@ -464,6 +467,19 @@ async def health(request: fastapi.Request) -> dict:
         "memoryCount": memory_count,
         "embeddingModel": config.embedding_model,
         "vectorDbSize": db_size,
+    }
+
+
+@router.get("/metrics")
+async def metrics(request: fastapi.Request) -> dict:
+    """Per-endpoint latency (p50/p95) plus uptime and total request count."""
+    diag = getattr(request.app.state, "diagnostics", None)
+    uptime = int(time.time() - request.app.state.start_time)
+    latency = diag.all_latency_stats() if diag else {}
+    return {
+        "uptime_seconds": uptime,
+        "latency": latency,
+        "total_requests": diag._total_requests if diag else 0,
     }
 
 
