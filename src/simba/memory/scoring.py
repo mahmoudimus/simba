@@ -56,6 +56,7 @@ def composite_rescore(
     *,
     cfg: typing.Any,
     now: float,
+    usage_map: dict[str, typing.Any] | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Re-rank ``records`` by a weighted blend of relevance/recency/importance.
 
@@ -63,6 +64,12 @@ def composite_rescore(
     hands them over). Returns a new list ordered by composite score (desc),
     each record annotated with ``composite_score``. A no-op (returns the input
     unchanged) when ``cfg.scoring_enabled`` is false.
+
+    ``usage_map`` (keyed by memory id) optionally supplies a per-memory
+    ``strength`` from the sqlite usage sidecar. When ``score_weight_strength``
+    is non-zero and a row exists, its strength enters the blend; a missing row
+    scores ``1.0`` (no penalty). Backward-compatible: omitting ``usage_map``
+    leaves the legacy relevance/recency/importance behaviour unchanged.
     """
     if not getattr(cfg, "scoring_enabled", False) or not records:
         return records
@@ -70,6 +77,7 @@ def composite_rescore(
     w_rel = float(getattr(cfg, "score_weight_relevance", 1.0))
     w_rec = float(getattr(cfg, "score_weight_recency", 0.0))
     w_imp = float(getattr(cfg, "score_weight_importance", 0.0))
+    w_str = float(getattr(cfg, "score_weight_strength", 0.0))
     halflife = float(getattr(cfg, "recency_halflife_days", 90.0))
 
     relevance = _normalize([float(r.get("rrf_score", 0.0)) for r in records])
@@ -78,7 +86,12 @@ def composite_rescore(
     for idx, (rec, rel) in enumerate(zip(records, relevance, strict=True)):
         rec_score = _recency(rec.get("createdAt", "") or "", now, halflife)
         imp = max(0.0, min(1.0, float(rec.get("confidence", 0.0) or 0.0)))
-        composite = w_rel * rel + w_rec * rec_score + w_imp * imp
+        if w_str and usage_map is not None:
+            row = usage_map.get(rec.get("id", ""), None)
+            strength_val = float(row.strength) if row is not None else 1.0
+        else:
+            strength_val = 1.0
+        composite = w_rel * rel + w_rec * rec_score + w_imp * imp + w_str * strength_val
         rec["composite_score"] = round(composite, 6)
         # idx as a stable tiebreaker preserves the incoming (rrf) order on ties.
         scored.append((composite, idx, rec))
