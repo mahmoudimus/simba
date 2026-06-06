@@ -234,6 +234,7 @@ def run_qa(
     abstention_phrases: list[str] | None = None,
     cache: typing.Any = None,
     judge_model: str = "",
+    eval_cfg: typing.Any = None,
 ) -> dict[str, typing.Any]:
     """Run the full retrieve -> answer -> grade loop over datasets, aggregate.
 
@@ -243,6 +244,10 @@ def run_qa(
     When ``include_abstention`` is True, ``_abs`` cases are routed to
     ``score_abstention`` and reported in a separate ``abstention`` block. The
     report always carries an ``abstention`` key for a consistent shape.
+
+    When ``eval_cfg.ircot_enabled`` is True, cases with ``intent == "multi-hop"``
+    are routed through the IRCoT interleaved retrieve-and-reason loop instead of
+    the single-pass ``score_case``. ``eval_cfg`` None ⇒ current behavior.
     """
     import simba.eval.benchmarks.longmemeval as longmemeval
 
@@ -255,6 +260,7 @@ def run_qa(
     # retriever-only; split score_case later if retriever-only timing is needed.
     latencies: list[float] = []
     skipped = 0
+    ircot_on = eval_cfg is not None and getattr(eval_cfg, "ircot_enabled", False)
     for dset in datasets:
         id2content = {m.id: m.content for m in dset.corpus}
         with tempfile.TemporaryDirectory(prefix="simba-qa-") as td:
@@ -288,16 +294,32 @@ def run_qa(
                     skipped += 1
                     continue
                 t0 = time.perf_counter()
-                correct = score_case(
-                    case,
-                    retriever,
-                    id2content,
-                    llm,
-                    judge=judge,
-                    k=k,
-                    cache=cache,
-                    judge_model=judge_model,
-                )
+                if ircot_on and (case.intent or "") == "multi-hop":
+                    import simba.eval.benchmarks.ircot as ircot
+
+                    correct = ircot.score_case_ircot(
+                        case,
+                        retriever,
+                        id2content,
+                        llm,
+                        max_steps=eval_cfg.ircot_max_steps,
+                        k_per_step=eval_cfg.ircot_k_per_step,
+                        k_final=eval_cfg.ircot_k_final,
+                        cache=cache,
+                        judge_model=judge_model,
+                        judge_llm=judge,
+                    )
+                else:
+                    correct = score_case(
+                        case,
+                        retriever,
+                        id2content,
+                        llm,
+                        judge=judge,
+                        k=k,
+                        cache=cache,
+                        judge_model=judge_model,
+                    )
                 latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
                     skipped += 1

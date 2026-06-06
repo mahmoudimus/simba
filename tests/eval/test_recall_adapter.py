@@ -85,3 +85,68 @@ def test_empty_corpus_returns_empty(tmp_path: pathlib.Path) -> None:
         empty, data_dir=tmp_path, embed_doc=_embed, embed_query=_embed
     )
     assert r("anything") == []
+
+
+class _HydeFakeLlm:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def available(self) -> bool:
+        return True
+
+    def complete(self, prompt: str) -> str:
+        return self._text
+
+
+def test_retriever_with_llm_hyde_mode_uses_plan_hyde_text(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """The eval retriever embeds the LLM hypothetical answer (not focus terms)."""
+    import simba.memory.config
+    import simba.memory.recall_plan as recall_plan
+    import simba.memory.vector_db as vdb
+
+    cfg = simba.memory.config.MemoryConfig(
+        hyde_mode="llm",
+        expansion_enabled=True,
+        # Keep the eval path purely on the 2nd-arm wiring: no rerank.
+        llm_rerank_enabled=False,
+    )
+    query = "gh auth github_token fails"
+    # HyDE text uses a vocab token absent from the query so its embedding is
+    # distinct from both the primary arm and the keyword fallback.
+    hyde_text = "the peewee orm answer"
+
+    # The string actually fed to the 2nd arm is plan.hyde_text. With the fake LLM
+    # returning hyde_text and no cache (eval path), the plan resolves to it.
+    plan = recall_plan.plan_recall(
+        query, cfg, llm_client=_HydeFakeLlm(hyde_text), hyde_cache=None
+    )
+    assert plan.hyde_text == hyde_text
+    assert plan.hyde_text != plan.expansion_terms  # not the keyword fallback
+    assert _embed(hyde_text) != _embed(plan.expansion_terms)
+
+    recorded: list[list[float]] = []
+    real_search = vdb.search_memories
+
+    async def _recording_search(table, emb, min_sim, max_res, filters):
+        recorded.append(list(emb))
+        return await real_search(table, emb, min_sim, max_res, filters)
+
+    monkeypatch.setattr(vdb, "search_memories", _recording_search)
+
+    retriever = ra.build_retriever(
+        _DATASET,
+        cfg,
+        data_dir=tmp_path,
+        embed_doc=_embed,
+        embed_query=_embed,
+        llm_client=_HydeFakeLlm(hyde_text),
+    )
+    retriever(query)
+
+    # The 2nd arm's embedding must equal embed_query(hyde_text), not the focus
+    # terms. First recorded vector = primary arm (the query), second = the HyDE
+    # arm. Because _embed(hyde_text) != _embed(expansion_terms), this proves the
+    # keyword fallback was NOT used for the 2nd arm.
+    assert recorded == [_embed(query), _embed(hyde_text)]

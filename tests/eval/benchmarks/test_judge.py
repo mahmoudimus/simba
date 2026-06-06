@@ -295,3 +295,129 @@ def test_run_qa_report_has_latency_block() -> None:
     assert "p50_ms" in report["latency"]
     assert "p95_ms" in report["latency"]
     assert report["latency"]["n"] == 1
+
+
+# ── IRCoT routing in run_qa ────────────────────────────────────────────────
+
+
+def _qa_ds() -> Dataset:
+    corpus = [Memory(id="m1", content="x"), Memory(id="m2", content="y")]
+    cases = [
+        EvalCase(
+            id="mh",
+            query="multi q",
+            relevant_ids=["m1"],
+            intent="multi-hop",
+            answer="A",
+        ),
+        EvalCase(
+            id="sh",
+            query="single q",
+            relevant_ids=["m2"],
+            intent="single-hop",
+            answer="B",
+        ),
+    ]
+    return Dataset(name="qa-routing", corpus=corpus, cases=cases)
+
+
+def _patch_retriever(monkeypatch) -> None:
+    # Avoid building a real LanceDB store: the routing test only cares which
+    # scorer each case is sent to, not what the retriever returns.
+    monkeypatch.setattr(
+        "simba.eval.recall_adapter.build_retriever",
+        lambda *a, **k: lambda q: [],
+    )
+
+
+def test_run_qa_uses_ircot_for_multi_hop_when_enabled(monkeypatch) -> None:
+    import simba.eval.benchmarks.ircot as ircot
+    import simba.eval.config as ec
+
+    _patch_retriever(monkeypatch)
+    ircot_cases: list[str] = []
+    std_cases: list[str] = []
+
+    def fake_ircot(case, *a, **k) -> bool:
+        ircot_cases.append(case.id)
+        return True
+
+    def fake_std(case, *a, **k) -> bool:
+        std_cases.append(case.id)
+        return True
+
+    monkeypatch.setattr(ircot, "score_case_ircot", fake_ircot)
+    monkeypatch.setattr(judge, "score_case", fake_std)
+
+    eval_cfg = ec.EvalConfig(
+        ircot_enabled=True, ircot_max_steps=1, ircot_k_per_step=1, ircot_k_final=2
+    )
+    judge.run_qa(
+        [_qa_ds()],
+        embed_doc=lambda t: [0.0],
+        embed_query=lambda t: [0.0],
+        cfg=None,
+        llm=FakeLlm(),
+        eval_cfg=eval_cfg,
+    )
+    assert ircot_cases == ["mh"]  # multi-hop went to IRCoT
+    assert std_cases == ["sh"]  # single-hop went to standard score_case
+
+
+def test_run_qa_uses_standard_path_when_ircot_disabled(monkeypatch) -> None:
+    import simba.eval.benchmarks.ircot as ircot
+    import simba.eval.config as ec
+
+    _patch_retriever(monkeypatch)
+    ircot_calls = 0
+    std_cases: list[str] = []
+
+    def fake_ircot(case, *a, **k) -> bool:
+        nonlocal ircot_calls
+        ircot_calls += 1
+        return True
+
+    monkeypatch.setattr(ircot, "score_case_ircot", fake_ircot)
+    monkeypatch.setattr(
+        judge, "score_case", lambda case, *a, **k: std_cases.append(case.id) or True
+    )
+
+    judge.run_qa(
+        [_qa_ds()],
+        embed_doc=lambda t: [0.0],
+        embed_query=lambda t: [0.0],
+        cfg=None,
+        llm=FakeLlm(),
+        eval_cfg=ec.EvalConfig(ircot_enabled=False),
+    )
+    assert ircot_calls == 0
+    assert sorted(std_cases) == ["mh", "sh"]
+
+
+def test_run_qa_ircot_none_eval_cfg_uses_standard_path(monkeypatch) -> None:
+    import simba.eval.benchmarks.ircot as ircot
+
+    _patch_retriever(monkeypatch)
+    ircot_calls = 0
+    std_cases: list[str] = []
+
+    def fake_ircot(case, *a, **k) -> bool:
+        nonlocal ircot_calls
+        ircot_calls += 1
+        return True
+
+    monkeypatch.setattr(ircot, "score_case_ircot", fake_ircot)
+    monkeypatch.setattr(
+        judge, "score_case", lambda case, *a, **k: std_cases.append(case.id) or True
+    )
+
+    judge.run_qa(
+        [_qa_ds()],
+        embed_doc=lambda t: [0.0],
+        embed_query=lambda t: [0.0],
+        cfg=None,
+        llm=FakeLlm(),
+        eval_cfg=None,
+    )
+    assert ircot_calls == 0
+    assert sorted(std_cases) == ["mh", "sh"]
