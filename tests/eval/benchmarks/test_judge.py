@@ -6,6 +6,8 @@ LanceDB and no live model.
 
 from __future__ import annotations
 
+import pytest
+
 import simba.eval.benchmarks.judge as judge
 from simba.eval.dataset import Dataset, EvalCase, Memory
 
@@ -99,3 +101,197 @@ def test_evalcase_answer_round_trips() -> None:
     assert c.answer == "7 May"
     raw = {"id": "q1", "query": "When?", "relevant_ids": ["c1"], "answer": "7 May"}
     assert EvalCase.from_dict(raw).answer == "7 May"
+
+
+# --- B1: separate judge from answerer ---------------------------------------
+
+
+def test_score_case_uses_judge_for_grading_not_answerer() -> None:
+    """answerer.complete_json should NOT be called when a separate judge is given."""
+    case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
+    answerer = FakeLlm(answer="7 May", verdict={"correct": True})
+    judge_llm = FakeLlm(answer="ignored", verdict={"correct": True})
+    correct = judge.score_case(
+        case, lambda q: ["c1"], {"c1": "x"}, answerer, judge=judge_llm, k=5
+    )
+    assert correct is True
+    # answerer called once (generate answer), judge called once (grade)
+    assert len(answerer.prompts) == 1  # build_answer_prompt only
+    assert len(judge_llm.prompts) == 1  # build_judge_prompt only
+
+
+def test_score_case_judge_none_falls_back_to_answerer() -> None:
+    """Legacy path: no judge kwarg -> answerer grades its own answer."""
+    case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
+    llm = FakeLlm(answer="7 May", verdict={"correct": False})
+    correct = judge.score_case(case, lambda q: ["c1"], {"c1": "x"}, llm, k=5)
+    assert correct is False
+    assert len(llm.prompts) == 2  # answer + grade
+
+
+def test_run_qa_passes_judge_to_score_case() -> None:
+    """run_qa with judge kwarg should route grading to the judge client."""
+    import unittest.mock
+
+    import simba.eval.benchmarks.judge as jmod
+    import simba.memory.config as mc
+    from simba.eval.dataset import Dataset, EvalCase, Memory
+
+    called_with: list[dict] = []
+
+    def patched_score(case, retriever, id2content, answerer, *, judge=None, **kw):
+        called_with.append({"answerer": answerer, "judge": judge})
+        return True
+
+    with unittest.mock.patch.object(jmod, "score_case", patched_score):
+        ds = Dataset(
+            name="t",
+            corpus=[Memory(id="c1", content="x")],
+            cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+        )
+        answerer = FakeLlm(answer="a")
+        judge_llm = FakeLlm(answer="x")
+        cfg = mc.MemoryConfig(
+            llm_rerank_enabled=False,
+            scoring_enabled=False,
+            expansion_enabled=False,
+        )
+        embed = lambda t: [0.0] * 384  # noqa: E731
+        jmod.run_qa(
+            [ds],
+            embed_doc=embed,
+            embed_query=embed,
+            cfg=cfg,
+            llm=answerer,
+            judge=judge_llm,
+        )
+    assert called_with[0]["answerer"] is answerer
+    assert called_with[0]["judge"] is judge_llm
+
+
+# --- B3: abstention scoring --------------------------------------------------
+
+
+def test_score_abstention_heuristic_match_returns_true_without_judge() -> None:
+    case = EvalCase(
+        id="q1_abs",
+        query="When did I buy a boat?",
+        relevant_ids=["c1"],
+        answer="no information available",
+    )
+    answerer = FakeLlm(answer="I don't know, no information available.")
+    judge_llm = FakeLlm(answer="x", verdict={"abstained": False})  # NOT called
+    result = judge.score_abstention(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        abstention_phrases=["don't know", "no information"],
+    )
+    assert result is True
+    assert len(judge_llm.prompts) == 0  # heuristic short-circuited
+
+
+def test_score_abstention_no_phrase_match_calls_judge() -> None:
+    case = EvalCase(id="q1_abs", query="Q?", relevant_ids=["c1"], answer="n/a")
+    answerer = FakeLlm(answer="The answer is 42.")
+    judge_llm = FakeLlm(answer="x", verdict={"abstained": False})
+    result = judge.score_abstention(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        abstention_phrases=["don't know"],
+    )
+    assert result is False
+    assert len(judge_llm.prompts) == 1
+
+
+def test_score_abstention_returns_none_on_empty_answer() -> None:
+    case = EvalCase(id="q1_abs", query="Q?", relevant_ids=["c1"], answer="n/a")
+    answerer = FakeLlm(answer="   ")
+    result = judge.score_abstention(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        k=5,
+        abstention_phrases=["don't know"],
+    )
+    assert result is None
+
+
+def test_aggregate_with_abstention_includes_abstention_block() -> None:
+    rows = [("single-hop", True), ("multi-hop", False)]
+    abs_rows = [("temporal", True), ("temporal", False)]
+    rep = judge.aggregate_with_abstention(rows, abs_rows)
+    assert rep["n_graded"] == 2
+    assert rep["abstention"]["n"] == 2
+    assert rep["abstention"]["accuracy"] == pytest.approx(0.5)
+
+
+def test_run_qa_abstention_cases_scored_separately() -> None:
+    """run_qa with include_abstention=True scores _abs cases via score_abstention."""
+    import unittest.mock
+
+    import simba.eval.benchmarks.judge as jmod
+    import simba.memory.config as mc
+    from simba.eval.dataset import Dataset, Memory
+
+    normal_case = EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")
+    abs_case = EvalCase(id="q2_abs", query="q_abs", relevant_ids=["c1"], answer="n/a")
+    ds = Dataset(
+        name="t",
+        corpus=[Memory(id="c1", content="x")],
+        cases=[normal_case, abs_case],
+    )
+    answerer = FakeLlm(answer="a")
+    cfg = mc.MemoryConfig(
+        llm_rerank_enabled=False, scoring_enabled=False, expansion_enabled=False
+    )
+    embed = lambda t: [0.0] * 384  # noqa: E731
+    with (
+        unittest.mock.patch.object(jmod, "score_case", return_value=True) as m_sc,
+        unittest.mock.patch.object(jmod, "score_abstention", return_value=True) as m_sa,
+    ):
+        jmod.run_qa(
+            [ds],
+            embed_doc=embed,
+            embed_query=embed,
+            cfg=cfg,
+            llm=answerer,
+            include_abstention=True,
+            abstention_phrases=["don't know"],
+        )
+    assert m_sc.call_count == 1  # only normal case
+    assert m_sa.call_count == 1  # only abs case
+
+
+# --- B4: per-query latency in run_qa report ---------------------------------
+
+
+def test_run_qa_report_has_latency_block() -> None:
+    """run_qa report dict must include latency.p50_ms and latency.p95_ms."""
+    import simba.eval.benchmarks.judge as jmod
+    import simba.memory.config as mc
+    from simba.eval.dataset import Dataset, EvalCase, Memory
+
+    ds = Dataset(
+        name="t",
+        corpus=[Memory(id="c1", content="x")],
+        cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+    )
+    cfg = mc.MemoryConfig(
+        llm_rerank_enabled=False, scoring_enabled=False, expansion_enabled=False
+    )
+    embed = lambda t: [0.0] * 384  # noqa: E731
+    llm = FakeLlm(answer="a", verdict={"correct": True})
+    report = jmod.run_qa([ds], embed_doc=embed, embed_query=embed, cfg=cfg, llm=llm)
+    assert "latency" in report
+    assert "p50_ms" in report["latency"]
+    assert "p95_ms" in report["latency"]
+    assert report["latency"]["n"] == 1

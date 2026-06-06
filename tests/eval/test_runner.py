@@ -85,3 +85,43 @@ def test_run_eval_split_filters_cases() -> None:
     assert {c.case_id for c in rep.per_case} == {"b", "c"}
     # sanity: select agrees
     assert len(sp.select(cases, "test")) == 2
+
+
+# --- B4: per-query latency ---------------------------------------------------
+
+
+def test_case_result_has_latency_ms() -> None:
+    import time
+
+    def slow_retriever(q: str) -> list[str]:
+        time.sleep(0.01)  # 10ms
+        return ["m1"]
+
+    rep = runner.run_eval(_DATASET, slow_retriever, ks=(1,))
+    for case in rep.per_case:
+        assert case.latency_ms >= 5.0  # at least 5ms (generous lower bound)
+    assert case.latency_ms < 5000.0  # sanity upper bound
+
+
+def test_aggregate_has_p50_p95() -> None:
+    rep = runner.run_eval(_DATASET, _retriever, ks=(1,))
+    assert "p50_ms" in rep.aggregate
+    assert "p95_ms" in rep.aggregate
+    assert rep.aggregate["p50_ms"] >= 0.0
+    assert rep.aggregate["p95_ms"] >= rep.aggregate["p50_ms"]
+
+
+def test_to_dict_includes_latency_ms() -> None:
+    rep = runner.run_eval(_DATASET, _retriever, ks=(1,))
+    d = rep.per_case[0].to_dict()
+    assert "latency_ms" in d
+
+
+def test_percentile_correctness() -> None:
+    from simba.eval.runner import _percentile
+
+    assert _percentile([], 50) == 0.0
+    assert _percentile([10.0], 50) == pytest.approx(10.0)
+    assert _percentile([10.0, 20.0, 30.0], 50) == pytest.approx(20.0)
+    assert _percentile([10.0, 20.0, 30.0], 100) == pytest.approx(30.0)
+    assert _percentile([10.0, 20.0, 30.0], 0) == pytest.approx(10.0)
