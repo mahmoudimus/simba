@@ -23,6 +23,10 @@ Usage:
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
     simba eval <cmd>       Recall eval harness (run | build from real corpus)
+    simba eval bench DATASET [opts]
+                           Run recall@k (+ QA) on locomo/longmemeval benchmarks
+    simba eval leaderboard [--no-write]
+                           Render BENCHMARKS.md from results log
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
     simba orchestration <cmd> Agent orchestration server (MCP)
     simba config <cmd>     Unified configuration (get/set/list/show)
@@ -2084,6 +2088,10 @@ def _cmd_eval(args: list[str]) -> int:
     import simba.eval.run as run
     import simba.memory.config
 
+    if args and args[0] == "bench":
+        return _eval_bench(args[1:])
+    if args and args[0] == "leaderboard":
+        return _eval_leaderboard(args[1:])
     if args and args[0] == "build":
         return _eval_build(args[1:])
     if args and args[0] == "run":
@@ -2212,14 +2220,225 @@ def _eval_build(args: list[str]) -> int:
         )
         return 1
 
-    print(
-        f"generating queries for up to {n} of {len(mems)} memories…", file=sys.stderr
-    )
+    print(f"generating queries for up to {n} of {len(mems)} memories…", file=sys.stderr)
     dataset = build.build_from_memories(
         mems, client=client, name=f"real-corpus-{n}", max_cases=n
     )
     pathlib.Path(out).write_text(_json.dumps(dataset.to_dict(), indent=2))
     print(f"wrote {out}: {len(dataset.corpus)} memories, {len(dataset.cases)} cases")
+    return 0
+
+
+def _eval_bench(args: list[str]) -> int:
+    """simba eval bench locomo|longmemeval [--qa] [--n N|--per N|all]
+    [--k K] [--split dev|test] [--path PATH] [--json]
+    """
+    import dataclasses
+    import json as _json
+    import time
+
+    import simba.config
+    import simba.eval.bench_config  # registers the "bench" section
+    import simba.eval.bench_results as bench_results
+    import simba.eval.benchmarks.locomo as locomo
+    import simba.eval.benchmarks.longmemeval as lme
+    import simba.eval.benchmarks.run as bench_run
+    import simba.eval.run as run
+    import simba.memory.embedding_cache as ec
+
+    usage = (
+        "Usage: simba eval bench locomo|longmemeval [--qa] "
+        "[--n N | --per N | all] [--k K] [--split dev|test] "
+        "[--path PATH] [--json]"
+    )
+
+    if not args or args[0].startswith("--"):
+        print(usage, file=sys.stderr)
+        return 1
+
+    dataset_name = args[0]
+    if dataset_name not in ("locomo", "longmemeval"):
+        print(
+            f"eval bench: unknown dataset {dataset_name!r}; "
+            "choose locomo or longmemeval",
+            file=sys.stderr,
+        )
+        return 1
+
+    run_qa_flag = False
+    n_mode = "n"
+    n_val = 0
+    k = 0
+    split_arg = ""
+    path_arg = ""
+    as_json = False
+
+    i = 1
+    while i < len(args):
+        if args[i] == "--qa":
+            run_qa_flag = True
+            i += 1
+        elif args[i] == "--n" and i + 1 < len(args):
+            n_mode, n_val = "n", int(args[i + 1])
+            i += 2
+        elif args[i] == "--per" and i + 1 < len(args):
+            n_mode, n_val = "per", int(args[i + 1])
+            i += 2
+        elif args[i] == "all":
+            n_mode = "all"
+            i += 1
+        elif args[i] == "--k" and i + 1 < len(args):
+            k = int(args[i + 1])
+            i += 2
+        elif args[i] == "--split" and i + 1 < len(args):
+            split_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--path" and i + 1 < len(args):
+            path_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--json":
+            as_json = True
+            i += 1
+        else:
+            print(f"eval bench: unknown option {args[i]!r}", file=sys.stderr)
+            return 1
+
+    bcfg = simba.config.load("bench")
+    mcfg = simba.config.load("memory")
+    mcfg = dataclasses.replace(mcfg, **bcfg.eval_memory_config_overrides())
+
+    if dataset_name == "locomo":
+        dataset_path = path_arg or bcfg.locomo_path
+    else:
+        dataset_path = path_arg or bcfg.longmemeval_path
+    if not dataset_path:
+        print(
+            f"eval bench: no path for {dataset_name} "
+            f"(set bench.{dataset_name}_path or pass --path)",
+            file=sys.stderr,
+        )
+        return 1
+
+    def _resolve_bench_path(s: str) -> pathlib.Path:
+        p = pathlib.Path(s)
+        return p if p.is_absolute() else pathlib.Path.cwd() / p
+
+    try:
+        embed_cache = ec.EmbeddingCache(_resolve_bench_path(bcfg.embedding_cache_path))
+        embed_doc, embed_query = run.sync_embedders(mcfg, cache=embed_cache)
+    except Exception as exc:  # model download/load failure
+        print(f"eval bench: could not load the embedding model: {exc}", file=sys.stderr)
+        return 1
+
+    loader = locomo.load_locomo if dataset_name == "locomo" else lme.load_longmemeval
+    datasets = loader(dataset_path)
+    if n_mode == "n" and n_val > 0:
+        datasets = datasets[:n_val]
+
+    recall_report = bench_run.run_recall(
+        datasets, embed_doc=embed_doc, embed_query=embed_query, cfg=mcfg
+    )
+
+    qa_report = None
+    if run_qa_flag:
+        import simba.eval.benchmarks.judge as judge
+        import simba.eval.benchmarks.judge_cache as jc
+        import simba.llm.client as llm_client
+
+        if n_mode == "per":
+            qa_datasets = judge.sample_cases(datasets, per_category=n_val)
+        elif n_mode == "n" and n_val > 0:
+            qa_datasets = judge.sample_cases(datasets, n=n_val)
+        else:
+            qa_datasets = datasets
+        k_val = k or bcfg.default_k
+        llm = llm_client.get_client()
+        qa_report = judge.run_qa(
+            qa_datasets,
+            embed_doc=embed_doc,
+            embed_query=embed_query,
+            cfg=mcfg,
+            llm=llm,
+            k=k_val,
+            cache=jc.JudgeCache(_resolve_bench_path(bcfg.judge_cache_path)),
+        )
+
+    record = {
+        "timestamp": time.time(),
+        "git_sha": bench_results.current_git_sha(),
+        "dataset": dataset_name,
+        "split": split_arg or None,
+        "config": bench_results.config_snapshot(mcfg, bcfg),
+        "recall": recall_report,
+        "qa": qa_report,
+    }
+    bench_results.append_result(_resolve_bench_path(bcfg.results_path), record)
+
+    if as_json:
+        print(_json.dumps({"recall": recall_report, "qa": qa_report}, indent=2))
+    else:
+        o = recall_report["overall"]
+        print(
+            f"\n{dataset_name} recall ({recall_report['n_conversations']} "
+            f"conversations, {recall_report['n_cases']} questions)"
+        )
+        print(
+            f"  OVERALL  recall@1={o['recall@1']:.3f} recall@3={o['recall@3']:.3f} "
+            f"recall@5={o['recall@5']:.3f} recall@10={o['recall@10']:.3f} "
+            f"mrr={o['mrr']:.3f}"
+        )
+        for cat, m in recall_report["by_category"].items():
+            print(
+                f"  {cat:<18} n={m['n']:<4} r@1={m['recall@1']:.3f} "
+                f"r@5={m['recall@5']:.3f} r@10={m['recall@10']:.3f} "
+                f"mrr={m['mrr']:.3f}"
+            )
+        if qa_report is not None:
+            print(
+                f"\n{dataset_name} QA accuracy (graded={qa_report['n_graded']}, "
+                f"skipped={qa_report['n_skipped']})"
+            )
+            print(f"  OVERALL  accuracy={qa_report['overall']['accuracy']:.3f}")
+    return 0
+
+
+def _eval_leaderboard(args: list[str]) -> int:
+    """simba eval leaderboard [--json] [--no-write]"""
+    import simba.config
+    import simba.db
+    import simba.eval.bench_config  # registers the "bench" section
+    import simba.eval.bench_results as bench_results
+    import simba.eval.leaderboard as lb
+
+    no_write = "--no-write" in args
+
+    bcfg = simba.config.load("bench")
+    root = simba.db.find_repo_root(pathlib.Path.cwd()) or pathlib.Path.cwd()
+
+    def _resolve_from_root(s: str) -> pathlib.Path:
+        p = pathlib.Path(s)
+        return p if p.is_absolute() else root / p
+
+    results_path = _resolve_from_root(bcfg.results_path)
+    output_path = _resolve_from_root(bcfg.leaderboard_path)
+
+    if not results_path.exists():
+        print(
+            "leaderboard: no results found (run simba eval bench first)",
+            file=sys.stderr,
+        )
+        return 1
+
+    records = bench_results.load_results(results_path)
+    groups = bench_results.latest_two_by_group(records)
+
+    if no_write:
+        print(lb.render_stdout(groups))
+        return 0
+
+    lb.write_leaderboard(results_path, output_path)
+    print(lb.render_stdout(groups))
+    print(f"\nWrote {output_path}")
     return 0
 
 
