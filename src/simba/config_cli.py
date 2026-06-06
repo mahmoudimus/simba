@@ -25,6 +25,7 @@ def _ensure_registry() -> None:
     """Import all config modules so the registry is populated."""
     import simba.db  # registers the "project" section
     import simba.episodes.config
+    import simba.eval.bench_config  # registers the "bench" section
     import simba.eval.config
     import simba.guardian.config
     import simba.hooks.config

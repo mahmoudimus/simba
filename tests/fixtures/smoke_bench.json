@@ -1,0 +1,45 @@
+{
+  "name": "smoke",
+  "corpus": [
+    {
+      "id": "m1",
+      "content": "Alice loves hiking on weekends",
+      "type": "PATTERN",
+      "context": "",
+      "project_path": "",
+      "session_source": "",
+      "created_at": "",
+      "confidence": 0.9
+    },
+    {
+      "id": "m2",
+      "content": "Bob prefers indoor climbing",
+      "type": "PATTERN",
+      "context": "",
+      "project_path": "",
+      "session_source": "",
+      "created_at": "",
+      "confidence": 0.9
+    }
+  ],
+  "cases": [
+    {
+      "id": "q1",
+      "query": "What does Alice like to do?",
+      "relevant_ids": ["m1"],
+      "intent": "single-hop",
+      "note": "",
+      "split": "",
+      "answer": "hiking"
+    },
+    {
+      "id": "q2",
+      "query": "What sport does Bob prefer?",
+      "relevant_ids": ["m2"],
+      "intent": "single-hop",
+      "note": "",
+      "split": "",
+      "answer": "indoor climbing"
+    }
+  ]
+}
