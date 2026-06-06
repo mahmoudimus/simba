@@ -65,6 +65,8 @@ class SyncScheduler:
 
         epi = await loop.run_in_executor(None, self._maybe_consolidate)
 
+        decay_result = await loop.run_in_executor(None, self._maybe_decay)
+
         self._cycle_count += 1
         total_errors = idx.errors + ext.errors
 
@@ -84,12 +86,25 @@ class SyncScheduler:
                 "errors": ext.errors,
             },
             "episodes": {"dispatched": len(epi.get("dispatched", []))},
+            "decay": (
+                {
+                    "processed": decay_result.processed,
+                    "updated": decay_result.updated,
+                    "newly_dormant": decay_result.newly_dormant,
+                    "revived": decay_result.revived,
+                }
+                if decay_result
+                else {"skipped": True}
+            ),
             "total_errors": total_errors,
         }
 
         if total_errors:
-            logger.warning("Sync cycle %d completed with %d errors",
-                           self._cycle_count, total_errors)
+            logger.warning(
+                "Sync cycle %d completed with %d errors",
+                self._cycle_count,
+                total_errors,
+            )
         else:
             logger.info(
                 "Sync cycle %d: indexed=%d, facts=%d",
@@ -111,6 +126,24 @@ class SyncScheduler:
             return {"dispatched": [], "skipped": 0}
         return simba.episodes.consolidate.consolidate_eligible(
             str(self.cwd), ecfg=ecfg, daemon_url=self.daemon_url
+        )
+
+    def _maybe_decay(self):  # type: ignore[no-untyped-def]
+        """Run the memory decay/forgetting pass when enabled."""
+        import time
+
+        import simba.config
+        import simba.memory.config  # registers the "memory" section
+        import simba.memory.decay
+
+        _ = simba.memory.config
+        cfg = simba.config.load("memory")
+        if not getattr(cfg, "decay_enabled", True):
+            return None
+        return simba.memory.decay.run_decay_pass(
+            now=time.time(),
+            cwd=self.cwd,
+            cfg=cfg,
         )
 
     async def run_forever(self) -> None:
