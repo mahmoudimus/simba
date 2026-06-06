@@ -4,20 +4,25 @@ from __future__ import annotations
 
 import collections
 import logging
+import statistics
 
 logger = logging.getLogger("simba.memory")
 
 
 class DiagnosticsTracker:
-    """Tracks per-endpoint hit counts, recall/store statistics.
+    """Tracks per-endpoint hit counts, recall/store statistics, and latency.
 
     After every ``report_interval`` requests, prints a summary to the
-    logger and resets all counters.
+    logger and resets the rolling counters. Latency samples are kept in a
+    fixed-size per-endpoint reservoir (oldest evicted at capacity) and survive
+    report resets so percentiles reflect a stable window.
     """
 
-    def __init__(self, report_interval: int = 50) -> None:
+    def __init__(self, report_interval: int = 50, reservoir_size: int = 1000) -> None:
         self.report_interval = report_interval
         self._total_requests = 0
+        self._reservoir_size = reservoir_size
+        self._latency_samples: dict[str, list[float]] = collections.defaultdict(list)
         self._reset()
 
     def _reset(self) -> None:
@@ -34,6 +39,25 @@ class DiagnosticsTracker:
         """Record a hit to any endpoint."""
         self._endpoint_hits[endpoint] += 1
         self._total_requests += 1
+
+    def record_latency(self, endpoint: str, latency_ms: float) -> None:
+        """Record a latency sample, evicting the oldest when at capacity."""
+        buf = self._latency_samples[endpoint]
+        if len(buf) >= self._reservoir_size:
+            buf.pop(0)
+        buf.append(latency_ms)
+
+    def latency_percentiles(self, endpoint: str) -> dict[str, float]:
+        """Return ``{"p50": float, "p95": float, "n": int}`` for one endpoint."""
+        buf = self._latency_samples.get(endpoint, [])
+        if len(buf) < 2:
+            return {"p50": 0.0, "p95": 0.0, "n": len(buf)}
+        qs = statistics.quantiles(buf, n=20)  # 5% increments
+        return {"p50": qs[9], "p95": qs[18], "n": len(buf)}
+
+    def all_latency_stats(self) -> dict[str, dict[str, float]]:
+        """Return percentiles for all endpoints that have samples."""
+        return {ep: self.latency_percentiles(ep) for ep in self._latency_samples}
 
     def record_recall(self, query: str, result_count: int) -> None:
         """Record a recall operation."""
@@ -93,8 +117,7 @@ class DiagnosticsTracker:
 
         lines.append("")
         lines.append(
-            f"Store: {self._store_total} total, "
-            f"{self._store_duplicates} duplicates"
+            f"Store: {self._store_total} total, {self._store_duplicates} duplicates"
         )
         if self._store_by_type:
             lines.append("  By type:")

@@ -273,9 +273,7 @@ class TestRecallEndpoint:
         assert "mem_b" in ids
 
     @pytest.mark.asyncio
-    async def test_recall_with_project_excludes_global(
-        self, async_client, lance_table
-    ):
+    async def test_recall_with_project_excludes_global(self, async_client, lance_table):
         """A project-scoped query must NOT return untagged/global memories."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await lance_table.add(
@@ -334,6 +332,29 @@ class TestHealthEndpoint:
         assert "uptime" in data
         assert "memoryCount" in data
         assert data["embeddingModel"] == "nomic-embed-text"
+
+
+class TestMetricsEndpoint:
+    @pytest.mark.asyncio
+    async def test_metrics_shape(self, async_client):
+        resp = await async_client.get("/metrics")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "uptime_seconds" in data
+        assert "latency" in data
+        assert isinstance(data["latency"], dict)
+        assert "total_requests" in data
+
+    @pytest.mark.asyncio
+    async def test_metrics_reports_latency_per_endpoint(self, async_client):
+        # The middleware records latency for every served request.
+        await async_client.get("/health")
+        await async_client.get("/health")
+        resp = await async_client.get("/metrics")
+        latency = resp.json()["latency"]
+        assert "/health" in latency
+        assert "p50" in latency["/health"]
+        assert "p95" in latency["/health"]
 
     @pytest.mark.asyncio
     async def test_health_memory_count(self, async_client, lance_table):

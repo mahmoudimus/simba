@@ -10,14 +10,23 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
-    "lancedb>=0.4",
     "httpx>=0.28",
-    "llama-cpp-python>=0.3",
-    "huggingface-hub>=0.26",
     "mcp[cli]",
     "z3-solver",
     "tomli-w>=1.0",
 ]
+
+# Heavy ML deps are opt-in: a "core" install (KG, sync, config CLI, hooks,
+# neuro-symbolic logic) works without them; the in-process embedding daemon
+# needs `simba-ai[embed]`. All lancedb/llama_cpp/huggingface_hub imports are
+# lazy (inside functions), so importing core modules never pulls these in.
+[project.optional-dependencies]
+embed = [
+    "lancedb>=0.4",
+    "llama-cpp-python>=0.3",
+    "huggingface-hub>=0.26",
+]
+full = ["simba-ai[embed]"]
 
 [project.scripts]
 simba = "simba.__main__:main"
@@ -47,6 +56,11 @@ dev = [
     "pyrefly>=0.15",
     "pre-commit>=4.0",
     "libcst>=1.0",
+    # The full test suite exercises the LanceDB-backed daemon, so dev installs
+    # pull in the optional `embed` extra (kept out of the runtime core deps).
+    "lancedb>=0.4",
+    "llama-cpp-python>=0.3",
+    "huggingface-hub>=0.26",
 ]
 
 [tool.ruff]

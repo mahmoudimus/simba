@@ -64,6 +64,9 @@ class SyncScheduler:
         )
 
         epi = await loop.run_in_executor(None, self._maybe_consolidate)
+        ref = await loop.run_in_executor(None, self._maybe_reflect)
+        dist = await loop.run_in_executor(None, self._maybe_distill)
+        hyg = await loop.run_in_executor(None, self._maybe_hygiene)
 
         self._cycle_count += 1
         total_errors = idx.errors + ext.errors
@@ -84,12 +87,18 @@ class SyncScheduler:
                 "errors": ext.errors,
             },
             "episodes": {"dispatched": len(epi.get("dispatched", []))},
+            "reflection": ref,
+            "distillation": dist,
+            "hygiene": hyg,
             "total_errors": total_errors,
         }
 
         if total_errors:
-            logger.warning("Sync cycle %d completed with %d errors",
-                           self._cycle_count, total_errors)
+            logger.warning(
+                "Sync cycle %d completed with %d errors",
+                self._cycle_count,
+                total_errors,
+            )
         else:
             logger.info(
                 "Sync cycle %d: indexed=%d, facts=%d",
@@ -112,6 +121,70 @@ class SyncScheduler:
         return simba.episodes.consolidate.consolidate_eligible(
             str(self.cwd), ecfg=ecfg, daemon_url=self.daemon_url
         )
+
+    def _maybe_reflect(self) -> dict:
+        """Run a cross-session reflection pass (engine-gated, fail-open)."""
+        try:
+            import simba.config
+            import simba.reflection.config  # registers section
+            import simba.reflection.pass_
+
+            _ = simba.reflection.config
+            rcfg = simba.config.load("reflection")
+            if not rcfg.enabled or not rcfg.scheduler_enabled:
+                return {"status": "disabled"}
+            result = simba.reflection.pass_.reflect_pass(
+                cwd=str(self.cwd),
+                cycle_count=self._cycle_count,
+                rcfg=rcfg,
+                daemon_url=self.daemon_url,
+            )
+            return {"status": result.status, "dispatched": result.dispatched}
+        except Exception:
+            logger.debug("reflection pass failed", exc_info=True)
+            return {"status": "error", "dispatched": False}
+
+    def _maybe_distill(self) -> dict:
+        """Run the neuro-symbolic distillation pipeline (gated, fail-open)."""
+        try:
+            import simba.config
+            import simba.neuron.config  # registers section
+            import simba.neuron.pipeline
+
+            _ = simba.neuron.config
+            ncfg = simba.config.load("neuron")
+            if not ncfg.enabled:
+                return {"status": "disabled"}
+            result = simba.neuron.pipeline.distillation_pass(
+                project_path=str(self.cwd), cfg=ncfg
+            )
+            return {
+                "status": result.status,
+                "distilled": result.distilled,
+                "dormant": result.dormant,
+            }
+        except Exception:
+            logger.debug("distillation pass failed", exc_info=True)
+            return {"status": "error"}
+
+    def _maybe_hygiene(self) -> dict:
+        """Expire stale TOOL_RULE memories (gated, fail-open)."""
+        try:
+            import simba.config
+            import simba.memory.config  # registers section
+            import simba.memory.hygiene
+
+            _ = simba.memory.config
+            cfg = simba.config.load("memory")
+            if not cfg.hygiene_scheduler_enabled or cfg.tool_rule_max_age_days == 0:
+                return {"status": "disabled"}
+            result = simba.memory.hygiene.run_hygiene_pass(
+                daemon_url=self.daemon_url, cfg=cfg
+            )
+            return {"status": "ok", "expired": result.expired_count}
+        except Exception:
+            logger.debug("hygiene pass failed", exc_info=True)
+            return {"status": "error"}
 
     async def run_forever(self) -> None:
         """Run sync cycles until stopped."""

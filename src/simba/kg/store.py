@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS kg_edges (
     proof TEXT, transcript_id TEXT, char_start INTEGER,
     valid_from TEXT, valid_to TEXT, occurred_at TEXT,
     project_path TEXT NOT NULL, created_at TEXT,
+    dormant INTEGER DEFAULT 0,
     UNIQUE(subject, predicate, object, project_path, valid_from)
 );
 
@@ -127,6 +128,10 @@ class KgEdge(simba.db.BaseModel):
     occurred_at = pw.TextField(null=True)  # event time: when it was true in world
     project_path = pw.TextField()
     created_at = pw.TextField(null=True)
+    # AGM-retraction marker (Phase 7). Column added by simba.neuron.schema's
+    # idempotent migration; defaults to 0 (active). Declared here so peewee can
+    # read/filter it. Nullable so legacy rows (pre-migration) load cleanly.
+    dormant = pw.IntegerField(null=True, default=0)
 
     class Meta:
         table_name = "kg_edges"
@@ -164,9 +169,7 @@ def _project_entities(project_path: str) -> set[str]:
     return names
 
 
-def _canonicalize(
-    subject: str, object: str, project_path: str
-) -> tuple[str, str]:
+def _canonicalize(subject: str, object: str, project_path: str) -> tuple[str, str]:
     """Resolve subject/object to canonical entities when enabled (else passthrough).
 
     Project-scoped: a variant only collapses to a canonical form already present
@@ -378,6 +381,61 @@ def kg_neighbors(
             frontier = new_frontier
 
     return list(collected.values())
+
+
+def kg_density(project_path: str | None = None) -> dict[str, float]:
+    """Return graph density metrics for a project (Phase 7 progress metric).
+
+    ``density`` is the directed-graph edge density ``edges / (n*(n-1))`` over the
+    distinct subject/object node set, clamped to ``[0, 1]`` and ``0`` for graphs
+    with fewer than two nodes. ``derived_ratio`` is the share of derived edges
+    among all edges. Counts only currently-valid, non-dormant base edges.
+    """
+    edge_count = 0
+    derived_edge_count = 0
+    nodes: set[str] = set()
+    with simba.db.connect() as db:
+        q = KgEdge.select().where(KgEdge.valid_to.is_null())
+        if project_path:
+            q = q.where(KgEdge.project_path == project_path)
+        for edge in q:
+            if getattr(edge, "dormant", 0):
+                continue
+            edge_count += 1
+            if edge.subject:
+                nodes.add(edge.subject)
+            if edge.object:
+                nodes.add(edge.object)
+
+        try:
+            if project_path:
+                row = db.execute_sql(
+                    "SELECT COUNT(*) FROM kg_derived_edges "
+                    "WHERE project_path=? AND valid_to IS NULL",
+                    (project_path,),
+                ).fetchone()
+            else:
+                row = db.execute_sql(
+                    "SELECT COUNT(*) FROM kg_derived_edges WHERE valid_to IS NULL"
+                ).fetchone()
+            derived_edge_count = int(row[0]) if row else 0
+        except Exception:
+            derived_edge_count = 0
+
+    node_count = len(nodes)
+    density = edge_count / (node_count * (node_count - 1)) if node_count >= 2 else 0.0
+    density = max(0.0, min(1.0, density))
+
+    total = edge_count + derived_edge_count
+    derived_ratio = derived_edge_count / total if total > 0 else 0.0
+
+    return {
+        "edge_count": edge_count,
+        "derived_edge_count": derived_edge_count,
+        "node_count": node_count,
+        "density": density,
+        "derived_ratio": derived_ratio,
+    }
 
 
 def kg_query(

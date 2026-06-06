@@ -152,6 +152,41 @@ class TestUserPromptSubmitHook:
         assert "hookSpecificOutput" in result
 
 
+class TestNoHardcodedThresholds:
+    def test_prompt_min_similarity_reads_from_config(self, tmp_path, monkeypatch):
+        """The hook passes cfg.prompt_min_similarity, not a literal."""
+
+        class _Stub:
+            prompt_min_similarity = 0.77
+            prompt_min_length = 10
+
+        captured: dict[str, float] = {}
+
+        def fake_recall(query, *, project_path=None, min_similarity=None):
+            captured["min_similarity"] = min_similarity
+            return []
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Stub(), raising=False
+        )
+        monkeypatch.setattr("simba.hooks._memory_client.recall_memories", fake_recall)
+        simba.hooks.user_prompt_submit.main({"prompt": "x" * 20, "cwd": str(tmp_path)})
+        assert captured.get("min_similarity") == 0.77
+
+    def test_no_hardcoded_similarity_in_hooks_source(self):
+        """Regression: no magic 0.45 literal outside of HooksConfig default."""
+        import pathlib
+        import re
+
+        src = pathlib.Path(__file__).resolve().parents[2] / "src" / "simba" / "hooks"
+        for py in src.glob("*.py"):
+            if py.name == "config.py":
+                continue  # defaults are allowed here
+            text = py.read_text()
+            matches = re.findall(r'(?<!["\'\w])0\.45(?!["\'\w])', text)
+            assert matches == [], f"Hardcoded 0.45 found in {py}: {matches}"
+
+
 class TestRlmPointerInjection:
     class _Cfg:
         def __init__(self, inject):
