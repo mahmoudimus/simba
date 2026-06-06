@@ -31,6 +31,7 @@ def _ensure_registry() -> None:
     import simba.hooks.config
     import simba.kg.config
     import simba.llm.config
+    import simba.llm.judge_config  # registers the "judge" section
     import simba.memory.config
     import simba.rlm.config  # registers the "rlm" section
     import simba.search.config

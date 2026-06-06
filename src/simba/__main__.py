@@ -2232,6 +2232,7 @@ def _eval_build(args: list[str]) -> int:
 def _eval_bench(args: list[str]) -> int:
     """simba eval bench locomo|longmemeval [--qa] [--n N|--per N|all]
     [--k K] [--split dev|test] [--path PATH] [--json]
+    [--baseline] [--cache PATH] [--abstention] [--full]
     """
     import dataclasses
     import json as _json
@@ -2249,7 +2250,8 @@ def _eval_bench(args: list[str]) -> int:
     usage = (
         "Usage: simba eval bench locomo|longmemeval [--qa] "
         "[--n N | --per N | all] [--k K] [--split dev|test] "
-        "[--path PATH] [--json]"
+        "[--path PATH] [--json] [--baseline] [--cache PATH] "
+        "[--abstention] [--full]"
     )
 
     if not args or args[0].startswith("--"):
@@ -2272,12 +2274,28 @@ def _eval_bench(args: list[str]) -> int:
     split_arg = ""
     path_arg = ""
     as_json = False
+    want_baseline = False
+    abstention_flag = False
+    full_flag = False
+    cache_arg = ""
 
     i = 1
     while i < len(args):
         if args[i] == "--qa":
             run_qa_flag = True
             i += 1
+        elif args[i] == "--baseline":
+            want_baseline = True
+            i += 1
+        elif args[i] == "--abstention":
+            abstention_flag = True
+            i += 1
+        elif args[i] == "--full":
+            full_flag = True
+            i += 1
+        elif args[i] == "--cache" and i + 1 < len(args):
+            cache_arg = args[i + 1]
+            i += 2
         elif args[i] == "--n" and i + 1 < len(args):
             n_mode, n_val = "n", int(args[i + 1])
             i += 2
@@ -2330,8 +2348,12 @@ def _eval_bench(args: list[str]) -> int:
         print(f"eval bench: could not load the embedding model: {exc}", file=sys.stderr)
         return 1
 
-    loader = locomo.load_locomo if dataset_name == "locomo" else lme.load_longmemeval
-    datasets = loader(dataset_path)
+    if dataset_name == "locomo":
+        datasets = locomo.load_locomo(dataset_path)
+    else:
+        datasets = lme.load_longmemeval(
+            dataset_path, include_abstention=abstention_flag
+        )
     if n_mode == "n" and n_val > 0:
         datasets = datasets[:n_val]
 
@@ -2344,6 +2366,7 @@ def _eval_bench(args: list[str]) -> int:
         import simba.eval.benchmarks.judge as judge
         import simba.eval.benchmarks.judge_cache as jc
         import simba.llm.client as llm_client
+        import simba.llm.judge_config as jcfg
 
         if n_mode == "per":
             qa_datasets = judge.sample_cases(datasets, per_category=n_val)
@@ -2352,15 +2375,22 @@ def _eval_bench(args: list[str]) -> int:
         else:
             qa_datasets = datasets
         k_val = k or bcfg.default_k
+        # Separate answerer (llm) from judge so the model never grades its own
+        # answer (B1: get_judge_client defaults to a different local model).
         llm = llm_client.get_client()
+        judge_client = jcfg.get_judge_client()
+        cache_path = cache_arg or bcfg.judge_cache_path
         qa_report = judge.run_qa(
             qa_datasets,
             embed_doc=embed_doc,
             embed_query=embed_query,
             cfg=mcfg,
             llm=llm,
+            judge=judge_client,
             k=k_val,
-            cache=jc.JudgeCache(_resolve_bench_path(bcfg.judge_cache_path)),
+            include_abstention=abstention_flag,
+            cache=jc.JudgeCache(_resolve_bench_path(cache_path)),
+            judge_model=judge_client._cfg.model,
         )
 
     record = {
@@ -2373,6 +2403,28 @@ def _eval_bench(args: list[str]) -> int:
         "qa": qa_report,
     }
     bench_results.append_result(_resolve_bench_path(bcfg.results_path), record)
+
+    if want_baseline:
+        import simba.eval.benchmarks.baseline_store as baseline_store
+
+        # `_s` distinguishes the full longmemeval_s haystack from the oracle set
+        # so their baselines don't mix in one jsonl.
+        suffix = "_s" if (dataset_name == "longmemeval" and full_flag) else ""
+        meta = {
+            "split": split_arg or None,
+            "n_mode": n_mode,
+            "n_val": n_val,
+            "k": k or bcfg.default_k,
+            "abstention": abstention_flag,
+            "full": full_flag,
+        }
+        baseline_store.append_baseline(
+            f"{dataset_name}{suffix}_recall", recall_report, metadata=meta
+        )
+        if qa_report is not None:
+            baseline_store.append_baseline(
+                f"{dataset_name}{suffix}_qa", qa_report, metadata=meta
+            )
 
     if as_json:
         print(_json.dumps({"recall": recall_report, "qa": qa_report}, indent=2))
@@ -2393,12 +2445,21 @@ def _eval_bench(args: list[str]) -> int:
                 f"r@5={m['recall@5']:.3f} r@10={m['recall@10']:.3f} "
                 f"mrr={m['mrr']:.3f}"
             )
+        if "latency" in recall_report:
+            lat = recall_report["latency"]
+            print(f"  p50={lat['p50_ms']:.0f}ms p95={lat['p95_ms']:.0f}ms")
         if qa_report is not None:
             print(
                 f"\n{dataset_name} QA accuracy (graded={qa_report['n_graded']}, "
                 f"skipped={qa_report['n_skipped']})"
             )
             print(f"  OVERALL  accuracy={qa_report['overall']['accuracy']:.3f}")
+            if "abstention" in qa_report:
+                ab = qa_report["abstention"]
+                print(f"  ABSTENTION n={ab['n']:<4} accuracy={ab['accuracy']:.3f}")
+            if "latency" in qa_report:
+                lat = qa_report["latency"]
+                print(f"  p50={lat['p50_ms']:.0f}ms p95={lat['p95_ms']:.0f}ms")
     return 0
 
 

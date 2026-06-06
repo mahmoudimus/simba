@@ -9,6 +9,7 @@ metrics are simple means over cases.
 from __future__ import annotations
 
 import dataclasses
+import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ class CaseResult:
     query: str
     ranked: list[str]
     metrics: dict[str, float]
+    latency_ms: float = 0.0  # wall-clock ms for the retriever call
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +37,7 @@ class CaseResult:
             "query": self.query,
             "ranked": self.ranked,
             "metrics": self.metrics,
+            "latency_ms": self.latency_ms,
         }
 
 
@@ -54,6 +57,16 @@ class EvalReport:
             "aggregate": self.aggregate,
             "per_case": [c.to_dict() for c in self.per_case],
         }
+
+
+def _percentile(values: list[float], p: float) -> float:
+    """Compute the p-th percentile (0-100) of values. Returns 0.0 when empty."""
+    if not values:
+        return 0.0
+    sorted_v = sorted(values)
+    idx = (p / 100) * (len(sorted_v) - 1)
+    lo, hi = int(idx), min(int(idx) + 1, len(sorted_v) - 1)
+    return sorted_v[lo] + (sorted_v[hi] - sorted_v[lo]) * (idx - lo)
 
 
 def _case_metrics(
@@ -84,7 +97,9 @@ def run_eval(
     cases = simba.eval.splits.select(dataset.cases, split, test_ratio=test_ratio)
     per_case: list[CaseResult] = []
     for case in cases:
+        t0 = time.perf_counter()
         ranked = list(retriever(case.query))
+        lat = (time.perf_counter() - t0) * 1000
         cm = _case_metrics(ranked, set(case.relevant_ids), ks)
         per_case.append(
             CaseResult(
@@ -92,6 +107,7 @@ def run_eval(
                 query=case.query,
                 ranked=ranked[:keep_top],
                 metrics=cm,
+                latency_ms=lat,
             )
         )
 
@@ -106,6 +122,9 @@ def run_eval(
         name: (sum(c.metrics[name] for c in per_case) / n if n else 0.0)
         for name in metric_names
     }
+    latencies = [c.latency_ms for c in per_case]
+    aggregate["p50_ms"] = _percentile(latencies, 50)
+    aggregate["p95_ms"] = _percentile(latencies, 95)
 
     return EvalReport(
         dataset_name=dataset.name,

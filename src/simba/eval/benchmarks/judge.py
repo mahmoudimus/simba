@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import dataclasses
 import tempfile
+import time
 import typing
 
 import simba.eval.recall_adapter
+from simba.eval.runner import _percentile
 
 if typing.TYPE_CHECKING:
     from simba.eval.dataset import Dataset, EvalCase
@@ -51,33 +53,85 @@ def score_case(
     case: EvalCase,
     retriever: Retriever,
     id2content: dict[str, str],
-    llm: typing.Any,
+    answerer: typing.Any,
     *,
+    judge: typing.Any | None = None,
     k: int = 10,
     cache: typing.Any = None,
     judge_model: str = "",
 ) -> bool | None:
     """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
 
+    The ``answerer`` generates the prediction; a separate ``judge`` client grades
+    it. When ``judge`` is None the answerer grades its own answer (legacy path).
+
     When ``cache`` is a ``JudgeCache``, an identical (judge_model, question, gold,
     predicted) verdict is served from disk instead of re-calling the judge LLM.
     """
+    _judge = judge if judge is not None else answerer
+    if not judge_model and judge is not None:
+        judge_model = getattr(getattr(_judge, "_cfg", None), "model", "")
     ids = retriever(case.query)[:k]
     contexts = [id2content[i] for i in ids if i in id2content]
-    predicted = llm.complete(build_answer_prompt(case.query, contexts))
+    predicted = answerer.complete(build_answer_prompt(case.query, contexts))
     if not predicted or not predicted.strip():
         return None
     if cache is not None:
         hit = cache.get(judge_model, case.query, case.answer, predicted)
         if hit is not None:
             return hit
-    verdict = llm.complete_json(build_judge_prompt(case.query, case.answer, predicted))
+    verdict = _judge.complete_json(
+        build_judge_prompt(case.query, case.answer, predicted)
+    )
     if not isinstance(verdict, dict) or "correct" not in verdict:
         return None
     correct = bool(verdict["correct"])
     if cache is not None:
         cache.put(judge_model, case.query, case.answer, predicted, correct)
     return correct
+
+
+def build_abstention_judge_prompt(question: str, predicted: str) -> str:
+    """Prompt the judge to decide if the predicted answer is a proper refusal."""
+    return (
+        "You are judging whether a predicted answer correctly declines to answer "
+        "a question that cannot be answered from the available memories. A correct "
+        "refusal says the information is unavailable. Reply JSON only: "
+        '{"abstained": true} or {"abstained": false}.\n\n'
+        f"Question: {question}\nPredicted answer: {predicted}\nJSON:"
+    )
+
+
+def score_abstention(
+    case: EvalCase,
+    retriever: Retriever,
+    id2content: dict[str, str],
+    answerer: typing.Any,
+    *,
+    judge: typing.Any | None = None,
+    k: int = 10,
+    abstention_phrases: list[str] | None = None,
+) -> bool | None:
+    """Retrieve, generate, then check for refusal.
+
+    Strategy: heuristic-first (phrase match against ``abstention_phrases``), then
+    judge-LLM confirmation only when the heuristic is ambiguous. Returns True
+    (correctly abstained), False (wrongly answered), or None (unscored).
+    """
+    _judge = judge if judge is not None else answerer
+    phrases = abstention_phrases if abstention_phrases is not None else []
+    ids = retriever(case.query)[:k]
+    contexts = [id2content[i] for i in ids if i in id2content]
+    predicted = answerer.complete(build_answer_prompt(case.query, contexts))
+    if not predicted or not predicted.strip():
+        return None
+    lowered = predicted.lower()
+    if any(phrase.lower() in lowered for phrase in phrases):
+        return True
+    verdict = _judge.complete_json(build_abstention_judge_prompt(case.query, predicted))
+    if not isinstance(verdict, dict) or "abstained" not in verdict:
+        return None
+    return bool(verdict["abstained"])
 
 
 def aggregate(rows: list[tuple[str, bool]]) -> dict[str, typing.Any]:
@@ -98,6 +152,18 @@ def aggregate(rows: list[tuple[str, bool]]) -> dict[str, typing.Any]:
             for cat, xs in sorted(by_cat.items())
         },
     }
+
+
+def aggregate_with_abstention(
+    rows: list[tuple[str, bool]],
+    abstention_rows: list[tuple[str, bool]],
+) -> dict[str, typing.Any]:
+    """Extend ``aggregate()`` output with an abstention_accuracy block."""
+    report = aggregate(rows)
+    correct = [c for _, c in abstention_rows]
+    accuracy = sum(1 for x in correct if x) / len(correct) if correct else 0.0
+    report["abstention"] = {"n": len(abstention_rows), "accuracy": accuracy}
+    return report
 
 
 def sample_cases(
@@ -144,6 +210,16 @@ def sample_cases(
     return out
 
 
+def _load_abstention_phrases() -> list[str]:
+    """Load the configured abstention phrase list from the eval config."""
+    import simba.config
+    import simba.eval.config  # registers the "eval" section
+
+    _ = simba.eval.config
+    raw = simba.config.load("eval").abstention_phrases
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
 def run_qa(
     datasets: list[Dataset],
     *,
@@ -151,33 +227,91 @@ def run_qa(
     embed_query: EmbedFn,
     cfg: typing.Any,
     llm: typing.Any,
+    judge: typing.Any | None = None,
     k: int = 10,
     answerable_only: bool = True,
+    include_abstention: bool = False,
+    abstention_phrases: list[str] | None = None,
     cache: typing.Any = None,
     judge_model: str = "",
 ) -> dict[str, typing.Any]:
-    """Run the full retrieve -> answer -> grade loop over datasets, aggregate."""
+    """Run the full retrieve -> answer -> grade loop over datasets, aggregate.
+
+    ``llm`` is the answerer; ``judge`` (when given) grades its answers. When
+    ``judge`` is None the answerer grades itself (legacy behaviour).
+
+    When ``include_abstention`` is True, ``_abs`` cases are routed to
+    ``score_abstention`` and reported in a separate ``abstention`` block. The
+    report always carries an ``abstention`` key for a consistent shape.
+    """
+    import simba.eval.benchmarks.longmemeval as longmemeval
+
+    if include_abstention and abstention_phrases is None:
+        abstention_phrases = _load_abstention_phrases()
+
     rows: list[tuple[str, bool]] = []
+    abstention_rows: list[tuple[str, bool]] = []
+    # End-to-end latency per question (retriever + answer + grade), not
+    # retriever-only; split score_case later if retriever-only timing is needed.
+    latencies: list[float] = []
     skipped = 0
     for dset in datasets:
         id2content = {m.id: m.content for m in dset.corpus}
         with tempfile.TemporaryDirectory(prefix="simba-qa-") as td:
             retriever = simba.eval.recall_adapter.build_retriever(
-                dset, cfg, embed_doc=embed_doc, embed_query=embed_query,
-                data_dir=td, llm_client=None,
+                dset,
+                cfg,
+                embed_doc=embed_doc,
+                embed_query=embed_query,
+                data_dir=td,
+                llm_client=None,
             )
             for case in dset.cases:
+                if include_abstention and longmemeval.is_abstention(case.id):
+                    t0 = time.perf_counter()
+                    result = score_abstention(
+                        case,
+                        retriever,
+                        id2content,
+                        llm,
+                        judge=judge,
+                        k=k,
+                        abstention_phrases=abstention_phrases,
+                    )
+                    latencies.append((time.perf_counter() - t0) * 1000)
+                    if result is None:
+                        skipped += 1
+                        continue
+                    abstention_rows.append((case.intent or "?", result))
+                    continue
                 if answerable_only and not case.answer.strip():
                     skipped += 1
                     continue
+                t0 = time.perf_counter()
                 correct = score_case(
-                    case, retriever, id2content, llm, k=k,
-                    cache=cache, judge_model=judge_model,
+                    case,
+                    retriever,
+                    id2content,
+                    llm,
+                    judge=judge,
+                    k=k,
+                    cache=cache,
+                    judge_model=judge_model,
                 )
+                latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
                     skipped += 1
                     continue
                 rows.append((case.intent or "?", correct))
-    report = aggregate(rows)
+    if include_abstention:
+        report = aggregate_with_abstention(rows, abstention_rows)
+    else:
+        report = aggregate(rows)
+        report["abstention"] = {"n": 0, "accuracy": 0.0}
     report["n_skipped"] = skipped
+    report["latency"] = {
+        "p50_ms": _percentile(latencies, 50),
+        "p95_ms": _percentile(latencies, 95),
+        "n": len(latencies),
+    }
     return report
