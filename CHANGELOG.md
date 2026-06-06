@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-06
+
+### Fixed
+
+- **SessionStart cross-project extraction**: the `<learning-extraction-required>`
+  reminder read the global `~/.claude/transcripts/latest.json`, so a session in
+  one project could be told to extract *another* project's transcript — filing
+  that project's learnings under the wrong `project_path`. Now resolved
+  per-project via `simba.transcripts.find_pending(cwd)` (project + pending-status
+  scoped); no reminder when nothing is pending for the current project. Completes
+  the cross-project-attribution fix begun for `/memories-learn` in 0.2.0.
+
 ## [0.2.1] — 2026-06-06
 
 ### Fixed
