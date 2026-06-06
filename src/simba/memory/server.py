@@ -97,6 +97,8 @@ def create_app(
 
     app.state.config = config
     app.state.start_time = time.time()
+    # Repo cwd for the sqlite usage sidecar (memory_usage lives in .simba/simba.db).
+    app.state.cwd = pathlib.Path.cwd()
     app.state.table = None
     app.state.db_path = None
     app.state.fts_path = None
