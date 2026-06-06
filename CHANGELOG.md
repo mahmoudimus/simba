@@ -50,6 +50,8 @@
   **updates** changed skills (was create-only) and matches `SKILL.md`.
 - **Orchestration extracted from neuron** into a `simba.orchestration` package;
   neuron keeps only the formal-verification tools (truth DB, Z3, Datalog).
+- **PyPI distribution name** is `simba-ai` (`simba` was taken); the import
+  package and the `simba` CLI are unchanged. `pip install simba-ai`.
 
 ### Fixed
 

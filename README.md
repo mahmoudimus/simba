@@ -50,6 +50,16 @@ uv tool install git+https://github.com/mahmoudimus/simba.git
 uv tool install git+https://github.com/mahmoudimus/simba.git@v0.2.0
 ```
 
+### Install from PyPI
+
+Published as **`simba-ai`** (the name `simba` was taken); the import package and
+the CLI are still `simba`:
+
+```bash
+uv tool install simba-ai      # or: pip install simba-ai
+simba install --global
+```
+
 ### Upgrading
 
 An **editable** install (`uv tool install -e .`) picks up source changes whenever

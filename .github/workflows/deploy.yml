@@ -2,16 +2,19 @@ name: Publish to PyPI
 
 # Pure-Python package -> one universal wheel + sdist (no cibuildwheel).
 #
-# DORMANT BY DEFAULT. Publishing requires three things first, so it never breaks a
-# release until you opt in:
-#   1. A PyPI project name that is available + a Trusted Publisher configured for
-#      this repo (https://docs.pypi.org/trusted-publishers/). NOTE: "simba" is
-#      already taken on PyPI — set [project].name to an available dist name (e.g.
-#      "simba-cc") before enabling.
-#   2. Set the repo variable PUBLISH_TO_PYPI=true
-#      (`gh variable set PUBLISH_TO_PYPI --body true`).
-# Until then this job is skipped, so tagged releases still build + attach wheels
-# to the GitHub Release (see release.yml).
+# Distribution name is `simba-ai` (PyPI; "simba" was taken). Import + CLI stay
+# `simba`. DORMANT BY DEFAULT so a release never fails on publish until you opt in:
+#   1. Configure a PyPI Trusted Publisher (pending publishers create the project on
+#      first publish — no manual upload): pypi.org -> Account -> Publishing ->
+#      Add a pending publisher:
+#        Project name = simba-ai
+#        Owner        = mahmoudimus
+#        Repository   = simba
+#        Workflow     = deploy.yml
+#      (https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+#   2. Enable it: `gh variable set PUBLISH_TO_PYPI --body true`.
+# Until then this job is skipped; tagged releases still build + attach wheels to
+# the GitHub Release (see release.yml).
 on:
     release:
         types: [published]
