@@ -987,6 +987,7 @@ _VALID_MEMORY_TYPES = {
     "FAILURE",
     "PREFERENCE",
     "EPISODE",
+    "REFLECTION",  # cross-session synthesized insight (Phase 5)
 }
 
 
@@ -2212,9 +2213,7 @@ def _eval_build(args: list[str]) -> int:
         )
         return 1
 
-    print(
-        f"generating queries for up to {n} of {len(mems)} memories…", file=sys.stderr
-    )
+    print(f"generating queries for up to {n} of {len(mems)} memories…", file=sys.stderr)
     dataset = build.build_from_memories(
         mems, client=client, name=f"real-corpus-{n}", max_cases=n
     )

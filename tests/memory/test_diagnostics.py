@@ -121,3 +121,29 @@ class TestDiagnosticsTracker:
         assert "Store:" in output
         assert "GOTCHA" in output
         assert "DB memory count: 10" in output
+
+
+class TestLatencyMetrics:
+    def test_record_latency_and_percentiles(self) -> None:
+        tracker = DiagnosticsTracker(report_interval=50, reservoir_size=100)
+        for i in range(20):
+            tracker.record_latency("POST /recall", float(i))
+        stats = tracker.latency_percentiles("POST /recall")
+        assert stats["n"] == 20
+        assert stats["p50"] > 0.0
+        assert stats["p95"] >= stats["p50"]
+
+    def test_reservoir_evicts_oldest(self) -> None:
+        tracker = DiagnosticsTracker(reservoir_size=5)
+        for i in range(10):
+            tracker.record_latency("/store", float(i))
+        assert len(tracker._latency_samples["/store"]) == 5
+
+    def test_all_latency_stats_returns_all_endpoints(self) -> None:
+        tracker = DiagnosticsTracker()
+        tracker.record_latency("/recall", 12.0)
+        tracker.record_latency("/recall", 15.0)
+        tracker.record_latency("/store", 8.0)
+        tracker.record_latency("/store", 9.0)
+        stats = tracker.all_latency_stats()
+        assert set(stats.keys()) == {"/recall", "/store"}

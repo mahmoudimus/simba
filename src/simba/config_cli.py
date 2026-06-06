@@ -31,6 +31,8 @@ def _ensure_registry() -> None:
     import simba.kg.config
     import simba.llm.config
     import simba.memory.config
+    import simba.neuron.config  # registers the "neuron" section
+    import simba.reflection.config  # registers the "reflection" section
     import simba.rlm.config  # registers the "rlm" section
     import simba.search.config
     import simba.sync.config  # noqa: F401
