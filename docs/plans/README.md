@@ -1,0 +1,42 @@
+# Implementation plans
+
+Detailed, implementer-ready specs for the remaining simba roadmap. Each spec is
+written to be executed top-to-bottom by an implementer (human or a smaller model)
+without further design work: it names exact files, signatures, config fields,
+TDD test cases (RED first), acceptance criteria, and verification commands.
+
+These trace back to the eval-program plan and the
+[`roadmap.md`](../../roadmap.md) gap analysis. They are independent — pick any
+one and implement it on its own branch off `main`.
+
+## Discipline (applies to every spec)
+
+- **TDD**: every spec lists its tests RED-first. Watch them fail, then implement.
+- **All config via `@configurable`**: no hidden constants; every tunable is a
+  field on a section dataclass, gettable/settable through `simba config get/set`.
+- **Pure Python under `src/simba/`**, ruff-clean (88 cols, `pathlib` not
+  `os.path`, `TYPE_CHECKING` for annotation-only imports).
+- **Append-only storage**: mutable ranking/usage state lives in SQLite, never in
+  LanceDB columns (which are write-once vectors).
+- **Levers plug into the shared path** (`plan_recall` / `hybrid_search`) so the
+  benchmark measures exactly what ships.
+- **Never tune to saturate the benchmark** — report deltas on the held-out test
+  split with an ablation table + latency p50/p95.
+
+## The specs
+
+| # | Spec | Scope | Roadmap |
+|---|------|-------|---------|
+| [01](01-eval-bench-infra.md) | Eval-program infrastructure | `simba eval bench` CLI, results store, `BENCHMARKS.md` leaderboard, CI smoke fixture | Workstream A (A4·A5·A6) |
+| [02](02-judge-baselines.md) | Local judge + honest baselines | separate `judge` config section (different local model than the answerer), full LoCoMo / `longmemeval_s` baselines, abstention scoring, per-query latency | Workstream B (B1–B4) |
+| [03](03-hyde-ircot.md) | HyDE + IRCoT | true LLM HyDE 2nd vector arm (cached, fail-open) and answer-time IRCoT for multi-hop QA | Lever C3 + answer-time multi-hop |
+| [04](04-decay-forgetting.md) | Decay / forgetting + feedback-aware ranking | usage store, strength model, recall-time reinforcement, scheduler decay pass, dormant tier, outcome feedback (`simba memory feedback`) | Phase 6 |
+| [05](05-reflection-neurosymbolic-ops.md) | Reflection + neuro-symbolic + ops | `REFLECTION` memory type + reflect pass (Phase 5); derive→verify→revise→distill→induce loop over the KG with Z3/Datalog (Phase 7); latency metrics, TOOL_RULE TTL, lighter install extras, release glob fix | Phases 5 & 7 + ops |
+
+## Suggested order
+
+The eval program (01 → 02) comes first: it makes iteration cheap and locks in
+honest baselines, so every later lever is a *measured delta* rather than a guess.
+03 (HyDE/IRCoT) and 04 (decay) are independent levers measurable against those
+baselines. 05 is the largest and most exploratory (Phase 7 neuro-symbolic) —
+land it once the measurement program exists to keep it honest.
