@@ -1218,8 +1218,8 @@ wheels = [
 ]
 
 [[package]]
-name = "simba"
-version = "0.1.0"
+name = "simba-ai"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -25,6 +25,11 @@ import typing
 from simba.eval.dataset import Dataset, EvalCase, Memory
 
 
+def is_abstention(question_id: str) -> bool:
+    """Return True when the question_id ends with '_abs'."""
+    return str(question_id).endswith("_abs")
+
+
 def _session_turns(
     session_id: str, turns: list[dict[str, typing.Any]], date: str = ""
 ) -> list[Memory]:
