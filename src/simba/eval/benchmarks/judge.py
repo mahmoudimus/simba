@@ -155,25 +155,56 @@ def run_qa(
     answerable_only: bool = True,
     cache: typing.Any = None,
     judge_model: str = "",
+    eval_cfg: typing.Any = None,
 ) -> dict[str, typing.Any]:
-    """Run the full retrieve -> answer -> grade loop over datasets, aggregate."""
+    """Run the full retrieve -> answer -> grade loop over datasets, aggregate.
+
+    When ``eval_cfg.ircot_enabled`` is True, cases with ``intent == "multi-hop"``
+    are routed through the IRCoT interleaved retrieve-and-reason loop instead of
+    the single-pass ``score_case``. ``eval_cfg`` None ⇒ current behavior.
+    """
     rows: list[tuple[str, bool]] = []
     skipped = 0
+    ircot_on = eval_cfg is not None and getattr(eval_cfg, "ircot_enabled", False)
     for dset in datasets:
         id2content = {m.id: m.content for m in dset.corpus}
         with tempfile.TemporaryDirectory(prefix="simba-qa-") as td:
             retriever = simba.eval.recall_adapter.build_retriever(
-                dset, cfg, embed_doc=embed_doc, embed_query=embed_query,
-                data_dir=td, llm_client=None,
+                dset,
+                cfg,
+                embed_doc=embed_doc,
+                embed_query=embed_query,
+                data_dir=td,
+                llm_client=None,
             )
             for case in dset.cases:
                 if answerable_only and not case.answer.strip():
                     skipped += 1
                     continue
-                correct = score_case(
-                    case, retriever, id2content, llm, k=k,
-                    cache=cache, judge_model=judge_model,
-                )
+                if ircot_on and (case.intent or "") == "multi-hop":
+                    import simba.eval.benchmarks.ircot as ircot
+
+                    correct = ircot.score_case_ircot(
+                        case,
+                        retriever,
+                        id2content,
+                        llm,
+                        max_steps=eval_cfg.ircot_max_steps,
+                        k_per_step=eval_cfg.ircot_k_per_step,
+                        k_final=eval_cfg.ircot_k_final,
+                        cache=cache,
+                        judge_model=judge_model,
+                    )
+                else:
+                    correct = score_case(
+                        case,
+                        retriever,
+                        id2content,
+                        llm,
+                        k=k,
+                        cache=cache,
+                        judge_model=judge_model,
+                    )
                 if correct is None:
                     skipped += 1
                     continue

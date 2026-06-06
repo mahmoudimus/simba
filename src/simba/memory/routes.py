@@ -32,6 +32,23 @@ router = fastapi.APIRouter()
 _background_tasks: set[asyncio.Task[None]] = set()
 
 
+async def _bg_hyde(
+    cache: typing.Any,
+    key: str,
+    query: str,
+    llm_client: typing.Any,
+) -> None:
+    """Generate the HyDE answer off the hot path and warm the cache (best-effort)."""
+    import contextlib
+
+    from simba.memory.hyde import hypothetical_answer
+
+    with contextlib.suppress(Exception):
+        text = await asyncio.to_thread(hypothetical_answer, query, llm_client)
+        if text:
+            cache.put(key, text)
+
+
 # ── FTS keyword-mirror sync helpers (run in a worker thread via to_thread) ──
 # Per-call connections sidestep SQLite's thread-affinity. All mirror writes are
 # best-effort: failures are logged, never surfaced (startup reconcile heals).
@@ -255,13 +272,32 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         logger.warning("[recall] Embedding failed: %s", e)
         return {"memories": [], "queryTimeMs": 0, "error": "embedding_failed"}
 
-    # Intent-aware floor + broad-query widening + HyDE term selection, all
+    # An LLM client is shared by HyDE (2nd-arm answer) and the reranker. Built
+    # once, lazily, only when at least one LLM feature is enabled; both uses are
+    # fail-open so a missing/failing provider degrades to the non-LLM path.
+    hyde_llm_on = getattr(config, "hyde_mode", "keyword") == "llm"
+    rerank_on = config.hybrid_enabled and getattr(config, "llm_rerank_enabled", False)
+    llm_client = None
+    if hyde_llm_on or rerank_on:
+        from simba.llm.client import get_client as _get_llm_client
+
+        llm_client = _get_llm_client()
+
+    # HyDE cache (daemon, per-process): serve the keyword fallback now and warm
+    # the cache off the hot path so recurring queries get the LLM answer free.
+    hyde_cache = None
+    if hyde_llm_on and llm_client is not None:
+        hyde_cache = getattr(request.app.state, "hyde_cache", None)
+
+    # Intent-aware floor + broad-query widening + HyDE text selection, all
     # derived by the shared planner (the eval harness uses the same logic).
     plan = simba.memory.recall_plan.plan_recall(
         body.query,
         config,
         min_similarity=body.min_similarity,
         max_results=body.max_results,
+        llm_client=llm_client,
+        hyde_cache=hyde_cache,
     )
     min_sim = plan.min_similarity
     max_res = plan.max_results
@@ -272,27 +308,32 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if body.project_path:
         filters["projectPath"] = body.project_path
 
-    # Multi-arm HyDE (opt-in): a 2nd vector arm over the focused-term string,
-    # which often nails identifiers/entities the full-query embedding blurs.
+    # On a HyDE cache miss, warm the cache off the hot path so the next identical
+    # query gets the LLM answer for its 2nd arm (this recall serves the fallback).
+    if hyde_llm_on and hyde_cache is not None and llm_client is not None:
+        hyde_key = hyde_cache.signature(body.query)
+        if hyde_cache.get(hyde_key) is None:
+            task = asyncio.create_task(
+                _bg_hyde(hyde_cache, hyde_key, body.query, llm_client)
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
+    # Multi-arm HyDE (opt-in): a 2nd vector arm over plan.hyde_text — the focus
+    # terms in keyword mode, or the LLM hypothetical answer in llm mode.
     extra_embedding: list[float] | None = None
-    if plan.expansion_terms:
+    if plan.hyde_text:
         try:
-            extra_embedding = await embed_query(plan.expansion_terms)
+            extra_embedding = await embed_query(plan.hyde_text)
         except Exception:
             extra_embedding = None
 
-    # Optional LLM reranker (cross-encoder role). Built only when enabled; the
-    # call is fail-open and runs in a worker thread inside hybrid_search.
-    llm_client = None
+    # Optional LLM reranker (cross-encoder role): non-blocking via the cache.
+    # "async" (default): serve fast order, rerank off the hot path via the cache.
+    # "sync": block on the rerank every recall (no cache).
     rerank_cache = None
-    if config.hybrid_enabled and getattr(config, "llm_rerank_enabled", False):
-        from simba.llm.client import get_client as _get_llm_client
-
-        llm_client = _get_llm_client()
-        # "async" (default): non-blocking — serve fast order, rerank off the hot
-        # path via the cache. "sync": block on the rerank every recall (no cache).
-        if getattr(config, "llm_rerank_mode", "async") != "sync":
-            rerank_cache = getattr(request.app.state, "rerank_cache", None)
+    if rerank_on and getattr(config, "llm_rerank_mode", "async") != "sync":
+        rerank_cache = getattr(request.app.state, "rerank_cache", None)
 
     fts_path = getattr(request.app.state, "fts_path", None)
     if config.hybrid_enabled:

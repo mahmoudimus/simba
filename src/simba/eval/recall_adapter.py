@@ -123,9 +123,14 @@ def build_retriever(
         simba.memory.fts.rebuild(rows)
 
     def retriever(query: str) -> list[str]:
-        plan = simba.memory.recall_plan.plan_recall(query, cfg)
+        # Eval is always the sync (no-cache) path: hyde_mode=="llm" generates the
+        # hypothetical answer inline so the benchmark exercises the same 2nd-arm
+        # text the daemon resolves to.
+        plan = simba.memory.recall_plan.plan_recall(
+            query, cfg, llm_client=llm_client, hyde_cache=None
+        )
         embedding = embed_query(query)
-        extra = embed_query(plan.expansion_terms) if plan.expansion_terms else None
+        extra = embed_query(plan.hyde_text) if plan.hyde_text else None
         return asyncio.run(
             _search(
                 db_path, str(fts_path), cfg, query, embedding, extra, plan, llm_client

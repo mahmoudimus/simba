@@ -61,6 +61,15 @@ class MemoryConfig:
     fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
     # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
     expansion_enabled: bool = True  # on by default (costs one extra embed per recall)
+    # HyDE mode (C3): how the 2nd vector arm's text is derived.
+    #   "keyword" (default) = the focus-term string (current behavior).
+    #   "llm" = a short hypothetical answer generated via simba.llm.client, embedded
+    #           as the 2nd arm. Falls back to the keyword string (or "") on any
+    #           failure. In the daemon the LLM call is OFF the hot path: the first
+    #           recall serves the keyword fallback and warms a per-process cache, so
+    #           recurring queries get the HyDE text free.
+    hyde_mode: str = "keyword"
+    hyde_cache_size: int = 256  # LRU capacity for the HyDE cache (daemon only)
     # Composite re-scoring: blend RRF relevance with recency + importance after
     # fusion. On by default (experimental). The default weights are the measured
     # blend — relevance-dominant, with recency + importance as tie-breakers

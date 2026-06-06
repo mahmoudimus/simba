@@ -9,6 +9,7 @@ import pytest
 import simba.memory.config
 import simba.memory.fts as fts
 import simba.memory.hybrid as hybrid
+import simba.memory.recall_plan as recall_plan
 
 
 def _vec(mid: str, sim: float) -> dict:
@@ -306,8 +307,14 @@ class TestScoringWiring:
         monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cfg = simba.memory.config.MemoryConfig(scoring_enabled=False)
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
         )
         assert [r["id"] for r in results] == ["hi", "lo"]
 
@@ -328,8 +335,14 @@ class TestScoringWiring:
             recency_halflife_days=30.0,
         )
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
         )
         assert [r["id"] for r in results] == ["lo", "hi"]  # recency flipped order
 
@@ -341,6 +354,7 @@ class _FakeRerankClient:
     def complete_json(self, prompt):
         # reverse the bracketed ids found in the prompt, to prove a reorder
         import re
+
         ids = re.findall(r"\[([^\]]+)\]", prompt)
         return list(reversed(ids))
 
@@ -354,8 +368,14 @@ class TestLlmRerankWiring:
         monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=False)
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=5, filters={}, cfg=cfg,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
             llm_client=_FakeRerankClient(),
         )
         assert [r["id"] for r in results] == ["a", "b", "c"]
@@ -368,8 +388,14 @@ class TestLlmRerankWiring:
         monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=2,
+            filters={},
+            cfg=cfg,
             llm_client=_FakeRerankClient(),
         )
         # reranker reversed the pool [a,b,c] -> [c,b,a], THEN truncated to 2
@@ -386,6 +412,7 @@ class _CountingRerankClient:
     def complete_json(self, prompt):
         self.calls += 1
         import re
+
         return list(reversed(re.findall(r"\[([^\]]+)\]", prompt)))
 
 
@@ -404,9 +431,16 @@ class TestAsyncRerankCache:
         cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
 
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
-            llm_client=client, rerank_cache=cache,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=2,
+            filters={},
+            cfg=cfg,
+            llm_client=client,
+            rerank_cache=cache,
         )
         assert [r["id"] for r in results] == ["c", "b"]  # cached order applied
         assert client.calls == 0  # no LLM call on a hit
@@ -427,9 +461,17 @@ class TestAsyncRerankCache:
         bg: set = set()
 
         results = await hybrid.hybrid_search(
-            None, None, [0.1] * 768, "q",
-            min_similarity=0.35, max_results=2, filters={}, cfg=cfg,
-            llm_client=client, rerank_cache=cache, bg_tasks=bg,
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=2,
+            filters={},
+            cfg=cfg,
+            llm_client=client,
+            rerank_cache=cache,
+            bg_tasks=bg,
         )
         # miss → fast (un-reranked) order returned immediately
         assert [r["id"] for r in results] == ["a", "b"]
@@ -439,3 +481,65 @@ class TestAsyncRerankCache:
         cached = cache.get(cache.signature("q", ["a", "b", "c"]))
         assert cached == ["c", "b", "a"]  # reranker reversed the pool
         assert client.calls == 1
+
+
+class _HydeFakeLlm:
+    """LLM stub that records calls and returns a configured HyDE answer."""
+
+    def __init__(self, text: str = "X") -> None:
+        self._text = text
+        self.calls = 0
+
+    def available(self) -> bool:
+        return True
+
+    def complete(self, prompt: str) -> str:
+        self.calls += 1
+        return self._text
+
+
+class TestHydeWiring:
+    def test_plan_recall_keyword_mode_uses_focus_terms(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(
+            hyde_mode="keyword", expansion_enabled=True
+        )
+        plan = recall_plan.plan_recall("unique_zeta token", cfg)
+        assert plan.hyde_text == plan.expansion_terms
+        assert plan.expansion_terms != ""
+
+    def test_plan_recall_llm_mode_sync_uses_llm_text(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(hyde_mode="llm", expansion_enabled=True)
+        llm = _HydeFakeLlm(text="A GOTCHA about token auth")
+        plan = recall_plan.plan_recall("unique_zeta token", cfg, llm_client=llm)
+        assert plan.hyde_text == "A GOTCHA about token auth"
+
+    def test_plan_recall_llm_mode_fall_open_when_llm_returns_empty(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(hyde_mode="llm", expansion_enabled=True)
+        llm = _HydeFakeLlm(text="")
+        plan = recall_plan.plan_recall("unique_zeta token", cfg, llm_client=llm)
+        assert plan.hyde_text == plan.expansion_terms  # falls back to keyword
+
+    def test_plan_recall_llm_mode_cache_hit_skips_llm(self) -> None:
+        import simba.memory.hyde_cache as hcmod
+
+        cfg = simba.memory.config.MemoryConfig(hyde_mode="llm")
+        cache = hcmod.HydeCache()
+        key = cache.signature("q")
+        cache.put(key, "cached text")
+        llm = _HydeFakeLlm()
+        plan = recall_plan.plan_recall("q", cfg, llm_client=llm, hyde_cache=cache)
+        assert plan.hyde_text == "cached text"
+        assert llm.calls == 0  # no LLM call on cache hit
+
+    def test_plan_recall_llm_mode_cache_miss_daemon_serves_keyword_fallback(
+        self,
+    ) -> None:
+        import simba.memory.hyde_cache as hcmod
+
+        cfg = simba.memory.config.MemoryConfig(hyde_mode="llm", expansion_enabled=True)
+        cache = hcmod.HydeCache()  # empty
+        plan = recall_plan.plan_recall(
+            "unique_zeta", cfg, llm_client=_HydeFakeLlm(), hyde_cache=cache
+        )
+        # keyword fallback until the bg task warms the cache
+        assert plan.hyde_text == plan.expansion_terms
