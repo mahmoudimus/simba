@@ -2,8 +2,9 @@
 # Distribution name ("simba" is taken on PyPI). The import package + CLI stay
 # `simba` (see [project.scripts] + [tool.setuptools.packages.find]).
 name = "simba-ai"
-version = "0.2.0"
+version = "0.2.1"
 description = "Unified Claude Code plugin — semantic memory, rule enforcement, neuro-symbolic logic, and project search"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
