@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Recall ranking: `memory.rrf_k` 60 → 20.** Sharper RRF fusion; measured win on
+  LoCoMo recall@k (r@5 0.573→0.595, both weak axes up), neutral on LongMemEval.
+  Non-breaking (docs/plans/07-recall-excellence.md).
+
+### Changed — BREAKING
+
+- **Default embedder is now `bge-large-en-v1.5` (1024-d), was nomic-embed-text
+  (768-d).** A bake-off on a discriminating eval showed a clear, cross-dataset
+  recall win — LoCoMo r@5 0.595→0.614, LongMemEval r@5 0.780→0.814, lifting both
+  weak axes (multi-hop, open-domain) with no single-hop regression
+  (docs/plans/07-recall-excellence.md). The vector dimension changes, so an
+  **existing store must be migrated**: run `simba memory reembed`. Recall now
+  guards against the mismatch — a 768-d store queried with the 1024-d model logs a
+  clear "run `simba memory reembed`" error instead of silently returning nothing.
+  The model is larger (~340 MB vs 81 MB) and slower to embed on store; pin the old
+  embedder via `simba config set memory.embedding_model/...` if needed.
+
 ## [0.3.0] — 2026-06-06
 
 ### Fixed

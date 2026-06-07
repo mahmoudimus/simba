@@ -331,7 +331,7 @@ class TestHealthEndpoint:
         assert data["status"] == "ok"
         assert "uptime" in data
         assert "memoryCount" in data
-        assert data["embeddingModel"] == "nomic-embed-text"
+        assert data["embeddingModel"] == "bge-large-en-v1.5"
 
 
 class TestMetricsEndpoint:

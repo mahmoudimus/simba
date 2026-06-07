@@ -16,10 +16,17 @@ import simba.config
 class MemoryConfig:
     port: int = 8741
     db_path: str = ""
-    embedding_model: str = "nomic-embed-text"
-    embedding_dims: int = 768
-    model_repo: str = "nomic-ai/nomic-embed-text-v1.5-GGUF"
-    model_file: str = "nomic-embed-text-v1.5.Q4_K_M.gguf"
+    # Default embedder: bge-large-en-v1.5 (1024-d). Bake-off (2026-06-06) on a
+    # discriminating eval showed it clearly beats nomic-embed-text (768-d) on
+    # both LoCoMo (r@5 0.595->0.614) and LongMemEval (r@5 0.780->0.814), lifting
+    # both weak axes (multi-hop, open-domain) with no single-hop regression. See
+    # docs/plans/07-recall-excellence.md. Switching embedders changes the vector
+    # dimension, so an existing store must be migrated with `simba memory reembed`
+    # (a guard raises a clear error on dim mismatch).
+    embedding_model: str = "bge-large-en-v1.5"
+    embedding_dims: int = 1024
+    model_repo: str = "CompendiumLabs/bge-large-en-v1.5-gguf"
+    model_file: str = "bge-large-en-v1.5-q8_0.gguf"
     model_path: str = ""
     n_gpu_layers: int = -1
     embed_url: str = ""
@@ -27,11 +34,14 @@ class MemoryConfig:
     # embed_url is set), or "llm-cli" (shell `llm embed`; note: only as local as
     # the chosen llm model — cloud models cross the no-external-service line).
     embed_provider: str = "gguf"
-    # Asymmetric task prefixes (model-specific). nomic uses "search_document: " /
-    # "search_query: "; Qwen3-Embedding uses "" for docs and an "Instruct: …\n
-    # Query: " instruction for queries. Prepended to the text before embedding.
-    embed_doc_prefix: str = "search_document: "
-    embed_query_prefix: str = "search_query: "
+    # Asymmetric task prefixes (model-specific). bge-large uses "" for docs and a
+    # "Represent this sentence for searching relevant passages: " instruction for
+    # queries; nomic used "search_document: " / "search_query: ". Prepended to
+    # the text before embedding.
+    embed_doc_prefix: str = ""
+    embed_query_prefix: str = (
+        "Represent this sentence for searching relevant passages: "
+    )
     min_similarity: float = 0.35
     max_results: int = 3
     duplicate_threshold: float = 0.92

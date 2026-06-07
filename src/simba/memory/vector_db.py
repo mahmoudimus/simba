@@ -12,6 +12,45 @@ import typing
 logger = logging.getLogger("simba.memory")
 
 
+class EmbeddingDimMismatchError(RuntimeError):
+    """Raised when the query embedding dim doesn't match the stored vectors.
+
+    Happens after the configured embedder changes (e.g. the bge-large default is
+    1024-d; an older store is 768-d). The fix is a one-time migration.
+    """
+
+
+def check_embedding_dim(query_dim: int, table_dim: int | None) -> None:
+    """Raise an actionable error if the query/store embedding dims disagree.
+
+    ``table_dim`` of ``None`` (couldn't be determined) is a no-op so recall is
+    never blocked by an inability to introspect the store.
+    """
+    if table_dim is not None and query_dim != table_dim:
+        raise EmbeddingDimMismatchError(
+            f"Embedding dimension mismatch: the store has {table_dim}-d vectors "
+            f"but the configured embedder produces {query_dim}-d. The embedding "
+            f"model changed — run `simba memory reembed` to migrate the store."
+        )
+
+
+def _table_vector_dim(table: typing.Any) -> int | None:
+    """Best-effort: read the stored ``vector`` dim from the table schema.
+
+    Returns ``None`` if it can't be determined (older handle, no schema, etc.) —
+    callers treat that as "skip the guard", never as an error.
+    """
+    try:
+        schema = getattr(table, "schema", None)
+        if schema is None:
+            return None
+        field = schema.field("vector")
+        list_size = getattr(field.type, "list_size", None)
+        return int(list_size) if list_size and list_size > 0 else None
+    except Exception:
+        return None
+
+
 async def find_duplicates(
     table: typing.Any, embedding: list[float], threshold: float
 ) -> dict[str, typing.Any]:
@@ -64,6 +103,11 @@ async def search_memories(
         if hasattr(table, "checkout_latest"):
             await table.checkout_latest()
 
+        # Guard: a changed embedder (e.g. nomic-768 -> bge-1024) makes the query
+        # vector incompatible with the stored vectors. Surface a clear migration
+        # message instead of a silent empty recall.
+        check_embedding_dim(len(embedding), _table_vector_dim(table))
+
         results = (
             await table.vector_search(embedding)
             .column("vector")
@@ -94,6 +138,10 @@ async def search_memories(
 
         memories.sort(key=lambda m: m["similarity"], reverse=True)
         return memories[:max_results]
+    except EmbeddingDimMismatchError as exc:
+        # Loud + actionable: the store needs migration, not a silent empty recall.
+        logger.error("recall disabled — %s", exc)
+        return []
     except Exception:
         logger.warning("search_memories failed", exc_info=True)
         return []

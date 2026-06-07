@@ -4,31 +4,31 @@
 
 ## locomo (full)
 
-_Latest: `5d65e7f` — Previous: `5d65e7f`_
+_Latest: `d9f8f4e` — Previous: `6639725`_
 
 | Metric | Latest | Delta | Previous |
 |---|---|---|---|
-| recall@1 | 0.334 | -0.000 | 0.334 |
-| recall@3 | 0.510 | +0.010 | 0.500 |
-| recall@5 | 0.595 | +0.022 | 0.573 |
-| recall@10 | 0.699 | +0.018 | 0.682 |
-| mrr | 0.496 | +0.006 | 0.490 |
+| recall@1 | 0.343 | 0.000 | 0.343 |
+| recall@3 | 0.533 | 0.000 | 0.533 |
+| recall@5 | 0.614 | 0.000 | 0.614 |
+| recall@10 | 0.724 | 0.000 | 0.724 |
+| mrr | 0.512 | 0.000 | 0.512 |
 
-_Run at 2026-06-07T04:49:54Z._
+_Run at 2026-06-07T07:16:45Z._
 
 ## longmemeval (full)
 
-_Latest: `5d65e7f` — Previous: `5d65e7f`_
+_Latest: `d9f8f4e` — Previous: `6639725`_
 
 | Metric | Latest | Delta | Previous |
 |---|---|---|---|
-| recall@1 | 0.362 | 0.000 | 0.362 |
-| recall@3 | 0.673 | +0.001 | 0.671 |
-| recall@5 | 0.780 | 0.000 | 0.780 |
-| recall@10 | 0.900 | -0.000 | 0.901 |
-| mrr | 0.708 | +0.000 | 0.708 |
+| recall@1 | 0.387 | 0.000 | 0.387 |
+| recall@3 | 0.697 | 0.000 | 0.697 |
+| recall@5 | 0.814 | 0.000 | 0.814 |
+| recall@10 | 0.911 | 0.000 | 0.911 |
+| mrr | 0.736 | 0.000 | 0.736 |
 
-_Run at 2026-06-07T04:50:07Z._
+_Run at 2026-06-07T07:16:58Z._
 
 ## Methodology & caveats
 

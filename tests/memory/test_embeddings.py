@@ -12,10 +12,16 @@ import simba.memory.config
 import simba.memory.embeddings
 
 
+# These fixtures pin nomic-style model + prefixes so the tests exercise the
+# embedding *mechanism* (prefix application, model name in the request) and stay
+# valid regardless of the production default embedder (now bge-large, 1024-d).
 @pytest.fixture
 def config(tmp_path: pathlib.Path) -> simba.memory.config.MemoryConfig:
     return simba.memory.config.MemoryConfig(
         model_path=str(tmp_path / "fake.gguf"),
+        embedding_model="nomic-embed-text",
+        embed_doc_prefix="search_document: ",
+        embed_query_prefix="search_query: ",
     )
 
 
@@ -23,6 +29,9 @@ def config(tmp_path: pathlib.Path) -> simba.memory.config.MemoryConfig:
 def http_config() -> simba.memory.config.MemoryConfig:
     return simba.memory.config.MemoryConfig(
         embed_url="http://localhost:8080",
+        embedding_model="nomic-embed-text",
+        embed_doc_prefix="search_document: ",
+        embed_query_prefix="search_query: ",
     )
 
 
