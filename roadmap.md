@@ -3,6 +3,37 @@
 Living doc for what's next on the memory/recall system. Driven by the honest
 SOTA assessment + the 4-repo borrow investigation (2026-06-03).
 
+## Status — v0.4.0 (2026-06-06)
+
+**Phases 4–7 + the eval program have shipped** (behind config flags, default-off,
+fail-open). What changed since the notes below were written:
+
+- **Eval program is a real pipeline:** `simba eval bench` / `simba eval
+  leaderboard`, an append-only results store, a committed **`BENCHMARKS.md`**
+  (first locked baseline: LoCoMo recall@5 **0.573** / QA **0.427**; LongMemEval
+  oracle recall@5 **0.780** — DeepSeek-judged, oracle = upper bound), a
+  configurable separate **judge** (answerer ≠ judge), abstention scoring, latency
+  p50/p95, and a CI smoke fixture (#41/#43/#46).
+- **Phase 4** true LLM HyDE + answer-time **IRCoT** (#44). **Phase 5** reflection
+  (#45). **Phase 6** decay/forgetting + feedback-aware ranking + `simba memory
+  feedback` (#42). **Phase 7** neuro-symbolic derive→verify→revise→distill→induce
+  loop over `kg_edges` (Z3/Datalog), scaffolded + gated (#45).
+- Implementer-ready specs live in **`docs/plans/`**.
+
+**Active frontier — multi-hop** (`docs/plans/06-multihop.md`). Ablation finding:
+the cloud judge/answerer (~17s/call) makes per-query LLM ablations impractical and
+a bounded IRCoT probe was noise-dominated at small n. **Verdict: lead Track B**
+(retrieval-time GraphRAG — PPR + community detection, measurable on recall@k
+locally), defer Track A (IRCoT productionization) to a scaled run. The reranker
+remains the validated retrieval-time win (default-on).
+
+**Still open:** run the full lever ablations (overnight / faster LLM), the full
+`longmemeval_s` haystack (vs today's oracle upper bound), refine the saturating
+internal eval builder, and validate Phase 7 (contradiction-injection + KG
+density). The historical notes below are kept for provenance.
+
+---
+
 ## Where we are
 
 Shipped this session (all on `main`): episodic consolidation (L2, #16), the recall
