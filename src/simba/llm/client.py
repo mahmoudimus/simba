@@ -14,6 +14,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import typing
 
 
@@ -112,12 +113,23 @@ class LlmClient:
                 *self._extra(),
             ]
         if provider in ("mlx-lm", "mlx"):
-            # Apple MLX local inference (mlx_lm.generate).
+            # Apple MLX local inference (mlx_lm.generate). Text-only models only.
             return [
                 "mlx_lm.generate",
                 "--model", self._local_model(),
                 "--prompt", prompt,
                 "--max-tokens", str(self._cfg.max_tokens),
+                *self._extra(),
+            ]
+        if provider == "mlx-vlm":
+            # Multimodal MLX models (Gemma 3/4 >=4B) driven text-only via a thin
+            # runner that prints ONLY the generation; the prompt is piped over
+            # stdin by complete() (no fragile CLI-echo parsing, no argv limits).
+            return [
+                sys.executable, "-m", "simba.llm.mlx_vlm_runner",
+                "--model", self._local_model(),
+                "--max-tokens", str(self._cfg.max_tokens),
+                "--temperature", "0.0",
                 *self._extra(),
             ]
         return []
@@ -129,6 +141,8 @@ class LlmClient:
         argv = self._argv(prompt)
         if not argv:
             return ""
+        # mlx-vlm takes the prompt over stdin (its argv carries no --prompt).
+        stdin_input = prompt if self._cfg.provider == "mlx-vlm" else None
         try:
             proc = subprocess.run(
                 argv,
@@ -136,6 +150,7 @@ class LlmClient:
                 text=True,
                 timeout=self._cfg.timeout_seconds,
                 env=self._env(),
+                input=stdin_input,
             )
         except Exception:
             return ""

@@ -61,6 +61,11 @@ dev = [
     "lancedb>=0.4",
     "llama-cpp-python>=0.3",
     "huggingface-hub>=0.26",
+    # Local eval LLM (Pillar 1). Apple-Silicon only — gated so non-macOS CI/dev
+    # installs skip them (the mlx-vlm provider imports mlx lazily, and its tests
+    # only check argv construction, so the suite is green without mlx installed).
+    "mlx-lm>=0.31.3 ; sys_platform == 'darwin'",
+    "mlx-vlm>=0.4.4 ; sys_platform == 'darwin'",
 ]
 
 [tool.ruff]
