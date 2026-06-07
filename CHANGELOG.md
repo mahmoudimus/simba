@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-07
+
+### Fixed
+
+- **Embedding-dim migration guard now actually fires on the daemon.** After the
+  0.5.0 bge-large default (1024-d), querying an un-migrated 768-d store raised a
+  raw LanceDB `RuntimeError` and silently degraded recall to keyword-only
+  (`-> N memories, top: 0.00`) instead of the promised actionable message. The
+  guard read `table.schema` synchronously, but the daemon's `AsyncTable.schema`
+  is a coroutine — so the stored dim was never determined and the check no-opped.
+  It now awaits the async schema (sync tables still work), so a dim mismatch
+  surfaces a clear "run `simba memory reembed`" error. Fix for an existing store:
+  `simba memory reembed`.
+
+### Changed
+
+- **PreToolUse skips the tool-rule recall for projects with no learned rules.**
+  The rule pre-check embedded every Bash command / file path and ran a
+  `TOOL_RULE` vector search before each tool call — a guaranteed miss (and log
+  noise) for the common case of a project with zero rules. It now consults a
+  TTL-cached per-project `TOOL_RULE` count (`hooks.rule_count_ttl`, default 300s;
+  0 disables) and skips the embed+recall when the count is zero. Fail-open: if the
+  count can't be determined, the check still runs. `GET /list` gained a
+  `projectPath` filter to source the count.
+
 ## [0.5.0] — 2026-06-07
 
 ### Changed — BREAKING
