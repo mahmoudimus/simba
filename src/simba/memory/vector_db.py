@@ -5,6 +5,7 @@ Ported from claude-memory/services/vector-db.js.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 import typing
@@ -34,19 +35,35 @@ def check_embedding_dim(query_dim: int, table_dim: int | None) -> None:
         )
 
 
-def _table_vector_dim(table: typing.Any) -> int | None:
+def _vector_dim_from_schema(schema: typing.Any) -> int | None:
+    """Pull the fixed-size ``vector`` dimension out of a resolved pyarrow schema."""
+    try:
+        field = schema.field("vector")
+        list_size = getattr(field.type, "list_size", None)
+        return int(list_size) if list_size and list_size > 0 else None
+    except Exception:
+        return None
+
+
+async def _resolve_table_dim(table: typing.Any) -> int | None:
     """Best-effort: read the stored ``vector`` dim from the table schema.
 
-    Returns ``None`` if it can't be determined (older handle, no schema, etc.) —
-    callers treat that as "skip the guard", never as an error.
+    Handles both LanceDB table flavours: the sync ``Table`` exposes ``schema`` as
+    a plain property, while the daemon's ``AsyncTable`` exposes it as a coroutine
+    method (``await table.schema()``). Reading it synchronously (the old bug) got
+    the bound coroutine on the live path, so the dim was never determined and the
+    migration guard silently no-opped. Returns ``None`` when it can't be
+    determined — callers treat that as "skip the guard", never as an error.
     """
     try:
         schema = getattr(table, "schema", None)
         if schema is None:
             return None
-        field = schema.field("vector")
-        list_size = getattr(field.type, "list_size", None)
-        return int(list_size) if list_size and list_size > 0 else None
+        if callable(schema):  # AsyncTable.schema is an async method
+            schema = schema()
+        if inspect.isawaitable(schema):
+            schema = await schema
+        return _vector_dim_from_schema(schema)
     except Exception:
         return None
 
@@ -106,7 +123,7 @@ async def search_memories(
         # Guard: a changed embedder (e.g. nomic-768 -> bge-1024) makes the query
         # vector incompatible with the stored vectors. Surface a clear migration
         # message instead of a silent empty recall.
-        check_embedding_dim(len(embedding), _table_vector_dim(table))
+        check_embedding_dim(len(embedding), await _resolve_table_dim(table))
 
         results = (
             await table.vector_search(embedding)

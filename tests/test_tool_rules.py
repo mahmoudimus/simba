@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 import simba.hooks.post_tool_use as post_hook
 import simba.hooks.pre_tool_use as pre_hook
 
@@ -33,9 +35,7 @@ class TestErrorPatternDetection:
         assert post_hook._has_error_pattern("bash: foo: command not found")
 
     def test_syntax_error_detected(self):
-        assert post_hook._has_error_pattern(
-            "SyntaxError: invalid syntax"
-        )
+        assert post_hook._has_error_pattern("SyntaxError: invalid syntax")
 
     def test_clean_output_not_detected(self):
         assert not post_hook._has_error_pattern("Hello world\nDone.")
@@ -171,8 +171,7 @@ class TestProbeNotFoundSkipping:
             {"command": "ls src/acme/families/flow_automaton"},
             {
                 "stderr": (
-                    "ls: src/acme/families/flow_automaton: "
-                    "No such file or directory"
+                    "ls: src/acme/families/flow_automaton: No such file or directory"
                 )
             },
             skip_probe_not_found=True,
@@ -268,11 +267,13 @@ class TestPostToolUseMain:
             lambda cwd, name, detail: logged.append((name, detail)),
         )
         result = json.loads(
-            post_hook.main({
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo hello"},
-                "cwd": "/tmp",
-            })
+            post_hook.main(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "echo hello"},
+                    "cwd": "/tmp",
+                }
+            )
         )
         assert result["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
         assert len(logged) == 1
@@ -283,10 +284,17 @@ class TestPostToolUseMain:
 
 
 class TestCheckToolRules:
+    @pytest.fixture(autouse=True)
+    def _bypass_project_gate(self, monkeypatch):
+        # These tests exercise the rule-matching path; force the project gate True
+        # so the ruleless-project short-circuit doesn't intercept them.
+        monkeypatch.setattr(pre_hook, "_project_has_tool_rules", lambda *a, **k: True)
+
     def test_returns_none_when_disabled(self, monkeypatch):
         class FakeCfg:
             rule_check_enabled = False
             rule_min_similarity = 0.6
+
         monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
         result = pre_hook._check_tool_rules("Bash", {"command": "ls"}, "/tmp")
         assert result is None
@@ -295,6 +303,7 @@ class TestCheckToolRules:
         class FakeCfg:
             rule_check_enabled = True
             rule_min_similarity = 0.6
+
         monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
         result = pre_hook._check_tool_rules("Glob", {"pattern": "*.py"}, "/tmp")
         assert result is None
@@ -303,6 +312,7 @@ class TestCheckToolRules:
         class FakeCfg:
             rule_check_enabled = True
             rule_min_similarity = 0.6
+
         monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
         monkeypatch.setattr(
             "simba.hooks._memory_client.recall_memories",
@@ -315,16 +325,19 @@ class TestCheckToolRules:
         class FakeCfg:
             rule_check_enabled = True
             rule_min_similarity = 0.6
+
         monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
         monkeypatch.setattr(
             "simba.hooks._memory_client.recall_memories",
             lambda *a, **kw: [
                 {
                     "content": "Bash: ImportError — avoid: python3 -c",
-                    "context": json.dumps({
-                        "tool": "Bash",
-                        "correction": "Use pytest instead",
-                    }),
+                    "context": json.dumps(
+                        {
+                            "tool": "Bash",
+                            "correction": "Use pytest instead",
+                        }
+                    ),
                     "similarity": 0.85,
                 }
             ],
@@ -340,6 +353,10 @@ class TestCheckToolRules:
 
 class TestToolRuleRecencyGate:
     """Stale TOOL_RULE matches age out of the warning injection (gate B)."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_project_gate(self, monkeypatch):
+        monkeypatch.setattr(pre_hook, "_project_has_tool_rules", lambda *a, **k: True)
 
     @staticmethod
     def _cfg(max_age_days):
@@ -423,15 +440,11 @@ class TestToolRuleRecencyGate:
 
 class TestWithinMaxAge:
     def test_recent_within_age(self):
-        recent = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400)
-        )
+        recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
         assert pre_hook._within_max_age(recent, 14) is True
 
     def test_old_outside_age(self):
-        old = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400)
-        )
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 30 * 86400))
         assert pre_hook._within_max_age(old, 14) is False
 
     def test_missing_timestamp_kept(self):
@@ -466,9 +479,7 @@ class TestCheckTruthConstraints:
             "simba.hooks._kg_client.query_kg",
             lambda *a, **k: "<kg-facts><fact>test</fact></kg-facts>",
         )
-        result = pre_hook._check_truth_constraints(
-            "Bash", {"command": "pytest acme"}
-        )
+        result = pre_hook._check_truth_constraints("Bash", {"command": "pytest acme"})
         assert result is not None
         assert "kg-facts" in result
 
@@ -490,11 +501,15 @@ class TestPreToolUseMain:
             "simba.hooks._kg_client.query_kg",
             lambda *a, **k: "",
         )
-        result = json.loads(pre_hook.main({
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-            "cwd": "/tmp",
-        }))
+        result = json.loads(
+            pre_hook.main(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "ls"},
+                    "cwd": "/tmp",
+                }
+            )
+        )
         # No transcript path → no thinking recall, no rule/truth match
         assert result.get("hookSpecificOutput", {}).get("additionalContext") is None
 
@@ -508,6 +523,7 @@ class TestMemoryClientFilters:
 
         class FakeResp:
             status_code = 200
+
             def json(self):
                 return {"memories": []}
 
@@ -516,14 +532,23 @@ class TestMemoryClientFilters:
             return FakeResp()
 
         import simba.hooks._memory_client as mc
+
         monkeypatch.setattr("httpx.post", fake_post)
-        monkeypatch.setattr(mc, "_cfg", type("C", (), {
-            "daemon_host": "localhost",
-            "daemon_port": 8741,
-            "min_similarity": 0.35,
-            "default_max_results": 3,
-            "default_timeout": 2.0,
-        })())
+        monkeypatch.setattr(
+            mc,
+            "_cfg",
+            type(
+                "C",
+                (),
+                {
+                    "daemon_host": "localhost",
+                    "daemon_port": 8741,
+                    "min_similarity": 0.35,
+                    "default_max_results": 3,
+                    "default_timeout": 2.0,
+                },
+            )(),
+        )
 
         mc.recall_memories(
             "test query",
@@ -538,6 +563,7 @@ class TestMemoryClientFilters:
 
         class FakeResp:
             status_code = 200
+
             def json(self):
                 return {"memories": []}
 
@@ -546,14 +572,23 @@ class TestMemoryClientFilters:
             return FakeResp()
 
         import simba.hooks._memory_client as mc
+
         monkeypatch.setattr("httpx.post", fake_post)
-        monkeypatch.setattr(mc, "_cfg", type("C", (), {
-            "daemon_host": "localhost",
-            "daemon_port": 8741,
-            "min_similarity": 0.35,
-            "default_max_results": 3,
-            "default_timeout": 2.0,
-        })())
+        monkeypatch.setattr(
+            mc,
+            "_cfg",
+            type(
+                "C",
+                (),
+                {
+                    "daemon_host": "localhost",
+                    "daemon_port": 8741,
+                    "min_similarity": 0.35,
+                    "default_max_results": 3,
+                    "default_timeout": 2.0,
+                },
+            )(),
+        )
 
         mc.recall_memories("test query")
 
@@ -569,6 +604,7 @@ class TestMemoryClientStore:
 
         class FakeResp:
             status_code = 200
+
             def json(self):
                 return {"status": "stored", "id": "mem_test"}
 
@@ -577,12 +613,21 @@ class TestMemoryClientStore:
             return FakeResp()
 
         import simba.hooks._memory_client as mc
+
         monkeypatch.setattr("httpx.post", fake_post)
-        monkeypatch.setattr(mc, "_cfg", type("C", (), {
-            "daemon_host": "localhost",
-            "daemon_port": 8741,
-            "default_timeout": 2.0,
-        })())
+        monkeypatch.setattr(
+            mc,
+            "_cfg",
+            type(
+                "C",
+                (),
+                {
+                    "daemon_host": "localhost",
+                    "daemon_port": 8741,
+                    "default_timeout": 2.0,
+                },
+            )(),
+        )
 
         result = mc.store_memory(
             memory_type="TOOL_RULE",
@@ -599,3 +644,137 @@ class TestMemoryClientStore:
         assert payload["content"] == "test rule"
         assert payload["tags"] == ["Bash"]
         assert payload["projectPath"] == "/tmp/project"
+
+
+# ---------- Memory client: project-scoped count ----------
+
+
+class TestMemoryClientCount:
+    @staticmethod
+    def _fake_cfg(mc):
+        return type(
+            "C",
+            (),
+            {"daemon_host": "localhost", "daemon_port": 8741, "default_timeout": 2.0},
+        )()
+
+    def test_count_uses_list_with_project(self, monkeypatch):
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {"total": 3, "memories": []}
+
+        def fake_get(url, params=None, timeout=None):
+            captured["url"] = url
+            captured["params"] = params
+            return FakeResp()
+
+        import simba.hooks._memory_client as mc
+
+        monkeypatch.setattr("httpx.get", fake_get)
+        monkeypatch.setattr(mc, "_cfg", self._fake_cfg(mc))
+
+        n = mc.count_memories(memory_type="TOOL_RULE", project_path="/p1")
+
+        assert n == 3
+        assert "/list" in captured["url"]
+        assert captured["params"]["type"] == "TOOL_RULE"
+        assert captured["params"]["projectPath"] == "/p1"
+
+    def test_count_none_on_error(self, monkeypatch):
+        import httpx
+
+        import simba.hooks._memory_client as mc
+
+        def fake_get(*a, **k):
+            raise httpx.HTTPError("boom")
+
+        monkeypatch.setattr("httpx.get", fake_get)
+        monkeypatch.setattr(mc, "_cfg", self._fake_cfg(mc))
+
+        assert mc.count_memories(memory_type="TOOL_RULE", project_path="/p") is None
+
+
+# ---------- PreToolUse: ruleless-project short-circuit ----------
+
+
+class TestToolRuleProjectGate:
+    """Skip the per-tool-call embed+recall when the project has no TOOL_RULE."""
+
+    def test_skips_recall_when_project_has_no_rules(self, monkeypatch, tmp_path):
+        class FakeCfg:
+            rule_check_enabled = True
+            rule_min_similarity = 0.6
+            rule_count_ttl = 300
+
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
+        monkeypatch.setattr(pre_hook, "_TOOL_RULE_COUNT_CACHE", tmp_path / "trc.json")
+        monkeypatch.setattr("simba.hooks._memory_client.count_memories", lambda **k: 0)
+
+        def boom(*a, **k):
+            raise AssertionError("recall must be skipped for a ruleless project")
+
+        monkeypatch.setattr("simba.hooks._memory_client.recall_memories", boom)
+
+        assert pre_hook._check_tool_rules("Bash", {"command": "ls"}, "/tmp") is None
+
+    def test_proceeds_when_project_has_rules(self, monkeypatch, tmp_path):
+        class FakeCfg:
+            rule_check_enabled = True
+            rule_min_similarity = 0.6
+            rule_count_ttl = 300
+            rule_max_age_days = 0
+
+        monkeypatch.setattr(pre_hook, "_hooks_cfg", lambda: FakeCfg())
+        monkeypatch.setattr(pre_hook, "_TOOL_RULE_COUNT_CACHE", tmp_path / "trc.json")
+        monkeypatch.setattr("simba.hooks._memory_client.count_memories", lambda **k: 2)
+        called = {}
+
+        def fake_recall(*a, **k):
+            called["yes"] = True
+            return [
+                {
+                    "content": "Bash: rule",
+                    "context": json.dumps({"correction": "do x"}),
+                    "similarity": 0.8,
+                }
+            ]
+
+        monkeypatch.setattr("simba.hooks._memory_client.recall_memories", fake_recall)
+
+        result = pre_hook._check_tool_rules("Bash", {"command": "ls"}, "/tmp")
+        assert called.get("yes") is True
+        assert result is not None
+
+    def test_gate_fail_open_on_count_error(self, monkeypatch, tmp_path):
+        # count_memories returns None (daemon unreachable) -> proceed (do the
+        # check) so a real rule is never silently suppressed.
+        class FakeCfg:
+            rule_count_ttl = 300
+
+        monkeypatch.setattr(pre_hook, "_TOOL_RULE_COUNT_CACHE", tmp_path / "trc.json")
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.count_memories", lambda **k: None
+        )
+        assert pre_hook._project_has_tool_rules("/proj", FakeCfg()) is True
+
+    def test_gate_caches_within_ttl(self, monkeypatch, tmp_path):
+        calls = {"n": 0}
+
+        def fake_count(**k):
+            calls["n"] += 1
+            return 0
+
+        monkeypatch.setattr(pre_hook, "_TOOL_RULE_COUNT_CACHE", tmp_path / "trc.json")
+        monkeypatch.setattr("simba.hooks._memory_client.count_memories", fake_count)
+
+        class FakeCfg:
+            rule_count_ttl = 300
+
+        cfg = FakeCfg()
+        assert pre_hook._project_has_tool_rules("/proj", cfg) is False
+        assert pre_hook._project_has_tool_rules("/proj", cfg) is False
+        assert calls["n"] == 1  # second lookup served from the TTL cache

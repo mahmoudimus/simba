@@ -27,6 +27,7 @@ import simba.redirect.check
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
+_TOOL_RULE_COUNT_CACHE = pathlib.Path("/tmp/claude-toolrule-count-cache.json")
 
 _ENABLED_TOOLS = frozenset(
     ["Read", "Grep", "Glob", "Task", "WebSearch", "WebFetch", "Bash"]
@@ -206,6 +207,45 @@ def _within_max_age(created_at: str | None, max_age_days: int) -> bool:
     return age_seconds <= max_age_days * 86400
 
 
+def _project_has_tool_rules(project_id: str, cfg) -> bool:
+    """True if the project has >=1 ``TOOL_RULE`` memory (TTL-cached, fail-open).
+
+    Most projects have no learned rules, so the per-tool-call embed+recall the
+    rule check would otherwise run is pure waste (a guaranteed miss). We cache the
+    project's count for ``cfg.rule_count_ttl`` seconds and skip the recall when it
+    is zero. A ``ttl`` of 0 disables the skip. On any uncertainty (the daemon
+    can't be reached → count is ``None``) we return ``True`` so a real rule is
+    never silently suppressed.
+    """
+    ttl = getattr(cfg, "rule_count_ttl", 0)
+    if not ttl or ttl <= 0:
+        return True
+
+    now = time.time()
+    cache: dict = {}
+    try:
+        loaded = json.loads(_TOOL_RULE_COUNT_CACHE.read_text())
+        if isinstance(loaded, dict):
+            cache = loaded
+    except (json.JSONDecodeError, OSError):
+        cache = {}
+
+    entry = cache.get(project_id)
+    if isinstance(entry, dict) and (now - entry.get("ts", 0)) < ttl:
+        return entry.get("count", 0) > 0
+
+    count = simba.hooks._memory_client.count_memories(
+        memory_type="TOOL_RULE", project_path=project_id
+    )
+    if count is None:
+        return True  # fail-open: couldn't determine → do the check
+
+    cache[project_id] = {"count": count, "ts": now}
+    with contextlib.suppress(OSError, TypeError):
+        _TOOL_RULE_COUNT_CACHE.write_text(json.dumps(cache))
+    return count > 0
+
+
 def _check_tool_rules(
     tool_name: str, tool_input: dict, cwd_str: str | None
 ) -> str | None:
@@ -228,6 +268,11 @@ def _check_tool_rules(
     # Scope to the opaque, worktree-robust project id the learner stores under,
     # so another repo's rules never surface here (and a repo's worktrees share).
     project_id = simba.db.resolve_project_id(pathlib.Path(cwd_str) if cwd_str else None)
+
+    # Skip the embed+recall entirely when the project has no learned rules.
+    if not _project_has_tool_rules(project_id, cfg):
+        return None
+
     memories = simba.hooks._memory_client.recall_memories(
         query,
         project_path=project_id,
