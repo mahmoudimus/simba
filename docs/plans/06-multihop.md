@@ -72,6 +72,23 @@ is exactly why Track B leads.
 
 ## Track A — Reasoning-time multi-hop (productionize IRCoT)
 
+> **VERDICT (2026-06-07): MEASURED NEGATIVE — do not productionize.** With Pillar 1
+> (local Gemma-4 eval LLM) unblocking an affordable scaled run, the n=36 LoCoMo
+> multi-hop probe (baseline vs +IRCoT, same judge+prompt on both arms) gave
+> **0.361 → 0.222 (−0.139, ~5 fewer correct)** at 3× latency — above the ±1-case
+> noise floor that made the original n=8 probe inconclusive. A 5-case prediction
+> dump showed the mechanism: **IRCoT abstains ("I don't know") on cases the
+> single-pass baseline answers** — its generated sub-queries retrieve drifted,
+> weaker evidence than the direct query's top-k (it won only 1/5, a genuine
+> multi-hop assembly). Fundamental, not a prompt tweak: the same lesson as C1/C4/
+> Track B — LoCoMo "multi-hop" evidence is largely *directly* retrievable, so
+> replacing direct retrieval with sub-query loops loses. **Both retrieval-time
+> (Track B) and reasoning-time (Track A) levers are now measured negatives; the
+> shipped reranker remains the only multi-hop win.** IRCoT stays eval-only
+> (`eval.ircot_enabled` default False); A0 resolves to "neither answer nor
+> assist — don't ship it." Remaining multi-hop path: extraction density / Phase 7.
+
+
 **Current state.** `src/simba/eval/benchmarks/ircot.py` (`build_step_prompt`,
 `build_final_prompt`, `ircot_answer`, `score_case_ircot`) exists **only in the
 eval harness**. The live daemon *retrieves* (returns memories for the host to
