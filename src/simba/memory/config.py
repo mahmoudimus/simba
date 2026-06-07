@@ -54,7 +54,12 @@ class MemoryConfig:
     shutdown_timeout: int = 10
     # Hybrid recall (L3): a BM25 keyword arm fused with the vector arm via RRF.
     hybrid_enabled: bool = True
-    rrf_k: int = 60
+    # RRF rank constant; lower = sharper top-rank weighting. Swept 2026-06-06:
+    # k=20 beat k=60 on LoCoMo recall (r@5 0.573->0.595, multi-hop + single-hop
+    # both up) and was neutral on LongMemEval — recall is ranking-limited, not
+    # candidate-pool-limited (widening the pools regressed). See
+    # docs/plans/07-recall-excellence.md.
+    rrf_k: int = 20
     fts_candidate_pool: int = 20
     fts_tokenize: str = "trigram"
     vector_weight: float = 1.0
