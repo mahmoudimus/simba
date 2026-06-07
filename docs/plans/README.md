@@ -33,6 +33,7 @@ one and implement it on its own branch off `main`.
 | [04](04-decay-forgetting.md) | Decay / forgetting + feedback-aware ranking | usage store, strength model, recall-time reinforcement, scheduler decay pass, dormant tier, outcome feedback (`simba memory feedback`) | Phase 6 |
 | [05](05-reflection-neurosymbolic-ops.md) | Reflection + neuro-symbolic + ops | `REFLECTION` memory type + reflect pass (Phase 5); derive→verify→revise→distill→induce loop over the KG with Z3/Datalog (Phase 7); latency metrics, TOOL_RULE TTL, lighter install extras, release glob fix | Phases 5 & 7 + ops |
 | [06](06-multihop.md) | Multi-hop: close the weak axis | evidence-gated; Track A productionize reasoning-time IRCoT, Track B retrieval-time GraphRAG (PPR + community, *not* C1's co-occurrence), Track C Phase 7 deductive closure | the multi-hop frontier |
+| [07](07-recall-excellence.md) | Recall excellence program | 5 pillars — fix the eval instrument, attack weak axes, embedder/extraction foundation, feedback flywheel (Phase 6), fusion tuning; + proof-carrying recall as the moat | make recall exceptional |
 
 ## Suggested order
 
