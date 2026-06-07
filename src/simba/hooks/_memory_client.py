@@ -64,6 +64,32 @@ def recall_memories(
     return []
 
 
+def count_memories(
+    *,
+    memory_type: str,
+    project_path: str | None = None,
+) -> int | None:
+    """Return the count of memories of ``memory_type`` for a project.
+
+    Hits ``GET /list`` (project + type scoped) and reads its ``total``. Returns
+    ``None`` on any failure so callers can fail-open (treat "unknown" as "exists")
+    rather than wrongly suppress behavior. Used by the PreToolUse tool-rule gate
+    to skip the per-call embed+recall for projects with no learned rules.
+    """
+    cfg = _get_cfg()
+    url = f"{daemon_url()}/list"
+    params: dict = {"type": memory_type, "limit": 1}
+    if project_path:
+        params["projectPath"] = project_path
+    try:
+        resp = httpx.get(url, params=params, timeout=cfg.default_timeout)
+        if resp.status_code == 200:
+            return int(resp.json().get("total", 0))
+    except (httpx.HTTPError, ValueError, TypeError):
+        pass
+    return None
+
+
 def store_memory(
     *,
     memory_type: str,

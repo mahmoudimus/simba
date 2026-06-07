@@ -520,6 +520,7 @@ async def stats(request: fastapi.Request) -> dict:
 async def list_memories(
     request: fastapi.Request,
     type: str | None = fastapi.Query(default=None),
+    projectPath: str | None = fastapi.Query(default=None),  # noqa: N803
     limit: int = fastapi.Query(default=20),
     offset: int = fastapi.Query(default=0),
 ) -> dict:
@@ -529,6 +530,8 @@ async def list_memories(
 
     if type:
         all_memories = [m for m in all_memories if m.get("type") == type]
+    if projectPath:
+        all_memories = [m for m in all_memories if m.get("projectPath") == projectPath]
 
     all_memories.sort(key=lambda m: m.get("createdAt", ""), reverse=True)
     total = len(all_memories)

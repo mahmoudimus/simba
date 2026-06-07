@@ -39,6 +39,10 @@ class HooksConfig:
     rule_check_enabled: bool = True
     rule_min_similarity: float = 0.6
     rule_max_per_session: int = 10
+    # Skip the per-tool-call TOOL_RULE embed+recall when the project has no
+    # learned rules (the common case). The project's TOOL_RULE count is cached
+    # for this many seconds; 0 disables the skip (always do the recall).
+    rule_count_ttl: int = 300
     auto_learn_from_failures: bool = True
     # Recency gate: drop TOOL_RULE recall matches older than this many days
     # (0 disables the gate).  Stale "no such file" probes age out of warnings.

@@ -467,6 +467,56 @@ class TestListEndpoint:
         assert data["memories"][0]["type"] == "SYSTEM"
 
     @pytest.mark.asyncio
+    async def test_list_filtered_by_project(self, async_client, lance_table):
+        """`?type=&projectPath=` scopes `total` to that project (the count the
+        PreToolUse tool-rule gate reads to skip recall for ruleless projects)."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "r1",
+                    "type": "TOOL_RULE",
+                    "content": "rule p1",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "/p1",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "r2",
+                    "type": "TOOL_RULE",
+                    "content": "rule p2",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "/p2",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get(
+            "/list", params={"type": "TOOL_RULE", "projectPath": "/p1"}
+        )
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["memories"][0]["id"] == "r1"
+
+        # A project with no TOOL_RULE rows reports zero — the skip signal.
+        empty = await async_client.get(
+            "/list", params={"type": "TOOL_RULE", "projectPath": "/nope"}
+        )
+        assert empty.json()["total"] == 0
+
+    @pytest.mark.asyncio
     async def test_list_with_data(self, async_client, lance_table):
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         await lance_table.add(
