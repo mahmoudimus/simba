@@ -123,6 +123,7 @@ def run_ceiling(
     budget: int = 10,
     damping: float = 0.85,
     categories: typing.Iterable[str] | None = None,
+    extract: typing.Any = None,
 ) -> dict[str, dict[str, typing.Any]]:
     """Per-category recall@k headroom for a graph fold over a benchmark.
 
@@ -143,12 +144,13 @@ def run_ceiling(
     import simba.eval.recall_adapter
     import simba.kg.entities
 
+    extract = extract or kgc.cooccurrence_extract
     wanted = set(categories) if categories else None
     by_cat: dict[str, list[dict[str, float]]] = collections.defaultdict(list)
     densities: list[float] = []
 
     for dset in datasets:
-        kg = kgc.build_corpus_kg(dset.corpus, kgc.cooccurrence_extract)
+        kg = kgc.build_corpus_kg(dset.corpus, extract)
         densities.append(kg.density())
         with tempfile.TemporaryDirectory(prefix="simba-ceiling-") as td:
             retriever = simba.eval.recall_adapter.build_retriever(

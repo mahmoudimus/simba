@@ -17,10 +17,14 @@ from __future__ import annotations
 import collections
 import dataclasses
 import itertools
+import re
 import typing
 
 import simba.kg.entities
 import simba.memory.keywords
+
+# Capitalized word (sequences) → proper-noun entities (names, places, products).
+_PROPER_NOUN_RE = re.compile(r"[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*")
 
 if typing.TYPE_CHECKING:
     from simba.eval.dataset import Memory
@@ -107,6 +111,24 @@ def cooccurrence_extract(mem: Memory) -> list[Triple]:
     """
     text = mem.content + (f" {mem.context}" if mem.context else "")
     ents = entities_of(text)
+    return [(a, "co", b) for a, b in itertools.combinations(ents, 2)]
+
+
+def proper_noun_entities(text: str) -> list[str]:
+    """Capitalized word-sequences (names, places, products) from ``text``.
+
+    The sparser, higher-signal alternative to ``entities_of``: it drops common
+    nouns and verbs, so the resulting KG connects only salient entities — the
+    extraction-density lever (a denser graph reaches everything and can't
+    discriminate; a sparse one might let PPR mass concentrate on real relations).
+    """
+    return _PROPER_NOUN_RE.findall(text or "")
+
+
+def proper_noun_cooccurrence_extract(mem: Memory) -> list[Triple]:
+    """Pairwise co-occurrence over a memory's proper nouns only (sparse KG)."""
+    text = mem.content + (f" {mem.context}" if mem.context else "")
+    ents = proper_noun_entities(text)
     return [(a, "co", b) for a, b in itertools.combinations(ents, 2)]
 
 

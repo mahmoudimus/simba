@@ -94,3 +94,20 @@ def test_cooccurrence_uses_context_too():
     triples = kgc.cooccurrence_extract(_mem("m1", "Alice", context="Paris"))
     pairs = {frozenset((s.lower(), o.lower())) for s, _, o in triples}
     assert frozenset(("alice", "paris")) in pairs
+
+
+def test_proper_noun_entities_keeps_capitalized_drops_lowercase():
+    ents = kgc.proper_noun_entities("alice met Bob in New York yesterday")
+    assert "Bob" in ents and "New York" in ents  # names/places (multiword kept)
+    assert "alice" not in ents and "yesterday" not in ents  # lowercase out
+
+
+def test_proper_noun_cooccurrence_is_sparser_than_focus_terms():
+    # Only proper nouns become nodes → a sparser, higher-signal graph than the
+    # dense focus-term co-occurrence (the extraction-density lever).
+    mem = _mem("m1", "Bob and Carol discussed the quarterly revenue report")
+    pn = {
+        frozenset((s.lower(), o.lower()))
+        for s, _, o in kgc.proper_noun_cooccurrence_extract(mem)
+    }
+    assert pn == {frozenset(("bob", "carol"))}  # only the two names pair up
