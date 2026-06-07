@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import types as _types
 
 import simba.__main__ as cli
 import simba.config
@@ -33,7 +34,20 @@ def _fake_sync_embedders(cfg, *, cache=None):
     return (lambda t: [0.1] * 4), (lambda t: [0.2] * 4)
 
 
-def _fake_run_recall(datasets, *, embed_doc, embed_query, cfg):
+class _FakeClient:
+    """Minimal stand-in for an llm/judge client (has the ``_cfg.model`` the
+    bench reads for the results record)."""
+
+    _cfg = _types.SimpleNamespace(model="fake-model", provider="fake")
+
+    def available(self) -> bool:
+        return True
+
+
+_SENTINEL_CLIENT = _FakeClient()
+
+
+def _fake_run_recall(datasets, *, embed_doc, embed_query, cfg, llm_client=None):
     return {
         "n_conversations": len(datasets),
         "n_cases": 2,
@@ -59,14 +73,21 @@ def _install_common_fakes(monkeypatch, tmp_path, **bench_overrides):
         judge_cache_path=str(tmp_path / ".simba" / "eval" / "judge_cache.db"),
         **bench_overrides,
     )
+    import simba.eval.config as eval_config
+
     mcfg = simba.config.load("memory")
+    ecfg = eval_config.EvalConfig()
 
     def _fake_load(section, *a, **k):
         if section == "bench":
             return bcfg
         if section == "memory":
             return mcfg
+        if section == "eval":
+            return ecfg
         raise KeyError(section)
+
+    import simba.llm.client as llm_client
 
     monkeypatch.setattr(simba.config, "load", _fake_load)
     monkeypatch.setattr(
@@ -75,6 +96,9 @@ def _install_common_fakes(monkeypatch, tmp_path, **bench_overrides):
     monkeypatch.setattr(run, "sync_embedders", _fake_sync_embedders)
     monkeypatch.setattr(bench_run, "run_recall", _fake_run_recall)
     monkeypatch.setattr(bench_results, "current_git_sha", lambda: "abc1234")
+    # The bench builds an llm client and threads it into retrieval (for the
+    # reranker / LLM-HyDE levers); stub it so no real client is constructed.
+    monkeypatch.setattr(llm_client, "get_client", lambda *a, **k: _SENTINEL_CLIENT)
     return bcfg
 
 
@@ -129,7 +153,7 @@ def test_bench_n_flag_slices_datasets(monkeypatch, tmp_path) -> None:
     _install_common_fakes(monkeypatch, tmp_path)
     seen: dict[str, int] = {}
 
-    def _spy_run_recall(datasets, *, embed_doc, embed_query, cfg):
+    def _spy_run_recall(datasets, *, embed_doc, embed_query, cfg, llm_client=None):
         seen["count"] = len(datasets)
         return _fake_run_recall(
             datasets, embed_doc=embed_doc, embed_query=embed_query, cfg=cfg
@@ -154,7 +178,7 @@ def test_bench_config_memory_overrides_applied(monkeypatch, tmp_path) -> None:
     _install_common_fakes(monkeypatch, tmp_path)
     seen: dict[str, object] = {}
 
-    def _spy_run_recall(datasets, *, embed_doc, embed_query, cfg):
+    def _spy_run_recall(datasets, *, embed_doc, embed_query, cfg, llm_client=None):
         seen["cfg"] = cfg
         return _fake_run_recall(
             datasets, embed_doc=embed_doc, embed_query=embed_query, cfg=cfg
@@ -166,6 +190,53 @@ def test_bench_config_memory_overrides_applied(monkeypatch, tmp_path) -> None:
     cfg = seen["cfg"]
     assert cfg.llm_rerank_enabled is False
     assert cfg.max_results == 20
+
+
+def test_bench_passes_llm_client_to_run_recall(monkeypatch, tmp_path) -> None:
+    # The reranker + LLM-HyDE levers can only be measured if the bench threads a
+    # real llm client into the retrieval path.
+    _install_common_fakes(monkeypatch, tmp_path)
+    seen: dict[str, object] = {}
+
+    def _spy_run_recall(datasets, *, embed_doc, embed_query, cfg, llm_client=None):
+        seen["llm_client"] = llm_client
+        return _fake_run_recall(
+            datasets, embed_doc=embed_doc, embed_query=embed_query, cfg=cfg
+        )
+
+    monkeypatch.setattr(bench_run, "run_recall", _spy_run_recall)
+    rc = cli._eval_bench(["locomo"])
+    assert rc == 0
+    assert seen["llm_client"] is _SENTINEL_CLIENT
+
+
+def test_bench_qa_passes_eval_cfg_to_run_qa(monkeypatch, tmp_path) -> None:
+    # IRCoT routing in run_qa only fires when the bench passes the eval config
+    # (eval.ircot_enabled). Verify --qa threads it through.
+    import simba.eval.benchmarks.judge as judge
+    import simba.llm.judge_config as jcfg
+
+    _install_common_fakes(monkeypatch, tmp_path)
+    seen: dict[str, object] = {}
+
+    def _spy_run_qa(datasets, **kwargs):
+        seen["eval_cfg"] = kwargs.get("eval_cfg")
+        seen["judge"] = kwargs.get("judge")
+        return {
+            "n_graded": 1,
+            "n_skipped": 0,
+            "overall": {"accuracy": 0.5},
+            "by_category": {},
+        }
+
+    monkeypatch.setattr(judge, "run_qa", _spy_run_qa)
+    monkeypatch.setattr(judge, "sample_cases", lambda ds, **k: ds)
+    monkeypatch.setattr(jcfg, "get_judge_client", lambda *a, **k: _SENTINEL_CLIENT)
+    rc = cli._eval_bench(["locomo", "--qa"])
+    assert rc == 0
+    # eval_cfg must be the loaded "eval" section (has ircot_enabled), not None.
+    assert seen["eval_cfg"] is not None
+    assert hasattr(seen["eval_cfg"], "ircot_enabled")
 
 
 def test_bench_embedding_cache_passed_to_sync_embedders(monkeypatch, tmp_path) -> None:

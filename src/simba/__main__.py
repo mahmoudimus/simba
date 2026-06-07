@@ -2424,15 +2424,25 @@ def _eval_bench(args: list[str]) -> int:
     if n_mode == "n" and n_val > 0:
         datasets = datasets[:n_val]
 
+    import simba.llm.client as llm_client
+
+    # One client, threaded into retrieval so the reranker (memory.llm_rerank_*)
+    # and LLM-HyDE (memory.hyde_mode="llm") levers can actually fire under the
+    # bench; unused when those are off, so the baseline is unchanged.
+    bench_llm = llm_client.get_client()
+
     recall_report = bench_run.run_recall(
-        datasets, embed_doc=embed_doc, embed_query=embed_query, cfg=mcfg
+        datasets,
+        embed_doc=embed_doc,
+        embed_query=embed_query,
+        cfg=mcfg,
+        llm_client=bench_llm,
     )
 
     qa_report = None
     if run_qa_flag:
         import simba.eval.benchmarks.judge as judge
         import simba.eval.benchmarks.judge_cache as jc
-        import simba.llm.client as llm_client
         import simba.llm.judge_config as jcfg
 
         if n_mode == "per":
@@ -2442,21 +2452,24 @@ def _eval_bench(args: list[str]) -> int:
         else:
             qa_datasets = datasets
         k_val = k or bcfg.default_k
-        # Separate answerer (llm) from judge so the model never grades its own
-        # answer (B1: get_judge_client defaults to a different local model).
-        llm = llm_client.get_client()
+        # Separate answerer (bench_llm) from judge so the model never grades its
+        # own answer (B1: get_judge_client defaults to a different local model).
         judge_client = jcfg.get_judge_client()
         cache_path = cache_arg or bcfg.judge_cache_path
+        # eval_cfg carries eval.ircot_enabled -> run_qa routes multi-hop cases
+        # through the IRCoT answer-time loop when enabled.
+        eval_cfg = simba.config.load("eval")
         qa_report = judge.run_qa(
             qa_datasets,
             embed_doc=embed_doc,
             embed_query=embed_query,
             cfg=mcfg,
-            llm=llm,
+            llm=bench_llm,
             judge=judge_client,
             k=k_val,
             include_abstention=abstention_flag,
             cache=jc.JudgeCache(_resolve_bench_path(cache_path)),
+            eval_cfg=eval_cfg,
             judge_model=judge_client._cfg.model,
         )
 
