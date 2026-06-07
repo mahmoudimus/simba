@@ -47,6 +47,11 @@ and Phases 4–7 of the roadmap land behind config flags (default-off, fail-open
 - **`simba eval bench` threads an LLM client + the `eval` config** through recall
   and QA so the reranker / LLM-HyDE / IRCoT levers can be measured through the CLI
   (#47).
+- **Recall ranking: `memory.rrf_k` 60 → 20.** A fusion sweep showed sharper RRF is
+  a measured win on LoCoMo recall@k (r@5 0.573→0.595, both weak axes up) and
+  neutral on LongMemEval; widening candidate pools regressed, so recall is
+  ranking-limited, not pool-limited. First result of the recall-excellence program
+  (`docs/plans/07-recall-excellence.md`) (#49).
 
 ## [0.3.0] — 2026-06-06
 
