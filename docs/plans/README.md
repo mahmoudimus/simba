@@ -32,6 +32,7 @@ one and implement it on its own branch off `main`.
 | [03](03-hyde-ircot.md) | HyDE + IRCoT | true LLM HyDE 2nd vector arm (cached, fail-open) and answer-time IRCoT for multi-hop QA | Lever C3 + answer-time multi-hop |
 | [04](04-decay-forgetting.md) | Decay / forgetting + feedback-aware ranking | usage store, strength model, recall-time reinforcement, scheduler decay pass, dormant tier, outcome feedback (`simba memory feedback`) | Phase 6 |
 | [05](05-reflection-neurosymbolic-ops.md) | Reflection + neuro-symbolic + ops | `REFLECTION` memory type + reflect pass (Phase 5); derive→verify→revise→distill→induce loop over the KG with Z3/Datalog (Phase 7); latency metrics, TOOL_RULE TTL, lighter install extras, release glob fix | Phases 5 & 7 + ops |
+| [06](06-multihop.md) | Multi-hop: close the weak axis | evidence-gated; Track A productionize reasoning-time IRCoT, Track B retrieval-time GraphRAG (PPR + community, *not* C1's co-occurrence), Track C Phase 7 deductive closure | the multi-hop frontier |
 
 ## Suggested order
 
@@ -39,4 +40,6 @@ The eval program (01 → 02) comes first: it makes iteration cheap and locks in
 honest baselines, so every later lever is a *measured delta* rather than a guess.
 03 (HyDE/IRCoT) and 04 (decay) are independent levers measurable against those
 baselines. 05 is the largest and most exploratory (Phase 7 neuro-symbolic) —
-land it once the measurement program exists to keep it honest.
+land it once the measurement program exists to keep it honest. 06 (multi-hop) is
+**evidence-gated**: its lead track is chosen from the lever-ablation result, and
+it slots after 0.4.0 so it ships against a stable baseline.
