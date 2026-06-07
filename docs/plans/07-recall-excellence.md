@@ -94,3 +94,38 @@ Swept four configs on full LoCoMo recall@k (cache-warm, no cloud), 2026-06-06:
 
 **Methodology note:** tuned on LoCoMo, confirmed neutral-or-better on LongMemEval
 (cross-dataset generalization > single-split tuning). Not saturating (0.595 ≪ 1.0).
+
+---
+
+## Second execution — Pillar 3 embedder bake-off (recall@k, local GGUF)
+
+Bake-off on LoCoMo recall@k, confirmed on LongMemEval, 2026-06-06. All local GGUF
+(CORE rule); each model re-embedded under a distinct cache key.
+
+**LoCoMo:**
+
+| model | dims | r@5 | r@10 | mrr | multi-hop r@5 | open-domain r@5 | single-hop r@5 |
+|---|---|---|---|---|---|---|---|
+| nomic-Q4 (current default) | 768 | 0.595 | 0.699 | 0.496 | 0.312 | 0.268 | 0.703 |
+| nomic-Q8 | 768 | 0.597 | 0.705 | 0.495 | 0.327 | 0.279 | 0.709 |
+| mxbai-embed-large-Q8 | 1024 | 0.606 | 0.713 | 0.498 | 0.332 | 0.317 | 0.704 |
+| **bge-large-en-v1.5-Q8** | 1024 | **0.614** | **0.724** | **0.512** | **0.336** | **0.314** | **0.713** |
+
+**LongMemEval (cross-dataset confirmation):**
+
+| model | r@5 | r@10 | mrr | multi-session r@5 |
+|---|---|---|---|---|
+| nomic-Q4 | 0.780 | 0.900 | 0.708 | 0.667 |
+| **bge-large-en-v1.5-Q8** | **0.814** | **0.911** | **0.736** | **0.687** |
+
+**Verdict: `bge-large-en-v1.5` is the largest single recall lever found.** Wins on
+*both* datasets and *every* axis (LoCoMo r@5 +0.019, LongMemEval r@5 +0.034; both
+weak axes — multi-hop and open-domain — up; single-hop up). The prior "nomic-Q4 ≈
+Qwen3" verdict was an artifact of the saturated internal eval. nomic-Q8 is a
+smaller free gain (mostly multi-hop) if staying 768-dim is required.
+
+**Cost / why it's not auto-merged:** bge is **1024-dim** (vs 768) and ~340 MB (vs
+81 MB), slower to embed on store. Making it the default is a **breaking change** —
+existing stores must `simba memory reembed` (old 768-d vectors are incompatible).
+Recommended for a minor-version bump with a clear migration note; the win is large
+enough to justify it for a pre-1.0, recall-is-the-product system.
