@@ -50,3 +50,18 @@ def test_multiple_seeds_are_symmetric():
     r = ppr.personalized_pagerank(adj, ["a", "d"])
     assert abs(r["a"] - r["d"]) < 1e-6
     assert abs(r["b"] - r["c"]) < 1e-6
+
+
+def test_rank_memories_orders_by_mass_and_limits():
+    # Star centered on the seed a; e is 2 hops out (only via b).
+    adj = {"a": {"b", "c", "d"}, "b": {"a", "e"}, "c": {"a"}, "d": {"a"}, "e": {"b"}}
+    em = {n: {f"m_{n}"} for n in adj}
+    ranked = ppr.rank_memories(adj, em, ["a"], top=5)
+    assert ranked[0] == "m_a"  # the seed's own memory ranks first
+    assert ranked[-1] == "m_e"  # the farthest memory ranks last
+    assert ppr.rank_memories(adj, em, ["a"], top=2) == ranked[:2]  # budget caps
+
+
+def test_rank_memories_no_seed_is_empty():
+    adj = {"a": {"b"}, "b": {"a"}}
+    assert ppr.rank_memories(adj, {"a": {"m"}}, [], top=5) == []

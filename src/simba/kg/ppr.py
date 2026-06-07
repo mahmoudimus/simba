@@ -59,3 +59,31 @@ def personalized_pagerank(
         if diff < tol:
             break
     return rank
+
+
+def rank_memories(
+    adjacency: dict[str, set[str]],
+    entity_memories: dict[str, set[str]],
+    seeds: typing.Iterable[str],
+    *,
+    top: int,
+    damping: float = 0.85,
+) -> list[str]:
+    """Return the ``top`` memory ids ranked by PPR mass, seeded at ``seeds``.
+
+    A memory's score is the max PPR mass over the entities it contains, so a
+    memory near a well-connected seed entity ranks high. Returns ``[]`` when no
+    seed lands on a node (the caller folds nothing).
+    """
+    mass = personalized_pagerank(adjacency, seeds, damping=damping)
+    if not mass:
+        return []
+    mem_score: dict[str, float] = {}
+    for ent, mems in entity_memories.items():
+        m = mass.get(ent, 0.0)
+        if m <= 0.0:
+            continue
+        for mid in mems:
+            if m > mem_score.get(mid, 0.0):
+                mem_score[mid] = m
+    return sorted(mem_score, key=lambda mid: mem_score[mid], reverse=True)[:top]
