@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import types
 
 import simba.llm.client as llm
@@ -166,6 +167,33 @@ class TestLocalProviders:
         argv = captured["argv"]
         assert argv[0] == "mlx_lm.generate"
         assert argv[argv.index("--model") + 1] == "mlx-community/x"
+
+    def test_mlx_vlm_uses_runner_with_prompt_via_stdin(self, monkeypatch) -> None:
+        # Gemma 3/4 ≥4B are multimodal → driven via mlx-vlm through a thin runner
+        # that prints only the generation; the prompt goes over stdin (no fragile
+        # CLI-echo parsing, no argv length/quoting limits).
+        captured = {}
+
+        def fake_run(argv, **kw):
+            captured["argv"] = argv
+            captured["input"] = kw.get("input")
+            return _completed("the answer\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        cfg = _cfg(
+            provider="mlx-vlm",
+            model_path="mlx-community/gemma-4-e4b-it-4bit",
+            max_tokens=64,
+        )
+        out = llm.LlmClient(cfg).complete("what is 2+2?")
+        assert out == "the answer"
+        argv = captured["argv"]
+        assert argv[0] == sys.executable
+        assert argv[1:3] == ["-m", "simba.llm.mlx_vlm_runner"]
+        assert argv[argv.index("--model") + 1] == "mlx-community/gemma-4-e4b-it-4bit"
+        assert argv[argv.index("--max-tokens") + 1] == "64"
+        assert "what is 2+2?" not in argv  # not in argv...
+        assert captured["input"] == "what is 2+2?"  # ...passed via stdin
 
     def test_extra_args_appended(self, monkeypatch) -> None:
         captured = {}
