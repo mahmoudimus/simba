@@ -38,10 +38,17 @@ class TestEmbedderDefaults:
     def test_embed_provider_default_is_gguf(self) -> None:
         assert config.MemoryConfig().embed_provider == "gguf"
 
-    def test_nomic_prefixes_preserved_by_default(self) -> None:
+    def test_default_embedder_is_bge_large(self) -> None:
+        # Default flipped nomic-embed-text (768-d) -> bge-large-en-v1.5 (1024-d)
+        # after a cross-dataset bake-off win (docs/plans/07-recall-excellence.md).
         cfg = config.MemoryConfig()
-        assert cfg.embed_doc_prefix == "search_document: "
-        assert cfg.embed_query_prefix == "search_query: "
+        assert cfg.embedding_model == "bge-large-en-v1.5"
+        assert cfg.embedding_dims == 1024
+        assert cfg.model_file == "bge-large-en-v1.5-q8_0.gguf"
+        assert cfg.embed_doc_prefix == ""
+        assert cfg.embed_query_prefix == (
+            "Represent this sentence for searching relevant passages: "
+        )
 
 
 class TestRerankModeDefault:
