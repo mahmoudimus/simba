@@ -20,25 +20,53 @@ reasoning problem, not a pure-retrieval one.** That reframes the work into two
 tracks below. **Phase 7** (`05-reflection-neurosymbolic-ops.md`) is a third,
 longer-horizon track (multi-hop *by proof*).
 
-## Decision gate (fill from the lever ablation)
+## Decision gate — VERDICT: lead with Track B (2026-06-06)
 
-> **STATUS: pending the lever-ablation result** (baseline vs +reranker/+HyDE on
-> recall; baseline vs +IRCoT on multi-hop QA). Record the numbers here, then:
-> - **If IRCoT shows a real multi-hop-QA delta** → lead with **Track A**
->   (productionize reasoning-time multi-hop).
-> - **If IRCoT is flat / marginal** → lead with **Track B** (retrieval-time
->   GraphRAG done right), since the reranker already covers the cheap reasoning
->   gain and the remaining headroom is in getting the *right evidence* in front
->   of the reranker.
->
-> Ablation table (to be pasted):
->
-> | config | multi-hop r@5 | multi-hop QA acc | open-domain r@5 | latency p50/p95 |
-> |---|---|---|---|---|
-> | baseline | _ | _ | _ | _ |
-> | +reranker | _ | — | _ | _ |
-> | +HyDE | _ | — | _ | _ |
-> | +IRCoT | — | _ | — | _ |
+**Lead track: B (retrieval-time GraphRAG).** Reasoning (Track A / IRCoT) is *not
+ruled out* but is deferred — its first measurement was inconclusive and it is
+expensive to measure on this setup; Track B is both promising and cheaply
+measurable here (pure-Python graph ops, no per-query cloud calls).
+
+### What the ablation actually showed
+
+The cloud LLM path on this box is `llm-cli` → DeepSeek at **~17s/call**. Per-query
+levers (reranker, HyDE) call the LLM **once per query** over the whole recall set
+(≥165 queries/conversation), making a full recall ablation a 6–8 h job — so those
+were **not** run (the +reranker stage ran 2 h 20 m on 494 queries without
+finishing and was killed). Only a **bounded IRCoT QA** probe was run (LoCoMo,
+8/category, fast `deepseek-chat` judge):
+
+| category (n=8) | baseline | +IRCoT |
+|---|---|---|
+| multi-hop | 0.375 | 0.500 (+1 case) |
+| single-hop | 0.750 | 0.625 (**−1 case**) |
+| overall (n=34) | 0.529 | 0.529 |
+
+**This is noise, not signal.** IRCoT only routes `multi-hop` cases, so single-hop
+*must* be identical between runs — yet it moved by one case (pure LLM
+non-determinism). That establishes a noise floor of ±1 case (±0.125) at n=8, the
+same magnitude as the multi-hop "gain". Overall accuracy is identical. No
+conclusion can be drawn at this scale.
+
+### Consequences
+
+- **Track A (IRCoT) deferred, not killed.** A real verdict needs ~30–50 multi-hop
+  cases; at ~17s/call × multi-step that's a dedicated (overnight) run, best done
+  after a faster LLM path exists or with the judge/embedding caches warmed.
+- **Reranker stays the validated retrieval-time win** (historical r@5 ≈
+  0.28→0.48; live + default). Not re-ablated here due to cost; the wiring
+  (`feat(eval): thread llm_client …`) lets anyone run the full recall ablation
+  later (e.g. overnight, or with a local model).
+- **Track B is the practical lead:** PPR + community detection are pure-Python
+  graph computation — measurable on recall@k **locally and fast**, no per-query
+  cloud cost. It directly attacks the retrieval side the reranker then ranks.
+
+### Methodology lesson (bake in)
+
+Bounded LLM-judged ablations are noise-dominated at small n. For any LLM-judged
+delta, either (a) sample ≥30 per target category, or (b) measure on **recall@k**
+(deterministic, local, no judge) wherever the lever is a retrieval lever — which
+is exactly why Track B leads.
 
 ---
 
@@ -168,12 +196,16 @@ not recall@k alone.
 
 ## Sequencing & discipline
 
-1. **Read the ablation** → fill the Decision Gate → pick the lead track.
-2. **Lead track first** as a measured-delta PR (ablation table + latency, test
-   split, default-off until the delta earns default-on). Never tune to saturate
+1. ✅ **Ablation read; verdict recorded** → lead = **Track B** (see Decision gate).
+2. **Track B first** as a measured-delta PR on **recall@k** (local, deterministic
+   — no per-query cloud), with the throwaway-KG path (B4), test split, default-off
+   until the delta earns default-on. Never tune to saturate
    ([[eval-do-not-chase-1.0]]).
-3. Slot after **0.4.0** so each track ships against a stable, committed baseline.
-4. Track B and Track C share the **KG-density** dependency — if B4 shows the
+3. **Track A (IRCoT) revisit** only with a scaled multi-hop QA run (≥30 multi-hop
+   cases) — needs a faster LLM path or an overnight job; resolve **A0** (does
+   simba answer vs assist) before building it.
+4. Slot after **0.4.0** so each track ships against a stable, committed baseline.
+5. Track B and Track C share the **KG-density** dependency — if B4 shows the
    throwaway KG is too sparse to help, invest in **extraction density** before
    either, and say so in `BENCHMARKS.md`.
 
