@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-06
+
+A large feature release: the eval program is now a disciplined, measured pipeline,
+and Phases 4–7 of the roadmap land behind config flags (default-off, fail-open).
+
+### Added
+
+- **Eval program (`simba eval bench` / `simba eval leaderboard`)**: config-driven
+  benchmark CLI over LoCoMo / LongMemEval (recall@k + optional LLM-judge QA), an
+  append-only results store (`.simba/eval/results.jsonl` with git SHA + config
+  snapshot per run), a committed `BENCHMARKS.md` leaderboard with a methodology
+  caveats footer, and a CI smoke fixture so the harness can't rot (#41, #46).
+- **Configurable local judge + honest baselines**: a separate `judge` config
+  section so the answerer never grades itself (B1), abstention scoring for
+  LongMemEval `_abs` questions, and per-query latency p50/p95 in every report
+  (#43).
+- **True LLM HyDE** (`memory.hyde_mode = "llm"`): a hypothetical-answer second
+  vector arm, cached + fail-open; and **answer-time IRCoT** for multi-hop QA in
+  the eval harness (`eval.ircot_enabled`) (#44).
+- **Decay / forgetting + feedback-aware ranking (Phase 6)**: a SQLite usage store,
+  a deterministic strength model (decay × reinforcement × feedback), recall-time
+  reinforcement, a scheduler decay pass, a reversible dormant tier, and
+  `simba memory feedback <id> good|bad` (#42).
+- **Reflection (Phase 5)**: a `REFLECTION` memory type + a scheduler reflect pass
+  that synthesises cross-session insights (#45).
+- **Neuro-symbolic deductive distillation (Phase 7)**: a derive→verify→revise→
+  distill→induce loop over `kg_edges` (Datalog/Souffle closure, Z3 UNSAT-core
+  contradiction detection, AGM-style revision, proof-carrying derived edges),
+  scheduler-wired, gated + fail-open (#45).
+- **First committed benchmark baseline**: LoCoMo recall@5 0.573 / QA acc 0.427;
+  LongMemEval oracle recall@5 0.780 (see `BENCHMARKS.md`; numbers are
+  DeepSeek-judged, oracle = upper bound) (#46).
+- **`docs/plans/`**: implementer-ready specs for the roadmap, including the
+  evidence-gated multi-hop plan (`06-multihop.md`, lead = retrieval-time GraphRAG)
+  (#40, #47).
+
+### Changed
+
+- **Ops hardening**: latency p50/p95 in `DiagnosticsTracker` + a `/metrics`
+  endpoint; a `TOOL_RULE` TTL hygiene pass; lighter install extras
+  (`embed`/`full` optional-dependency split, lazy imports); the release workflow
+  globs `*.whl`/`*.tar.gz` explicitly (#45).
+- **`simba eval bench` threads an LLM client + the `eval` config** through recall
+  and QA so the reranker / LLM-HyDE / IRCoT levers can be measured through the CLI
+  (#47).
+
 ## [0.3.0] — 2026-06-06
 
 ### Fixed
