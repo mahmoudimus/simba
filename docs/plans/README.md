@@ -1,5 +1,9 @@
 # Implementation plans
 
+> **Continuing this work?** Start with [`HANDOFF.md`](HANDOFF.md) — full session
+> handoff (state, decisions, what's left, where to pick up) + a paste-ready prompt
+> to boot a fresh context.
+
 Detailed, implementer-ready specs for the remaining simba roadmap. Each spec is
 written to be executed top-to-bottom by an implementer (human or a smaller model)
 without further design work: it names exact files, signatures, config fields,
