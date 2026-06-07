@@ -139,6 +139,29 @@ Pick one, write it down, build only that:
 
 ## Track B — Retrieval-time multi-hop done right (GraphRAG, not co-occurrence)
 
+> **VERDICT (2026-06-07): MEASURED NEGATIVE — Track B is dead.** We built the
+> proper selective lever (personalized PageRank + budgeted fold, *not* C1's raw
+> co-occurrence) and the measurement apparatus it lacked (`eval/kg_corpus.py`
+> throwaway corpus KG, `kg/ppr.py`, `eval/kg_ceiling.py`, `memory/kg_fold.py`,
+> wired through `hybrid.py`/`recall_adapter`, `memory.kg_ppr_enabled` default-off).
+> Two-stage result on LoCoMo + LongMemEval, each with its best extractor:
+>
+> | | LoCoMo multi-hop | LME multi-session |
+> |---|---|---|
+> | reachability ceiling | 1.0 (reaches *everything* → non-discriminating) | 0.96–0.99 |
+> | budgeted-PPR ceiling (upper bound) | +0.013 → +0.035 | +0.046 |
+> | **real fold delta (recall@k)** | **−0.027** | **−0.060** |
+>
+> The ceiling→reality inversion is the finding: the budgeted PPR fold **displaces**
+> genuine vector hits from the top-k faster than it adds gold — exactly C1's
+> displacement failure, now reconfirmed with the strongest version of the lever.
+> Overall recall@k regressed on *both* datasets (LoCoMo −0.024, LME −0.033).
+> **Extraction density matters** (proper-noun KG tripled LoCoMo's *ceiling*) but
+> not enough to flip the sign. `kg_ppr_enabled` stays **default-off**; the code is
+> kept as default-off instruments. This is the **third** independent confirmation
+> that multi-hop is reasoning-time, not retrieval-time — the shipped reranker is
+> the ranking win; the next multi-hop lever is **Track A (IRCoT)**, below.
+
 C1 failed because it was naive co-occurrence. The roadmap's real plan
 (HippoRAG-style) was **deferred**: community detection and personalized PageRank
 were never built. This is the retrieval-time swing C1 never actually took.
