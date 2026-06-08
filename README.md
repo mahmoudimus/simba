@@ -394,13 +394,15 @@ Simba can call an LLM for two memory tasks via a small **CLI-backed client** (`s
 - **Reranker** (`memory.llm_rerank_enabled`) — the cross-encoder's role: after RRF + composite scoring, the LLM re-orders the candidate pool by relevance before truncation. Measured on `simba-seed` with `claude`/haiku it lifts **recall@1 0.71 → 0.90** and **MRR 0.90 → 1.00**, fixing exactly the confusable cases dense recall missed. **Non-blocking in the daemon:** reranking can't be precomputed like sync (it's query-specific), so recall serves the fast RRF+composite order *immediately* and reranks **off the hot path**, caching the result by (query, candidate-set) — a recurring query/candidate-set is then served the reranked order with no LLM call. So novel queries pay no latency (and get the fast order); recurring ones get the rerank for free. Set **`memory.llm_rerank_mode=sync`** to instead block on the rerank every recall (useful for testing/measuring a model live — at the cost of latency on every hook). The eval harness / explicit CLI recall always use the **synchronous** path (no cache) so they measure the rerank ceiling.
 - **Extraction** (`sync.extract_strategy`, default `llm+regex`) — the **primary KG feed**: for every new memory the LLM extracts typed `(subject, predicate, object)` triples (reusing the project's existing entity vocabulary), unioned with the regex heuristics and canonicalized via entity resolution on write. So the bitemporal / entity-res / multi-hop KG is richly fed instead of "schema ahead of data." Runs in the background sync pipeline (not the hot path), bounded by `sync.llm_extract_max_per_cycle` so the first backlog sweep stays cheap; degrades to regex-only when no provider. Set `extract_strategy` to `regex` or `llm` to change the mix.
 
-Providers (`llm.provider`): `claude-cli`, `llm-cli` (cloud), and **100% local** `llama-cli` (llama.cpp) or `mlx-lm` (Apple MLX) — set `llm.model_path` to a GGUF/model. A DeepSeek-style backend works via `llm.base_url` (claude-cli) or the `llm` CLI.
+Providers (`llm.provider`): `claude-cli`, `llm-cli` (cloud); **100% local** `llama-cli` (llama.cpp) / `mlx-lm` (Apple MLX), set `llm.model_path`. Those CLIs **reload the model every call**, so for repeated calls (the reranker, LLM-judged eval) prefer a **persistent OpenAI-compatible server** that loads once: `mlx-server` (Apple Silicon, auto-spawned) / `llama-server` (llama.cpp, cross-platform/CUDA, auto-spawned) / `openai-http` (any running Ollama / llama.cpp / vLLM — local or a **remote GPU box**). All three set `llm.base_url`; drive any other server via `llm.serve_cmd`. See [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). A DeepSeek-style backend works via `llm.base_url` (claude-cli) or the `llm` CLI.
 
 ```bash
-simba config set llm.provider llm-cli            # or claude-cli | llama-cli | mlx-lm | none
-simba config set llm.model deepseek-chat         # model name the chosen CLI expects
+# claude-cli | llm-cli | llama-cli | mlx-lm | mlx-server | llama-server | openai-http | none
+simba config set llm.provider llm-cli            # pick a backend
+simba config set llm.model deepseek-chat         # model name the chosen CLI/server expects
 simba config set llm.thinking xhigh              # reasoning-effort hint (best-effort)
 simba config set llm.model_path ~/models/q.gguf  # for llama-cli / mlx-lm (100% local)
+simba config set llm.provider openai-http        # persistent server: also set llm.base_url (see docs/eval-remote-gpu.md)
 simba config set llm.provider none               # disable all LLM features
 ```
 
@@ -430,6 +432,23 @@ simba eval run --dataset real.json --split test
 - **Held-out split**: every case is deterministically assigned to `dev` or `test` (stable hash of its id, unless it pins `"split"`). Tune on `--split dev`, report on `--split test`, so tuning can't silently overfit the number you quote.
 
 Config: `eval.ks` (default `1,3,5,10`) and `eval.dataset` (empty ⇒ bundled seed), both via `simba config`.
+
+### External benchmarks (LoCoMo · LongMemEval · HotpotQA · HaluMem)
+
+Beyond the bundled sets, simba scores the same recall stack against published datasets — plus an LLM-judged QA layer and a hallucination eval:
+
+```bash
+simba eval bench locomo --qa --per 30          # recall@k + LLM-judged QA on LoCoMo
+simba eval bench longmemeval --qa --abstention # + abstention accuracy
+simba eval bench hotpotqa                       # fullwiki multi-hop recall
+simba eval halumem --user-num 5                 # HaluMem: operation-level memory-hallucination
+simba eval leaderboard                          # render BENCHMARKS.md from results.jsonl
+```
+
+- **HaluMem** measures *not surfacing wrong/stale memories* (correct / hallucination / omission + boundary abstention) — the inverse of recall@k, the eval where forgetting / supersession can finally show value. It feeds a recency-annotated context (mirroring what the daemon injects); the decisive lever for the temporal categories is recency-aware retrieval, not forgetting.
+- **Eval LLM serving is config-driven** and can run on a remote GPU box — `mlx-server` / `llama-server` / `openai-http`; see [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). The answerer and judge are separate models (no self-grading) and recorded in each result.
+- **Multi-hop instruments (default-OFF, measured)**: entity-bridge (`memory.entity_bridge_enabled`, the one mechanism with a positive external signal) and Track B retrieval-time GraphRAG (`memory.kg_ppr_enabled`, a measured negative kept as an instrument). Both fold a third graph arm into recall before rescore; off until a proven in-repo delta.
+- Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.
 
 ## Neuron — Neuro-Symbolic Logic Server
 

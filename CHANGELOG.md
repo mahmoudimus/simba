@@ -25,6 +25,25 @@
 - **Recency-annotated answer context** in the eval — `build_answer_prompt` mirrors
   what the daemon injects (`format_memories`): date-labels each memory and flags
   the most recent. Closes a large temporal-accuracy gap the eval was hiding.
+- **External recall@k benchmark harness** — `simba eval bench locomo|longmemeval|
+  hotpotqa [--qa]` over real datasets, `simba eval leaderboard` renders a committed
+  `BENCHMARKS.md`, and every run is appended to `.simba/eval/results.jsonl` with a
+  config snapshot. Includes a HotpotQA pooled (fullwiki) loader.
+- **Multi-hop retrieval instruments — both default-OFF, measured.** Two ways to fold
+  a third graph arm into recall before composite-rescore + reranker, gated and no-op
+  unless wired:
+  - **Entity-bridge** (`memory.entity_bridge_enabled`, spec 09) — fold memories that
+    share a *named entity* with the top seeds. The one multi-hop mechanism with a
+    positive external signal (YourMemory +12pp HotpotQA); ships off pending a proven
+    in-repo delta.
+  - **Track B retrieval-time GraphRAG** (`memory.kg_ppr_enabled`, spec 06) — fold
+    PPR-ranked KG neighbors seeded by the query's entities. A **measured negative**
+    (marginal/regressive on LoCoMo/LME multi-session), kept as a default-off
+    instrument with the `kg_ceiling` / `kg_corpus` apparatus that proves it.
+- **CI ↔ local parity** — `scripts/checks.sh {lint|test|all}` is the single source of
+  truth for ruff + pytest, called by **both** `.github/workflows/ci.yml` and the new
+  `.githooks` (`pre-commit` = lint, `pre-push` = full). Enable: `git config
+  core.hooksPath .githooks`.
 
 ### Changed
 
