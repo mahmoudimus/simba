@@ -19,6 +19,7 @@ import time
 import typing
 
 import simba.memory.config
+import simba.memory.entity_bridge
 import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.recall_plan
@@ -74,6 +75,8 @@ async def _search(
     extra_embedding: list[float] | None,
     plan: simba.memory.recall_plan.RecallPlan,
     llm_client: typing.Any,
+    entity_bridge_index: typing.Any = None,
+    entity_bridge_lookup: dict[str, dict[str, typing.Any]] | None = None,
 ) -> list[str]:
     import lancedb
 
@@ -91,6 +94,8 @@ async def _search(
         candidate_pool=plan.candidate_pool,
         extra_embedding=extra_embedding,
         llm_client=llm_client,
+        entity_bridge_index=entity_bridge_index,
+        entity_bridge_lookup=entity_bridge_lookup,
     )
     return [r["id"] for r in fused]
 
@@ -122,6 +127,28 @@ def build_retriever(
     with simba.memory.fts.connect(fts_path, cfg.fts_tokenize):
         simba.memory.fts.rebuild(rows)
 
+    # Optional entity-bridge index (spec 09): built from the corpus so the lever is
+    # measurable on corpora that ship no KG — cheap (regex NER, no LLM).
+    eb_index = None
+    eb_lookup: dict[str, dict[str, typing.Any]] = {}
+    if getattr(cfg, "entity_bridge_enabled", False):
+        eb_index = simba.memory.entity_bridge.build_index(
+            (m.id, f"{m.content} {m.context}".strip()) for m in dataset.corpus
+        )
+        eb_lookup = {
+            m.id: {
+                "id": m.id,
+                "type": m.type,
+                "content": m.content,
+                "context": m.context,
+                "similarity": 0.0,
+                "confidence": float(m.confidence),
+                "createdAt": m.created_at or build_now,
+                "projectPath": m.project_path,
+            }
+            for m in dataset.corpus
+        }
+
     def retriever(query: str) -> list[str]:
         # Eval is always the sync (no-cache) path: hyde_mode=="llm" generates the
         # hypothetical answer inline so the benchmark exercises the same 2nd-arm
@@ -133,7 +160,16 @@ def build_retriever(
         extra = embed_query(plan.hyde_text) if plan.hyde_text else None
         return asyncio.run(
             _search(
-                db_path, str(fts_path), cfg, query, embedding, extra, plan, llm_client
+                db_path,
+                str(fts_path),
+                cfg,
+                query,
+                embedding,
+                extra,
+                plan,
+                llm_client,
+                entity_bridge_index=eb_index,
+                entity_bridge_lookup=eb_lookup,
             )
         )
 

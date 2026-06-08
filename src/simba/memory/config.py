@@ -143,6 +143,17 @@ class MemoryConfig:
     dormant_filter_enabled: bool = True
     # Default delta applied per good/bad feedback signal. Overridable per-call.
     feedback_default_weight: float = 0.3
+    # Entity-bridge multi-hop (spec 09): after RRF, fold memories that share a
+    # *named entity* with the top seeds into the candidate set (BFS depth N over
+    # the shared-entity graph), as a third RRF arm before composite rescore +
+    # reranker. Default-OFF — the one multi-hop mechanism with a positive external
+    # result (YourMemory +12pp HotpotQA), distinct from kg co-occurrence/PPR
+    # (sparse, high-precision links). No-op unless a caller supplies the index.
+    entity_bridge_enabled: bool = False
+    entity_bridge_hops: int = 2  # BFS depth from the seeds over shared entities
+    entity_bridge_seeds: int = 5  # top fused hits used as traversal seeds
+    entity_bridge_max: int = 10  # cap on bridged ids folded in
+    entity_bridge_weight: float = 1.0  # RRF-arm weight of the bridge contribution
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
