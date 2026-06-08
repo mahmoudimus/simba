@@ -36,14 +36,50 @@ def _bridge_key(entity_key: str) -> str:
     return " ".join(words[:_PREFIX_WORDS]) if len(words) > _PREFIX_WORDS else entity_key
 
 
-def extract_entities(text: str) -> set[str]:
-    """Normalized bridge keys for the proper-noun entities mentioned in ``text``."""
+def _to_bridge_keys(spans: typing.Iterable[str]) -> set[str]:
+    """Normalize + 2-word-prefix-key a set of entity surface spans."""
     keys: set[str] = set()
-    for span in _PROPER_NOUN_RE.findall(text or ""):
+    for span in spans:
         norm = simba.kg.entities.normalize_entity(span)
         if norm:
             keys.add(_bridge_key(norm))
     return keys
+
+
+def extract_entities(text: str) -> set[str]:
+    """Bridge keys via the capitalized-span regex (dep-free, lower precision)."""
+    return _to_bridge_keys(_PROPER_NOUN_RE.findall(text or ""))
+
+
+# spaCy NER labels worth bridging on (YourMemory's PERSON/ORG/GPE + close kin).
+_SPACY_LABELS = frozenset(
+    {"PERSON", "ORG", "GPE", "LOC", "FAC", "WORK_OF_ART", "EVENT", "NORP", "PRODUCT"}
+)
+_NLP: typing.Any = None
+
+
+def _spacy_nlp() -> typing.Any:
+    """Lazy-load en_core_web_sm with NER only (parser/tagger/lemmatizer excluded)."""
+    global _NLP
+    if _NLP is None:
+        import spacy
+
+        _NLP = spacy.load(
+            "en_core_web_sm",
+            exclude=["tagger", "parser", "attribute_ruler", "lemmatizer"],
+        )
+    return _NLP
+
+
+def spacy_entities(text: str) -> set[str]:
+    """Bridge keys via real type-based NER (PERSON/ORG/GPE/...). Higher precision.
+
+    This reproduces YourMemory's NER signal (the variable a frequency filter only
+    proxied). Local + offline (the model is a one-time download, like the GGUF
+    embedder). Lazy spaCy import so it's an opt-in eval/dev extractor.
+    """
+    doc = _spacy_nlp()(text or "")
+    return _to_bridge_keys(e.text for e in doc.ents if e.label_ in _SPACY_LABELS)
 
 
 @dataclasses.dataclass
@@ -57,12 +93,21 @@ class EntityBridgeIndex:
         return not self.entity_to_memories
 
 
-def build_index(items: typing.Iterable[tuple[str, str]]) -> EntityBridgeIndex:
-    """Build the index from ``(memory_id, text)`` pairs."""
+def build_index(
+    items: typing.Iterable[tuple[str, str]],
+    *,
+    extract: typing.Callable[[str], set[str]] | None = None,
+) -> EntityBridgeIndex:
+    """Build the index from ``(memory_id, text)`` pairs.
+
+    ``extract`` (text → bridge keys) defaults to the regex extractor; pass
+    ``spacy_entities`` for real type-based NER.
+    """
+    fn = extract or extract_entities
     e2m: dict[str, set[str]] = collections.defaultdict(set)
     m2e: dict[str, set[str]] = collections.defaultdict(set)
     for mem_id, text in items:
-        for key in extract_entities(text):
+        for key in fn(text):
             e2m[key].add(mem_id)
             m2e[mem_id].add(key)
     return EntityBridgeIndex(entity_to_memories=dict(e2m), memory_to_entities=dict(m2e))

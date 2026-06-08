@@ -66,6 +66,15 @@ def test_pure_transitive_neighbor_excluded():
     assert "m3" not in bridged  # only transitively linked → filtered out
 
 
+def test_build_index_uses_injected_extractor():
+    # The extractor is pluggable (regex default; spacy_entities for real NER).
+    idx = eb.build_index(
+        [("m1", "alpha"), ("m2", "beta")],
+        extract=lambda t: {"shared"},  # fake NER linking everything
+    )
+    assert idx.entity_to_memories["shared"] == {"m1", "m2"}
+
+
 def test_max_df_drops_low_specificity_entities():
     # "Common" appears in every memory (noise); "Rare" links only m1+m2.
     # (Isolated caps so the regex doesn't merge adjacent capitalized words.)

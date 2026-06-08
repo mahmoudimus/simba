@@ -61,6 +61,7 @@ dev = [
     "lancedb>=0.4",
     "llama-cpp-python>=0.3",
     "huggingface-hub>=0.26",
+    "spacy>=3.8.14",
 ]
 
 [tool.ruff]

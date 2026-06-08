@@ -132,8 +132,15 @@ def build_retriever(
     eb_index = None
     eb_lookup: dict[str, dict[str, typing.Any]] = {}
     if getattr(cfg, "entity_bridge_enabled", False):
+        _ner = getattr(cfg, "entity_bridge_ner", "regex")
+        _extract = (
+            simba.memory.entity_bridge.spacy_entities
+            if _ner == "spacy"
+            else simba.memory.entity_bridge.extract_entities
+        )
         eb_index = simba.memory.entity_bridge.build_index(
-            (m.id, f"{m.content} {m.context}".strip()) for m in dataset.corpus
+            ((m.id, f"{m.content} {m.context}".strip()) for m in dataset.corpus),
+            extract=_extract,
         )
         eb_lookup = {
             m.id: {
