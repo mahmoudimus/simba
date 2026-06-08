@@ -1,5 +1,24 @@
 # 09 — Entity-bridge multi-hop (the untested retrieval lever)
 
+> **VERDICT (2026-06-07): CLEAN KILL for simba's regime — built, measured, closed.**
+> P0 (HotpotQA loader + `bridge_recall@k`) and the lever (E1–E4, default-off) were
+> built TDD. HotpotQA *distractor* saturates recall (`bridge_recall@10=1.0`, ~10-para
+> haystacks), so we built a tractable **fullwiki regime** — `load_hotpotqa_pooled`
+> pools N questions into one ~5k-paragraph corpus (recall genuinely unsaturated,
+> `@10=0.876`). On that pool the entity-bridge ADD lever is **flat-to-slightly-
+> negative** (`@3 −0.002, @5 0.000, @10 −0.012`) — and crucially, swapping the
+> capitalized-span regex for **real spaCy PERSON/ORG/GPE NER** (YourMemory's exact
+> signal) gave the **identical** result. **NER precision was not the gap.** Root
+> cause: simba's bge-large hybrid base retriever is strong enough that the gold is
+> already in the candidate pool → multi-hop is a **ranking** problem (the reranker's
+> job), not a **recall** problem; entity-bridge ADD only helps a *weak* retriever
+> that misses gold (YourMemory's regime). All six retrieval-time multi-hop levers
+> (C1, C4, Track B, Track A, entity-bridge, + the reranker) now converge: **the
+> reranker is the only win.** Only untested stone: *true* 5M-paragraph fullwiki
+> (infeasible to embed locally) — reopen only there. Harness + lever + spaCy
+> extractor kept default-off as reusable instruments.
+
+
 A measured experiment, not a commitment. simba's multi-hop verdict is "dead at
 retrieval" — but that verdict was earned by **co-occurrence (C1)** and **PPR over a
 dense graph (Track B)**, both **on LoCoMo**, both negative. The borrow survey
