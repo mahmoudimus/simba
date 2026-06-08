@@ -102,3 +102,51 @@ bet. Candidate future phase.
    separate from the retrieval fight.
 4. Cheap levers (chain-aware pruning, subject-aware dedup, centrality term) — fold
    in opportunistically; each is a small measured delta.
+
+---
+
+## Addendum (2026-06-07): paper-backed "self-maintaining memory" cluster
+
+Surveyed 4 more (paper releases) + investigated one benchmark. These cluster on
+**memory that evolves/maintains itself** — the thread behind simba's
+shipped-but-unvalidated Phase 6/7.
+
+| Repo | What | Eval (their metric) | ★ Borrow |
+|---|---|---|---|
+| **A-MEM** (`A-mem-sys`) | Zettelkasten atomic notes; LLM **evolves neighbors on write** | LoCoMo (in separate repo) | **neighbor metadata back-propagation** |
+| **MemRL** | tabular **Q-learning over memory metadata** (no weight updates) | agentic (HLE/BCB/ALFWorld) — not recall@k | Q-EMA+visits, two-phase utility rerank, **null-action abstain** |
+| **ViLoMem** | multimodal grow-and-refine | multimodal VQA acc — not recall@k | LLM **similarity-merge** (but it's dead code there) |
+| **ReMe** | file+vector memory, **experience/procedural** type, auto-compaction | LoCoMo QA **86.23**, HaluMem-Med 94.06 (LLM-judged, not recall@k); **cloud-only** | **procedural memory schema**, dedup-on-write+validation gate, **HaluMem adapter** |
+
+### The concrete borrows
+- **A-MEM — neighbor metadata back-propagation** (`memory_system.py` `process_memory`):
+  on write, an LLM regenerates *existing neighbors'* `context`/`tags` (never their
+  content → append-only-safe). A "grow-and-refine" pass that enriches simba's FTS5/
+  embedding *inputs* without replacing content. Optional write-time hook, gated like
+  Phase-6. Cost: +2 LLM calls/write (the trap we've flagged).
+- **MemRL — utility over similarity, no RL infra needed.** It's *tabular* Q-learning
+  on memory metadata (`q_value`, `reward_ma` EMA, visit counts; `service/value_driven.py`),
+  fully compatible with simba's local-first/no-train constraint. Portable: (a) Q-EMA+
+  visit-count as a more principled Phase-6 feedback signal; (b) **two-phase retrieval**
+  (similarity prefilter → utility rerank) as a pre-reranker sort; (c) **null-action /
+  τ-floor abstain** (refuse to recall when top-sim is low) → adapt simba's 0.35 floor
+  into an abstain path. Friction: simba lacks env task-success reward; signal must come
+  from recall outcomes (weaker).
+- **ReMe — procedural/"experience" memory** (`when_to_use` condition + content +
+  LLM-validation score; `procedural_summarizer.py`): a capability gap simba has. Borrow
+  the schema + trajectory→success/failure split; reimplement as a plain prompt (NOT
+  AgentScope ReAct — ReMe is cloud-only and violates simba's local rule). Also its
+  **dedup-on-write + validation gate** is a cleaner version of simba's 0.92 dup-detect.
+- **ViLoMem — LLM similarity-merge**: when a near-dup is *complementary* (not a
+  contradiction), fuse two guidelines into one via a small LLM call instead of
+  replace-only supersession. Route at store time when `dup_sim ∈ [floor, supersede)`.
+  Unvalidated even upstream (dead code) — pilot cautiously.
+
+### ★★★ The benchmark find — HaluMem (→ `10-halumem-forgetting-eval.md`)
+ReMe led us to **HaluMem** (arXiv 2511.03506, MemTensor): the **operation-level
+memory-hallucination** benchmark whose metrics (Target Precision, False-Memory-
+Resistance, Hallucination-Rate, an Updating subtask where *keeping a stale fact is a
+failure*) **reward forgetting and contradiction-resolution** — the inverse of
+recall@k. This is the eval simba was missing to validate Phase-6 (dormant tier) and
+Phase-7 (contradiction-resolution). Local-runnable (judge swappable → our mlx local
+judge; subsample the >1M-token corpus). **Spec'd as `docs/plans/10`.**
