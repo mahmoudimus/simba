@@ -71,6 +71,51 @@ class TestMlxServer:
         cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
         assert llm.LlmClient(cfg).complete("hi") == ""
 
+    def test_complete_http_strips_reasoning(self, monkeypatch) -> None:
+        # A reasoning answerer (gpt-oss harmony) must surface only the final
+        # answer; the analysis channel is reasoning, not the prediction.
+        import httpx
+
+        raw = (
+            "<|channel|>analysis<|message|>think about the capital<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>Paris<|return|>"
+        )
+        monkeypatch.setattr(
+            httpx,
+            "post",
+            lambda url, json, timeout: types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": raw}}]},
+            ),
+        )
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
+
+class TestStripReasoning:
+    def test_passthrough_plain(self) -> None:
+        assert llm._strip_reasoning("Paris") == "Paris"
+
+    def test_strips_qwen_think_block(self) -> None:
+        assert llm._strip_reasoning("<think>the capital is...</think>Paris") == "Paris"
+
+    def test_harmony_keeps_final_channel(self) -> None:
+        raw = (
+            "<|channel|>analysis<|message|>reasoning<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>Paris<|return|>"
+        )
+        assert llm._strip_reasoning(raw) == "Paris"
+
+    def test_harmony_without_final_is_empty(self) -> None:
+        # Truncated before the final channel -> reasoning only, not an answer.
+        assert llm._strip_reasoning("<|channel|>analysis<|message|>thinking") == ""
+
+    def test_truncated_think_is_empty(self) -> None:
+        assert llm._strip_reasoning("<think>still reasoning, no answer") == ""
+
+    def test_strips_stray_special_tokens(self) -> None:
+        assert llm._strip_reasoning("Paris<|return|>") == "Paris"
+
 
 class TestCompleteClaudeCli:
     def test_parses_result_field(self, monkeypatch) -> None:

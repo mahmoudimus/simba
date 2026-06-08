@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import typing
@@ -59,6 +60,41 @@ def _extract_json(text: str) -> typing.Any | None:
                         return json.loads(text[start : i + 1])
                     break
     return None
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_HARMONY_FINAL_RE = re.compile(
+    r"<\|channel\|>\s*final\s*<\|message\|>(.*?)(?:<\|return\|>|<\|end\|>|<\|start\|>|\Z)",
+    re.DOTALL,
+)
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[^|]*?\|>")
+
+
+def _strip_reasoning(text: str) -> str:
+    """Return just the final answer from a reasoning model's output.
+
+    Handles two formats so a thinking answerer can stand in cleanly:
+    - gpt-oss **harmony** channels — the answer is ONLY the ``final`` channel's
+      message; ``analysis`` channels are reasoning and are dropped (no final
+      channel ⇒ truncated reasoning ⇒ "").
+    - Qwen-style ``<think>…</think>`` blocks — dropped; an unterminated ``<think>``
+      means reasoning ran out of room before an answer ⇒ "".
+
+    A no-op for plain instruct output, so it is safe to apply to every
+    ``mlx-server`` completion (answerer or judge).
+    """
+    if not text:
+        return ""
+    if "<|channel|>" in text or "<|message|>" in text:
+        finals = _HARMONY_FINAL_RE.findall(text)
+        text = finals[-1] if finals else ""
+    text = _THINK_BLOCK_RE.sub("", text)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[-1]
+    elif "<think>" in text:
+        return ""
+    text = _SPECIAL_TOKEN_RE.sub("", text)
+    return text.strip()
 
 
 def _strip_mlx(text: str) -> str:
@@ -170,7 +206,9 @@ class LlmClient:
             content = resp.json()["choices"][0]["message"]["content"]
         except Exception:
             return ""
-        return content.strip() if isinstance(content, str) else ""
+        # Strip reasoning scaffolding (gpt-oss harmony / <think>) so a thinking
+        # answerer surfaces only its final answer; no-op for instruct models.
+        return _strip_reasoning(content) if isinstance(content, str) else ""
 
     def complete(self, prompt: str) -> str:
         """Run the prompt and return the model's text, or "" on any failure."""
