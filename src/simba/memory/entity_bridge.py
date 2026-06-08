@@ -74,6 +74,7 @@ def bridged_ids(
     *,
     hops: int = 1,
     min_shared: int = 1,
+    max_df: int = 0,
     max_out: int | None = None,
 ) -> list[str]:
     """Memories sharing ≥``min_shared`` of the *seed* entities, ranked by overlap.
@@ -81,13 +82,20 @@ def bridged_ids(
     BFS reaches candidates within ``hops`` of a seed, but each candidate is scored
     by how many of the original seed entities it shares (a precision signal, not
     arbitrary traversal order), so distractors that merely touch the graph are
-    filtered by ``min_shared`` and genuine co-references rank first. Seeds are
-    excluded. Deterministic: by shared-count desc, then id. ``[]`` on empty/unknown.
+    filtered by ``min_shared`` and genuine co-references rank first. ``max_df`` > 0
+    drops low-specificity entities (those appearing in more than ``max_df``
+    memories — e.g. regex-NER noise like sentence-initial "It"/"American") so the
+    bridge keys on *rare, discriminative* entities. Seeds are excluded.
+    Deterministic: by shared-count desc, then id. ``[]`` on empty/unknown.
     """
     seed_set = set(seeds)
     seed_ents: set[str] = set()
     for s in seed_set:
         seed_ents |= index.memory_to_entities.get(s, set())
+    if max_df > 0:
+        seed_ents = {
+            e for e in seed_ents if len(index.entity_to_memories.get(e, ())) <= max_df
+        }
     if not seed_ents:
         return []
 

@@ -233,6 +233,7 @@ async def hybrid_search(
                 seeds,
                 hops=getattr(cfg, "entity_bridge_hops", 1),
                 min_shared=getattr(cfg, "entity_bridge_min_shared", 1),
+                max_df=getattr(cfg, "entity_bridge_max_df", 0),
                 max_out=getattr(cfg, "entity_bridge_max", 10),
             )
             if bridged:

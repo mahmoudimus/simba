@@ -66,6 +66,23 @@ def test_pure_transitive_neighbor_excluded():
     assert "m3" not in bridged  # only transitively linked → filtered out
 
 
+def test_max_df_drops_low_specificity_entities():
+    # "Common" appears in every memory (noise); "Rare" links only m1+m2.
+    # (Isolated caps so the regex doesn't merge adjacent capitalized words.)
+    idx = eb.build_index(
+        [
+            ("m1", "Common stuff. Rare item."),
+            ("m2", "Common stuff. Rare item."),
+            ("m3", "Common stuff. Other item."),
+            ("m4", "Common stuff. Thing here."),
+        ]
+    )
+    # No df filter: m1's seed entities include "Common" → bridges everything.
+    assert set(eb.bridged_ids(idx, ["m1"], min_shared=1)) == {"m2", "m3", "m4"}
+    # max_df=2 drops "Common" (in 4 memories) → only the rare bridge survives.
+    assert set(eb.bridged_ids(idx, ["m1"], min_shared=1, max_df=2)) == {"m2"}
+
+
 def test_empty_index_and_unknown_seed_fail_open():
     assert eb.bridged_ids(eb.build_index([]), ["x"]) == []
     idx = eb.build_index([("m1", "Jane Doe")])

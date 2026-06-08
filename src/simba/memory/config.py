@@ -155,6 +155,7 @@ class MemoryConfig:
     entity_bridge_max: int = 10  # cap on bridged ids folded in
     entity_bridge_weight: float = 1.0  # RRF-arm weight of the bridge contribution
     entity_bridge_min_shared: int = 1  # min seed-entities a bridge must share
+    entity_bridge_max_df: int = 0  # drop entities in > N memories (0 = off); precision
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
