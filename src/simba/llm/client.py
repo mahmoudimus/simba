@@ -24,7 +24,7 @@ logger = logging.getLogger("simba.llm")
 # not implement) must report unavailable rather than silently returning "" — that
 # footgun once skipped an entire eval run with no error.
 _KNOWN_PROVIDERS = frozenset(
-    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx"}
+    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx", "mlx-server"}
 )
 _warned_providers: set[str] = set()
 
@@ -80,6 +80,9 @@ class LlmClient:
 
     def available(self) -> bool:
         provider = self._cfg.provider
+        if provider == "mlx-server":
+            # Persistent OpenAI-compatible mlx_lm.server — needs a base_url.
+            return bool(self._cfg.base_url)
         if provider in _KNOWN_PROVIDERS:
             return True
         if provider not in ("", "none") and provider not in _warned_providers:
@@ -145,10 +148,36 @@ class LlmClient:
             ]
         return []
 
+    def _complete_http(self, prompt: str) -> str:
+        """OpenAI-compatible chat completion against a persistent mlx_lm.server.
+
+        The model is loaded once by the server, so each call is just inference —
+        this is what makes local LLM-judged eval affordable (no per-call reload).
+        Fail-open: any error (server down, bad response) returns "".
+        """
+        import httpx
+
+        url = self._cfg.base_url.rstrip("/") + "/v1/chat/completions"
+        payload = {
+            "model": self._cfg.model or self._local_model(),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self._cfg.max_tokens,
+            "temperature": 0.0,
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=self._cfg.timeout_seconds)
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+        except Exception:
+            return ""
+        return content.strip() if isinstance(content, str) else ""
+
     def complete(self, prompt: str) -> str:
         """Run the prompt and return the model's text, or "" on any failure."""
         if not self.available():
             return ""
+        if self._cfg.provider == "mlx-server":
+            return self._complete_http(prompt)
         argv = self._argv(prompt)
         if not argv:
             return ""

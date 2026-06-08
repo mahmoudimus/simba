@@ -36,6 +36,41 @@ class TestAvailable:
         # eval run with no error. See docs/plans/10.
         assert llm.LlmClient(_cfg(provider="mlx-vlm")).available() is False
 
+    def test_mlx_server_available_needs_base_url(self) -> None:
+        assert llm.LlmClient(_cfg(provider="mlx-server")).available() is False
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).available() is True
+
+
+class TestMlxServer:
+    def test_complete_via_http(self, monkeypatch) -> None:
+        import httpx
+
+        cfg = _cfg(
+            provider="mlx-server", base_url="http://127.0.0.1:8082", model="m"
+        )
+
+        def _post(url, json, timeout):
+            assert url.endswith("/v1/chat/completions")
+            assert json["messages"][0]["content"] == "hi"
+            return types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": " Paris "}}]},
+            )
+
+        monkeypatch.setattr(httpx, "post", _post)
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
+    def test_complete_failopen_on_error(self, monkeypatch) -> None:
+        import httpx
+
+        def _boom(*a, **k):
+            raise ConnectionError("server down")
+
+        monkeypatch.setattr(httpx, "post", _boom)
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).complete("hi") == ""
+
 
 class TestCompleteClaudeCli:
     def test_parses_result_field(self, monkeypatch) -> None:
