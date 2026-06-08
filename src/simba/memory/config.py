@@ -157,6 +157,17 @@ class MemoryConfig:
     entity_bridge_min_shared: int = 1  # min seed-entities a bridge must share
     entity_bridge_max_df: int = 0  # drop entities in > N memories (0 = off); precision
     entity_bridge_ner: str = "regex"  # entity extractor: "regex" | "spacy" (real NER)
+    # Retrieval-time GraphRAG (Track B): after RRF, fold PPR-ranked KG neighbors
+    # (seeded by the query's entities) into the candidate set as a third arm,
+    # before composite rescore + the reranker. Default-OFF — the measured ceiling
+    # is marginal (LoCoMo multi-hop +0.013, LME multi-session +0.046 upper bounds;
+    # docs/plans/06-multihop.md), so it stays gated pending a proven delta. The KG
+    # itself is supplied by the caller (the eval throwaway KG; a kg_edges adjacency
+    # on the live path), so this is a no-op until one is wired in.
+    kg_ppr_enabled: bool = False
+    kg_ppr_top: int = 10  # how many PPR-ranked memories to fold
+    kg_ppr_weight: float = 1.0  # RRF-arm weight of the PPR contribution
+    kg_ppr_damping: float = 0.85
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

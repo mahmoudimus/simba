@@ -15,9 +15,11 @@ import time
 import typing
 
 import simba.db
+import simba.kg.ppr
 import simba.memory.entity_bridge
 import simba.memory.fts
 import simba.memory.keywords
+import simba.memory.kg_fold
 import simba.memory.llm_rerank
 import simba.memory.scoring
 import simba.memory.usage
@@ -167,6 +169,10 @@ async def hybrid_search(
     cwd: pathlib.Path | None = None,
     entity_bridge_index: typing.Any = None,
     entity_bridge_lookup: dict[str, dict[str, typing.Any]] | None = None,
+    kg_adjacency: dict[str, set[str]] | None = None,
+    kg_entity_memories: dict[str, set[str]] | None = None,
+    kg_record_lookup: dict[str, dict[str, typing.Any]] | None = None,
+    kg_seeds: list[str] | None = None,
 ) -> list[dict[str, typing.Any]]:
     """Run both arms and return the RRF-fused top ``max_results`` memories.
 
@@ -243,6 +249,29 @@ async def hybrid_search(
                     record_lookup=entity_bridge_lookup or {},
                     rrf_k=cfg.rrf_k,
                     weight=getattr(cfg, "entity_bridge_weight", 1.0),
+                )
+
+    # Optional retrieval-time GraphRAG fold (Track B): seed PPR with the query's
+    # KG entities, rank neighbor memories by stationary mass, and fold the top-N
+    # into the candidate set as a third RRF arm — so graph-surfaced evidence
+    # competes for the top-k before composite rescore + the reranker. No-op unless
+    # a KG is supplied (the caller owns the graph). Fail-open.
+    if getattr(cfg, "kg_ppr_enabled", False) and kg_adjacency and kg_seeds:
+        with contextlib.suppress(Exception):
+            ranked = simba.kg.ppr.rank_memories(
+                kg_adjacency,
+                kg_entity_memories or {},
+                kg_seeds,
+                top=getattr(cfg, "kg_ppr_top", 10),
+                damping=getattr(cfg, "kg_ppr_damping", 0.85),
+            )
+            if ranked:
+                fused = simba.memory.kg_fold.ppr_fold(
+                    fused,
+                    ppr_ranked_ids=ranked,
+                    record_lookup=kg_record_lookup or {},
+                    rrf_k=cfg.rrf_k,
+                    weight=getattr(cfg, "kg_ppr_weight", 1.0),
                 )
 
     # Optional composite re-scoring: blend RRF relevance with recency +

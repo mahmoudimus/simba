@@ -25,8 +25,13 @@ def run_recall(
     cfg: typing.Any,
     ks: tuple[int, ...] = (1, 3, 5, 10),
     llm_client: typing.Any = None,
+    kg_extract: typing.Any = None,
 ) -> dict[str, typing.Any]:
-    """Score recall@k per conversation, aggregate overall + by category (intent)."""
+    """Score recall@k per conversation, aggregate overall + by category (intent).
+
+    ``kg_extract`` (eval-only) is forwarded to ``build_retriever`` so the Track B
+    PPR fold can be measured when ``cfg.kg_ppr_enabled`` — a no-op otherwise.
+    """
     metric_names = (
         [f"recall@{k}" for k in ks]
         + [f"bridge_recall@{k}" for k in ks]
@@ -47,6 +52,7 @@ def run_recall(
                 embed_query=embed_query,
                 data_dir=td,
                 llm_client=llm_client,
+                kg_extract=kg_extract,
             )
             rep = simba.eval.runner.run_eval(dset, retriever, ks=ks)
         for case in rep.per_case:
