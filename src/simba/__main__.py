@@ -2157,6 +2157,8 @@ def _cmd_eval(args: list[str]) -> int:
 
     if args and args[0] == "bench":
         return _eval_bench(args[1:])
+    if args and args[0] == "halumem":
+        return _eval_halumem(args[1:])
     if args and args[0] == "leaderboard":
         return _eval_leaderboard(args[1:])
     if args and args[0] == "build":
@@ -2545,6 +2547,121 @@ def _eval_bench(args: list[str]) -> int:
             if "latency" in qa_report:
                 lat = qa_report["latency"]
                 print(f"  p50={lat['p50_ms']:.0f}ms p95={lat['p95_ms']:.0f}ms")
+    return 0
+
+
+def _eval_halumem(args: list[str]) -> int:
+    """simba eval halumem [--user-num N] [--k K] [--path PATH] [--json]
+
+    Memory-hallucination eval (docs/plans/10). Unlike recall@k, the metrics
+    (accuracy / hallucination_rate / boundary-abstention) reward NOT surfacing
+    wrong/stale memories — so Phase-6 dormancy / Phase-7 contradiction-resolution
+    can be ablated by toggling their config and re-running.
+    """
+    import dataclasses
+    import json as _json
+    import time
+
+    import simba.config
+    import simba.eval.bench_config  # registers the "bench" section
+    import simba.eval.bench_results as bench_results
+    import simba.eval.benchmarks.halumem as halumem
+    import simba.eval.benchmarks.halumem_qa as halumem_qa
+    import simba.eval.run as run
+    import simba.llm.client as llm_client
+    import simba.llm.judge_config as jcfg
+    import simba.memory.embedding_cache as ec
+
+    user_num = 0
+    k = 0
+    path_arg = ""
+    as_json = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--user-num" and i + 1 < len(args):
+            user_num, i = int(args[i + 1]), i + 2
+        elif args[i] == "--k" and i + 1 < len(args):
+            k, i = int(args[i + 1]), i + 2
+        elif args[i] == "--path" and i + 1 < len(args):
+            path_arg, i = args[i + 1], i + 2
+        elif args[i] == "--json":
+            as_json, i = True, i + 1
+        else:
+            print(f"eval halumem: unknown option {args[i]!r}", file=sys.stderr)
+            return 1
+
+    bcfg = simba.config.load("bench")
+    mcfg = simba.config.load("memory")
+    mcfg = dataclasses.replace(mcfg, **bcfg.eval_memory_config_overrides())
+
+    def _resolve(s: str) -> pathlib.Path:
+        p = pathlib.Path(s)
+        return p if p.is_absolute() else pathlib.Path.cwd() / p
+
+    dataset_path = path_arg or bcfg.halumem_path
+    if not dataset_path or not _resolve(dataset_path).exists():
+        print(
+            f"eval halumem: no dataset at {dataset_path!r} "
+            "(fetch via scripts/fetch_benchmarks.sh or set bench.halumem_path)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        embed_cache = ec.EmbeddingCache(_resolve(bcfg.embedding_cache_path))
+        embed_doc, embed_query = run.sync_embedders(mcfg, cache=embed_cache)
+    except Exception as exc:
+        print(f"eval halumem: could not load the embedder: {exc}", file=sys.stderr)
+        return 1
+
+    users = halumem.load_halumem(
+        _resolve(dataset_path), user_limit=user_num or bcfg.halumem_user_limit
+    )
+    answerer = llm_client.get_client()
+    judge_client = jcfg.get_judge_client()
+    report = halumem_qa.run_halumem_qa(
+        users,
+        embed_doc=embed_doc,
+        embed_query=embed_query,
+        cfg=mcfg,
+        llm=answerer,
+        judge=judge_client,
+        k=k or bcfg.default_k,
+    )
+
+    record = {
+        "timestamp": time.time(),
+        "git_sha": bench_results.current_git_sha(),
+        "dataset": "halumem",
+        "split": None,
+        "config": bench_results.config_snapshot(mcfg, bcfg),
+        "halumem": report,
+    }
+    bench_results.append_result(_resolve(bcfg.results_path), record)
+
+    if as_json:
+        print(_json.dumps(report, indent=2))
+    else:
+        o = report["overall"]
+        b = report["boundary"]
+        print(
+            f"\nhalumem QA ({len(users)} users, graded={report['n_graded']}, "
+            f"skipped={report['n_skipped']})"
+        )
+        print(
+            f"  OVERALL  accuracy={o['accuracy']:.3f} "
+            f"hallucination={o['hallucination_rate']:.3f} "
+            f"omission={o['omission_rate']:.3f}"
+        )
+        print(
+            f"  BOUNDARY n={b['n']:<4} abstention-accuracy={b['accuracy']:.3f} "
+            f"hallucination={b['hallucination_rate']:.3f}"
+        )
+        for qt, m in report["by_type"].items():
+            print(
+                f"  {qt:<22} n={m['n']:<4} acc={m['accuracy']:.3f} "
+                f"halluc={m['hallucination_rate']:.3f}"
+            )
     return 0
 
 

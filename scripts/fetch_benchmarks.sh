@@ -39,6 +39,9 @@ fetch "$LOCOMO_URL"     "$DEST/locomo10.json"
 fetch "$LME_ORACLE_URL" "$DEST/longmemeval_oracle.json"
 fetch "$LME_S_URL"      "$DEST/longmemeval_s.json"
 fetch "$HOTPOT_URL"     "$DEST/hotpot_dev_distractor_v1.json"
+# HaluMem (memory-hallucination eval; docs/plans/10). ~33MB, 20 users, >1M tok/user.
+HALUMEM_URL="${HALUMEM_URL:-https://huggingface.co/datasets/IAAR-Shanghai/HaluMem/resolve/main/HaluMem-Medium.jsonl}"
+fetch "$HALUMEM_URL"    "$DEST/HaluMem-Medium.jsonl"
 
 # Record checksums so reruns / CI can verify integrity.
 ( cd "$DEST" && shasum -a 256 ./*.json > SHA256SUMS )
