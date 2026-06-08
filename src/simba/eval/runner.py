@@ -75,6 +75,7 @@ def _case_metrics(
     out: dict[str, float] = {}
     for k in ks:
         out[f"recall@{k}"] = metrics.recall_at_k(ranked, relevant, k)
+        out[f"bridge_recall@{k}"] = metrics.bridge_recall_at_k(ranked, relevant, k)
         out[f"precision@{k}"] = metrics.precision_at_k(ranked, relevant, k)
         out[f"hit@{k}"] = metrics.hit_at_k(ranked, relevant, k)
         out[f"ndcg@{k}"] = metrics.ndcg_at_k(ranked, relevant, k)
@@ -112,6 +113,7 @@ def run_eval(
         )
 
     metric_names = [f"recall@{k}" for k in ks]
+    metric_names += [f"bridge_recall@{k}" for k in ks]
     metric_names += [f"precision@{k}" for k in ks]
     metric_names += [f"hit@{k}" for k in ks]
     metric_names += [f"ndcg@{k}" for k in ks]

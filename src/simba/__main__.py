@@ -2308,6 +2308,7 @@ def _eval_bench(args: list[str]) -> int:
     import simba.config
     import simba.eval.bench_config  # registers the "bench" section
     import simba.eval.bench_results as bench_results
+    import simba.eval.benchmarks.hotpotqa as hotpotqa
     import simba.eval.benchmarks.locomo as locomo
     import simba.eval.benchmarks.longmemeval as lme
     import simba.eval.benchmarks.run as bench_run
@@ -2315,7 +2316,7 @@ def _eval_bench(args: list[str]) -> int:
     import simba.memory.embedding_cache as ec
 
     usage = (
-        "Usage: simba eval bench locomo|longmemeval [--qa] "
+        "Usage: simba eval bench locomo|longmemeval|hotpotqa [--qa] "
         "[--n N | --per N | all] [--k K] [--split dev|test] "
         "[--path PATH] [--json] [--baseline] [--cache PATH] "
         "[--abstention] [--full]"
@@ -2326,10 +2327,10 @@ def _eval_bench(args: list[str]) -> int:
         return 1
 
     dataset_name = args[0]
-    if dataset_name not in ("locomo", "longmemeval"):
+    if dataset_name not in ("locomo", "longmemeval", "hotpotqa"):
         print(
             f"eval bench: unknown dataset {dataset_name!r}; "
-            "choose locomo or longmemeval",
+            "choose locomo, longmemeval, or hotpotqa",
             file=sys.stderr,
         )
         return 1
@@ -2394,6 +2395,8 @@ def _eval_bench(args: list[str]) -> int:
 
     if dataset_name == "locomo":
         dataset_path = path_arg or bcfg.locomo_path
+    elif dataset_name == "hotpotqa":
+        dataset_path = path_arg or bcfg.hotpotqa_path
     else:
         dataset_path = path_arg or bcfg.longmemeval_path
     if not dataset_path:
@@ -2417,6 +2420,8 @@ def _eval_bench(args: list[str]) -> int:
 
     if dataset_name == "locomo":
         datasets = locomo.load_locomo(dataset_path)
+    elif dataset_name == "hotpotqa":
+        datasets = hotpotqa.load_hotpotqa(dataset_path)
     else:
         datasets = lme.load_longmemeval(
             dataset_path, include_abstention=abstention_flag

@@ -18,6 +18,10 @@ LOCOMO_URL="${LOCOMO_URL:-https://raw.githubusercontent.com/snap-research/locomo
 # (upper bound); _s = full haystack with distractor sessions (the real test).
 LME_ORACLE_URL="${LME_ORACLE_URL:-https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_oracle.json}"
 LME_S_URL="${LME_S_URL:-https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s.json}"
+# HotpotQA — dev distractor (genuine bridge-entity multi-hop). The original CMU
+# host (curtis.ml.cmu.edu) is offline since 2025-05, so default to a Wayback
+# snapshot of the canonical JSON (override via HOTPOT_URL).
+HOTPOT_URL="${HOTPOT_URL:-https://web.archive.org/web/2022id_/http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json}"
 
 fetch() {
   local url="$1" out="$2"
@@ -34,6 +38,7 @@ fetch() {
 fetch "$LOCOMO_URL"     "$DEST/locomo10.json"
 fetch "$LME_ORACLE_URL" "$DEST/longmemeval_oracle.json"
 fetch "$LME_S_URL"      "$DEST/longmemeval_s.json"
+fetch "$HOTPOT_URL"     "$DEST/hotpot_dev_distractor_v1.json"
 
 # Record checksums so reruns / CI can verify integrity.
 ( cd "$DEST" && shasum -a 256 ./*.json > SHA256SUMS )

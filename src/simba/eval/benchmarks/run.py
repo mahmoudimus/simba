@@ -27,7 +27,12 @@ def run_recall(
     llm_client: typing.Any = None,
 ) -> dict[str, typing.Any]:
     """Score recall@k per conversation, aggregate overall + by category (intent)."""
-    metric_names = [f"recall@{k}" for k in ks] + [f"ndcg@{k}" for k in ks] + ["mrr"]
+    metric_names = (
+        [f"recall@{k}" for k in ks]
+        + [f"bridge_recall@{k}" for k in ks]
+        + [f"ndcg@{k}" for k in ks]
+        + ["mrr"]
+    )
     by_cat: dict[str, list[dict[str, float]]] = {}
     overall: list[dict[str, float]] = []
     all_latencies: list[float] = []
