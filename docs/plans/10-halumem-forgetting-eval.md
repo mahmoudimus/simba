@@ -132,3 +132,66 @@ Phase-6/7 ablation; OR (b) one bounded overnight/cloud run for a first baseline.
 Also still TODO for the *ablation*: confirm `recall_adapter.build_retriever` applies
 store-time supersession + the decay/dormant pass (else dormancy/supersession won't
 actually be exercised by the eval ingest).
+
+---
+
+## First baseline (corrected) — 2026-06-07
+
+**Serving blocker resolved.** The persistent `mlx-server` provider (commit
+`b814f5b`) loads the model once and serves many completions — the Pillar-1 unlock.
+Working config: `llm/judge.provider=mlx-server`,
+`base_url=http://127.0.0.1:8082`, `model=mlx-community/Qwen3-4B-Instruct-2507-4bit`
+(non-reasoning, ~0.3 s/call warm). 881 questions graded with **0 skipped**.
+
+**A retrieval bug masked the first numbers.** The first 5-user run looked degenerate
+— `accuracy 0.288 / omission 0.680 / Basic-Fact-Recall 0.037 / Boundary abstention
+1.000` (the classic "answerer gets no context → abstains on everything"). Root cause
+was **not** the recall stack but the eval ingest: HaluMem numbers `memory_points`
+**per session** (index resets to 1 each session), so `_user_corpus` built ids as
+`{uuid}_mp_{index}` — for one user with **718 points across 65 sessions** there were
+only **74 unique indices**, colliding ~65× each. The gold point was masked in
+`id2content`, and `_search` returns only the `id` (discarding the matched row's
+content), so even a correct vector rank resolved to the wrong text. Fix (commit
+`208b848`): fold the session index into the id → `{uuid}_s{si}_mp_{index}`.
+Single-question instrumentation after the fix: the gold birth-date fact ranks **#0**
+and is judged **correct** (was omission).
+
+**Corrected baseline** (5 users, 881 Q, git_sha `208b848`,
+answerer==judge Qwen3-4B — *self-grading caveat*):
+
+| Category | n | accuracy | hallucination | omission |
+|---|---|---|---|---|
+| **OVERALL** | 881 | **0.662** | 0.085 | 0.253 |
+| Memory Boundary (abstention) | 193 | 0.979 | 0.021 | — |
+| Multi-hop Inference | 65 | 0.692 | 0.062 | |
+| Memory Conflict | 182 | 0.648 | 0.049 | |
+| Basic Fact Recall | 190 | 0.547 | 0.116 | |
+| Generalization & Application | 201 | 0.547 | 0.104 | |
+| **Dynamic Update** | 50 | **0.340** | **0.300** | 0.360 |
+
+**The target this eval was built to find: Dynamic Update.** It is by far the worst
+category — accuracy 0.340 and hallucination **0.300** (3–6× every other category).
+Dynamic-Update questions ask for the *current* value of a fact that was explicitly
+updated over time (e.g. `monthly_income 18000 → 22000`); a 0.300 hallucination rate
+means simba surfaces the **stale** value and the answerer reports it. This is exactly
+the failure mode **Phase-7 contradiction-resolution / supersession** is designed to
+fix, and now there is a concrete number to move. (Memory Conflict at 0.049 halluc is
+already healthy — intra-snapshot contradictions are handled; it's *temporal*
+supersession that leaks.)
+
+### The ablation is not yet wired (Phase-6/7 currently a no-op in eval)
+
+Confirmed by reading the recall path: `recall_adapter._search` calls `hybrid_search`
+**without `cwd`**, so `_filter_dormant` (Phase-6) never runs; and the corpus is
+ingested flat via `recall_adapter.build_retriever` — no `memory_usage` rows, no
+`run_decay_pass`, and no store-time supersession (Phase-7), even though HaluMem ships
+the ground-truth `is_update` / `original_memories` signal. So toggling
+`dormant_filter_enabled` / decay today changes nothing in this harness.
+
+**Next experiment — oracle supersession ceiling first.** Before measuring simba's own
+detection, mark the ground-truth-superseded points (`original_memories` of every
+`is_update=True` point) as non-retrievable and re-run, measuring the **Dynamic
+Update hallucination drop**. That establishes the *ceiling* of forgetting:
+- if the ceiling is flat → forgetting can't help here, stop;
+- if it moves → wire simba's real Phase-7 supersession at ingest and measure how much
+  of the ceiling it captures (detection accuracy becomes the lever).
