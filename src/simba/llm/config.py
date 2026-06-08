@@ -11,10 +11,14 @@ import simba.config
 @simba.config.configurable("llm")
 @dataclasses.dataclass
 class LlmConfig:
-    # Backend CLI. "none" disables all LLM features (they degrade gracefully).
-    # Cloud: claude-cli, llm-cli. 100%-local: llama-cli (llama.cpp), mlx-lm (MLX,
-    # Apple Silicon). For local, set ``model_path`` to the model/GGUF.
-    provider: str = "claude-cli"  # claude-cli | llm-cli | llama-cli | mlx-lm | none
+    # Backend. "none" disables all LLM features (they degrade gracefully).
+    # Cloud CLIs: claude-cli, llm-cli. 100%-local CLIs: llama-cli (llama.cpp),
+    # mlx-lm (MLX, Apple Silicon) — set ``model_path``. HTTP (OpenAI-compatible,
+    # set ``base_url``): mlx-server (local mlx_lm.server, auto-spawned) and
+    # openai-http (remote Ollama/llama.cpp/vLLM, e.g. a CUDA box you run yourself;
+    # see docs/eval-remote-gpu.md).
+    # claude-cli | llm-cli | llama-cli | mlx-lm | mlx-server | openai-http | none
+    provider: str = "claude-cli"
     # Model name as the chosen CLI expects it (claude aliases: haiku/sonnet/opus;
     # llm: whatever `llm models` lists, e.g. a deepseek alias).
     model: str = "haiku"

@@ -41,6 +41,31 @@ class TestAvailable:
         cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
         assert llm.LlmClient(cfg).available() is True
 
+    def test_openai_http_available_needs_base_url(self) -> None:
+        # Generic OpenAI-compatible endpoint (e.g. a remote Ollama / llama.cpp /
+        # vLLM box) — same HTTP path as mlx-server, but never spawns anything.
+        assert llm.LlmClient(_cfg(provider="openai-http")).available() is False
+        cfg = _cfg(provider="openai-http", base_url="http://192.168.1.50:11434/v1")
+        assert llm.LlmClient(cfg).available() is True
+
+    def test_openai_http_completes_via_http(self, monkeypatch) -> None:
+        import httpx
+
+        cfg = _cfg(
+            provider="openai-http",
+            base_url="http://192.168.1.50:11434/v1",
+            model="gpt-oss:20b",
+        )
+        monkeypatch.setattr(
+            httpx,
+            "post",
+            lambda url, json, timeout: types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": " Paris "}}]},
+            ),
+        )
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
 
 class TestMlxServer:
     def test_complete_via_http(self, monkeypatch) -> None:

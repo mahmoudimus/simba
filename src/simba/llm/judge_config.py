@@ -22,9 +22,10 @@ import simba.llm.client
 @simba.config.configurable("judge")
 @dataclasses.dataclass
 class JudgeConfig:
-    # Backend CLI for the grader; default differs from ``llm.provider`` so the
-    # answerer and judge are not the same model.
-    provider: str = "llm-cli"  # claude-cli | llm-cli | llama-cli | mlx-lm | none
+    # Backend for the grader; default differs from ``llm.provider`` so the answerer
+    # and judge are not the same model. Same options as LlmConfig.provider, incl.
+    # mlx-server / openai-http (HTTP, set ``base_url``); see docs/eval-remote-gpu.md.
+    provider: str = "llm-cli"  # …| mlx-lm | mlx-server | openai-http | none
     # Model name as the judge CLI expects it (a local reasoning model by default).
     model: str = "deepseek-r1"
     # Local model/GGUF path (or HF repo); falls back to ``model`` when empty.

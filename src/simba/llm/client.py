@@ -24,8 +24,13 @@ logger = logging.getLogger("simba.llm")
 # An unknown provider (e.g. the *vision* runtime "mlx-vlm", which this client does
 # not implement) must report unavailable rather than silently returning "" — that
 # footgun once skipped an entire eval run with no error.
+# Providers that talk to an OpenAI-compatible HTTP endpoint (``_complete_http``).
+# ``mlx-server`` may be auto-spawned locally (``mlx_server.ensure_for_config``);
+# ``openai-http`` is a generic remote endpoint (Ollama / llama.cpp / vLLM on, say,
+# a CUDA box) that this client never tries to start — you run it yourself.
+_HTTP_PROVIDERS = frozenset({"mlx-server", "openai-http"})
 _KNOWN_PROVIDERS = frozenset(
-    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx", "mlx-server"}
+    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx", *_HTTP_PROVIDERS}
 )
 _warned_providers: set[str] = set()
 
@@ -116,8 +121,9 @@ class LlmClient:
 
     def available(self) -> bool:
         provider = self._cfg.provider
-        if provider == "mlx-server":
-            # Persistent OpenAI-compatible mlx_lm.server — needs a base_url.
+        if provider in _HTTP_PROVIDERS:
+            # OpenAI-compatible HTTP endpoint (mlx_lm.server / remote Ollama / …) —
+            # needs a base_url to reach it.
             return bool(self._cfg.base_url)
         if provider in _KNOWN_PROVIDERS:
             return True
@@ -214,7 +220,7 @@ class LlmClient:
         """Run the prompt and return the model's text, or "" on any failure."""
         if not self.available():
             return ""
-        if self._cfg.provider == "mlx-server":
+        if self._cfg.provider in _HTTP_PROVIDERS:
             return self._complete_http(prompt)
         argv = self._argv(prompt)
         if not argv:
