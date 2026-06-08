@@ -53,6 +53,56 @@ def test_program_rules_still_work_alongside_pattern_rules() -> None:
     assert d.action == "rewrite" and d.command == "soldr cargo build"
 
 
+class TestPerRuleModeOverride:
+    def test_rule_mode_rewrite_overrides_global_deny(self) -> None:
+        # A rule can carry its own mode, so a safe auto-fix applies even when the
+        # project's global redirect_mode is "deny".
+        rule = r.RedirectRule(
+            pattern=r"\bfoo\b", rewrite="bar", mode="rewrite", reason="x"
+        )
+        d = r.evaluate("foo baz", [rule], mode="deny")
+        assert d is not None and d.action == "rewrite" and d.command == "bar baz"
+
+    def test_empty_rule_mode_uses_global(self) -> None:
+        rule = r.RedirectRule(pattern=r"\bfoo\b", rewrite="bar", reason="x")
+        assert r.evaluate("foo baz", [rule], mode="deny").action == "deny"
+
+
+class TestBuiltinRgReplaceTrap:
+    """The universal grep->rg `-r` trap, shipped as a built-in (no config)."""
+
+    def test_fires_unconfigured_and_auto_rewrites(self) -> None:
+        # Default mode is "deny", but the built-in carries mode="rewrite", so the
+        # safe fix applies with zero project config.
+        d = r.evaluate("rg -rn 'x' src", r.BUILTIN_RULES, mode="deny")
+        assert d is not None and d.action == "rewrite"
+        assert d.command == "rg -n 'x' src"
+
+    def test_covers_bundle_variants(self) -> None:
+        cases = {
+            "rg -rln 'x' src": "rg -ln 'x' src",
+            "rg -rl 'x' src": "rg -l 'x' src",
+            "rg -nr 'x' src": "rg -n 'x' src",
+            "rg -rc 'x' src": "rg -c 'x' src",
+            "rg -ri 'x' src | head": "rg -i 'x' src | head",
+        }
+        for cmd, fixed in cases.items():
+            d = r.evaluate(cmd, r.BUILTIN_RULES, mode="deny")
+            assert d is not None and d.command == fixed, cmd
+
+    def test_no_false_positive_on_real_replace_or_single_flags(self) -> None:
+        for cmd in (
+            "rg -rnew 'old' src",  # intentional --replace, attached word
+            "rg -r new 'old' src",  # intentional --replace, separate arg
+            "rg --replace n 'old' src",
+            "rg -l 'x' src",
+            "rg -n 'x' src",
+            "rg --type py 'x' src",
+            "grep -rn 'x' src",  # not rg
+        ):
+            assert r.evaluate(cmd, r.BUILTIN_RULES, mode="rewrite") is None, cmd
+
+
 def test_toml_loads_pattern_rule(tmp_path) -> None:
     toml = tmp_path / "redirects.toml"
     toml.parent.mkdir(parents=True, exist_ok=True)
