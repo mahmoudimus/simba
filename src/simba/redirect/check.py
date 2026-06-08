@@ -31,9 +31,13 @@ def check_command(command: str, cwd: str | None) -> Decision | None:
 
         cwd_path = pathlib.Path(cwd) if cwd else pathlib.Path.cwd()
         project_id = simba.db.resolve_project_id(cwd_path)
-        ruleset = store.load_rules(cwd_path, project_path=project_id)
-        if not ruleset:
-            return None
+        # Project rules first (they win on first-match), then the built-in
+        # defaults — so every project gets the universal fixes (e.g. the rg `-r`
+        # trap) with no config, while still being able to override them.
+        ruleset = [
+            *store.load_rules(cwd_path, project_path=project_id),
+            *rules.BUILTIN_RULES,
+        ]
         return rules.evaluate(
             command, ruleset, mode=getattr(cfg, "redirect_mode", "deny")
         )

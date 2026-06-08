@@ -20,6 +20,10 @@ class RedirectRule:
     # rewrite="rg -l". Checked before program rules; invalid regex is skipped.
     pattern: str = ""
     rewrite: str = ""
+    # Per-rule mode override ("deny" | "rewrite"); empty ⇒ use the global mode. A
+    # safe, unambiguous auto-fix can set "rewrite" so it applies even when the
+    # project default is "deny".
+    mode: str = ""
 
 
 @dataclasses.dataclass
@@ -83,7 +87,8 @@ def _evaluate_pattern_rules(
         except re.error:
             continue  # malformed rule -> skip, never raise
         suggestion = _pattern_suggestion(rule, command)
-        if mode == "rewrite" and suggestion:
+        effective_mode = rule.mode or mode
+        if effective_mode == "rewrite" and suggestion:
             return Decision(action="rewrite", command=suggestion, reason=rule.reason)
         base = (
             f"Use `{suggestion}` instead."
@@ -132,3 +137,30 @@ def evaluate(
             )
             return Decision(action="rewrite", command=rewritten)
     return deny
+
+
+# Built-in rules every project gets with no config (appended after project rules,
+# so a project's own rule still wins on first-match). Disable all redirects via
+# hooks.redirect_enabled=false.
+#
+# The universal grep->rg `-r` trap: in ripgrep `-r` is --replace (it eats the next
+# token) and recursion + line numbers are default, so a grep-style short-flag
+# bundle that packs `-r` with other flags (`-rn`, `-rl`, `-rln`, `-nr`, `-rc`, …)
+# silently becomes --replace and corrupts the output. Match a single-dash clump
+# (≥2 chars) of common grep flags {r,l,n,i,c,w,o,h,v} that contains an r, and drop
+# the r. The charset is the false-positive guard: a real --replace uses an
+# arbitrary word (`rg -rnew old`) or a separate arg (`rg -r new`) — neither is all
+# grep-flag letters — so both are left untouched. mode="rewrite" so the safe fix
+# auto-applies even under the default "deny".
+BUILTIN_RULES: list[RedirectRule] = [
+    RedirectRule(
+        pattern=r"(\brg\b[^|&;]*?\s)-(?=[rlnicwohv]{2,}\b)([rlnicwohv]*)r([rlnicwohv]*)\b",
+        rewrite=r"\1-\2\3",
+        mode="rewrite",
+        reason=(
+            "rg -r is --replace (consumes the next token); recursion + line "
+            "numbers are default. Dropped the bundled -r."
+        ),
+        source="builtin",
+    ),
+]

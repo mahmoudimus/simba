@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Built-in redirect rule for the grep→rg `-r` trap** — every project now gets it
+  with no config. In ripgrep `-r` is `--replace` (it eats the next token), so a
+  grep-style bundle like `rg -rn` / `-rl` / `-rln` / `-nr` silently became
+  `--replace` and corrupted output. One general pattern (a single-dash clump of
+  common grep flags `{r,l,n,i,c,w,o,h,v}` containing an `r`) drops the `r`
+  (`rg -rn` → `rg -n`) and auto-rewrites — a real `--replace` (`rg -r new`,
+  `rg -rnew old`, `rg --replace`) is left untouched. Disable via
+  `hooks.redirect_enabled=false`.
+- **Per-rule redirect `mode`** (`RedirectRule.mode`, "deny"|"rewrite"; empty ⇒
+  global) so a safe, unambiguous fix can auto-apply even when the project default
+  is `deny` (the built-in rg rule uses it).
+
 ## [0.6.0] — 2026-06-08
 
 ### Added
