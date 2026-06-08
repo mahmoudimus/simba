@@ -38,11 +38,14 @@ def build_halumem_judge_prompt(
             f"Question: {question}\nPredicted: {predicted}\nJSON:"
         )
     return (
-        "Classify the predicted answer against the gold answer. Reply JSON only "
-        'with exactly one of: {"outcome": "correct"} (same meaning as gold), '
-        '{"outcome": "omission"} (declines / says unknown although the gold answer '
-        'exists), or {"outcome": "hallucination"} (gives a different or fabricated '
-        "specific answer).\n\n"
+        "Grade the predicted answer against the gold answer. For a yes/no "
+        "question, a bare Yes/No that matches the gold's polarity is CORRECT even "
+        "without the elaboration. Reply JSON only with exactly one of: "
+        '{"outcome": "correct"} (same meaning / same conclusion as gold), '
+        '{"outcome": "omission"} (explicitly declines or says it is unknown '
+        'although the gold answer exists), or {"outcome": "hallucination"} '
+        "(asserts a different or fabricated specific answer that contradicts "
+        "gold).\n\n"
         f"Question: {question}\nGold: {gold}\nPredicted: {predicted}\nJSON:"
     )
 

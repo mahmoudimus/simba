@@ -87,6 +87,15 @@ def test_build_judge_prompt_boundary_vs_normal():
     assert "omission" in n.lower() and "gold" in n.lower()
 
 
+def test_judge_prompt_credits_terse_yes_no():
+    # A bare "No." matching the gold's polarity is correct, not an omission.
+    # Without explicit guidance the local judge mis-graded such answers (it
+    # marked "No." as omission against gold "No, <elaboration>"), tanking the
+    # Memory Conflict category. The non-boundary prompt must tell the judge so.
+    n = qa.build_halumem_judge_prompt("Did X happen?", "No, because Y", "No.", False)
+    assert "yes/no" in n.lower() or "polarity" in n.lower()
+
+
 def test_judge_outcome_failopen():
     class _Bad:
         def complete_json(self, prompt):
