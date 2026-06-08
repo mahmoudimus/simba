@@ -75,13 +75,17 @@ def _user_corpus(user: hm.HaluUser) -> list[Memory]:
     demoting the stale point lowers hallucination on update questions.
     """
     mems: list[Memory] = []
-    for s in user.sessions:
+    for si, s in enumerate(user.sessions):
         for mp in s.memory_points:
             if not mp.content.strip():
                 continue
+            # HaluMem numbers memory_points per-session (index resets each
+            # session), so the session index must be in the id — otherwise
+            # f"{uuid}_mp_{index}" collides across sessions, masking earlier
+            # content and making the gold point unretrievable.
             mems.append(
                 Memory(
-                    id=f"{user.uuid}_mp_{mp.index}",
+                    id=f"{user.uuid}_s{si}_mp_{mp.index}",
                     content=mp.content,
                     type=mp.memory_type or "FACT",
                     created_at=mp.timestamp,
