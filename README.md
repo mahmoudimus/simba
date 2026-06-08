@@ -645,9 +645,13 @@ Sync can also be triggered via `POST /sync` on the daemon, which the SessionStar
 
 ## Tool-call redirect
 
-Steer bare commands to better tooling — e.g. `cargo …` → `soldr cargo …`, `python …` → `uv run python …`. A PreToolUse check parses each Bash command (handling `env VAR=…` prefixes, `&&`/`;`/`|` segments, nested `bash -c "…"`, and `uv run <tool>`) and matches the invoked program against your redirect rules.
+Steer bare commands to better tooling — e.g. `cargo …` → `soldr cargo …`, `python …` → `uv run python …`. A PreToolUse check parses each Bash command (handling `env VAR=…` prefixes, `&&`/`;`/`|` segments, nested `bash -c "…"`, and `uv run <tool>`) and matches it against your redirect rules. Two rule kinds:
+- **Program rules** — swap the leading token (`cargo` → `soldr cargo`).
+- **Pattern rules** — a regex over the whole command + `re.sub` rewrite, for **flag-level fixes** (e.g. `rg -rln` → `rg -ln`). Checked before program rules.
 
-Two modes (`hooks.redirect_mode`):
+**Built-in (no config):** the universal grep→rg `-r` trap. In ripgrep `-r` is `--replace` (it eats the next token) and recursion + line numbers are default, so a grep-style bundle like `rg -rn` / `-rl` / `-rln` / `-nr` silently becomes `--replace` and corrupts output. simba ships a default pattern rule that drops the bundled `-r` (`rg -rn` → `rg -n`) and **auto-rewrites** — a real `--replace` (`rg -r new`, `rg -rnew old`, `rg --replace`) is left untouched. Disable everything with `hooks.redirect_enabled=false`.
+
+Two modes (`hooks.redirect_mode`; a rule may override its own via `mode = "rewrite"`):
 - **`deny`** (default) — blocks the call with a `permissionDecision: deny` whose reason names the corrected command; the model re-issues it. Works in every case.
 - **`rewrite`** — silently substitutes the command via PreToolUse `updatedInput` (no model retry) for simple leading-program commands (`cargo build` → `soldr cargo build`); anything fancier (env-prefixed, multi-segment, `uv run`, nested shell) safely falls back to `deny` so a broken command is never synthesized. **Opt-in and not yet verified live — sanity-check that silent rewrites actually take effect in your setup (esp. under `--dangerously-skip-permissions`) before relying on it; `deny` is the reliable default.**
 
@@ -663,13 +667,19 @@ simba config set hooks.redirect_mode rewrite   # opt into silent rewrite
 
 ```toml
 # .simba/redirects.toml
-[[redirect]]
+[[redirect]]                       # program rule
 program = "cargo"
 replacement = "soldr cargo"
 reason = "use the pinned rustup toolchain"
+
+[[redirect]]                       # pattern rule (flag-level fix), e.g. always-on silent fix
+pattern = '\bblack\b'
+rewrite = 'ruff format'
+mode = "rewrite"                   # per-rule override of hooks.redirect_mode
+reason = "black -> ruff format"
 ```
 
-> **Activate it:** redirect rules are **empty by default**, so the feature is a no-op until you add rules per-repo (the CLI or `.simba/redirects.toml` above). It's the deterministic sibling of the semantic [tool-rule deny](#guardian--claudemd-rule-enforcement) (which blocks by similarity to learned errors).
+> **Activate it:** beyond the **built-in** rg `-r` fix above, project rules are empty by default — add your own per-repo (the CLI or `.simba/redirects.toml`). Project rules win on first-match; built-ins fill the rest. It's the deterministic sibling of the semantic [tool-rule deny](#guardian--claudemd-rule-enforcement) (which blocks by similarity to learned errors).
 
 ## Guardian — CLAUDE.md Rule Enforcement
 
