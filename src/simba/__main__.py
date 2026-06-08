@@ -2485,7 +2485,12 @@ def _eval_bench(args: list[str]) -> int:
         "git_sha": bench_results.current_git_sha(),
         "dataset": dataset_name,
         "split": split_arg or None,
-        "config": bench_results.config_snapshot(mcfg, bcfg),
+        "config": bench_results.config_snapshot(
+            mcfg,
+            bcfg,
+            llm_cfg=bench_llm._cfg,
+            judge_cfg=judge_client._cfg if run_qa_flag else None,
+        ),
         "recall": recall_report,
         "qa": qa_report,
     }
@@ -2640,7 +2645,9 @@ def _eval_halumem(args: list[str]) -> int:
         "git_sha": bench_results.current_git_sha(),
         "dataset": "halumem",
         "split": None,
-        "config": bench_results.config_snapshot(mcfg, bcfg),
+        "config": bench_results.config_snapshot(
+            mcfg, bcfg, llm_cfg=answerer._cfg, judge_cfg=judge_client._cfg
+        ),
         "halumem": report,
     }
     bench_results.append_result(_resolve(bcfg.results_path), record)
