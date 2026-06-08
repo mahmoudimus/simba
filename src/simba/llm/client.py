@@ -11,10 +11,22 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import shlex
 import subprocess
 import typing
+
+logger = logging.getLogger("simba.llm")
+
+# Providers the client can actually run (must match the branches in ``_argv``).
+# An unknown provider (e.g. the *vision* runtime "mlx-vlm", which this client does
+# not implement) must report unavailable rather than silently returning "" — that
+# footgun once skipped an entire eval run with no error.
+_KNOWN_PROVIDERS = frozenset(
+    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx"}
+)
+_warned_providers: set[str] = set()
 
 
 def _extract_json(text: str) -> typing.Any | None:
@@ -67,7 +79,18 @@ class LlmClient:
         self._cfg = cfg
 
     def available(self) -> bool:
-        return self._cfg.provider not in ("", "none")
+        provider = self._cfg.provider
+        if provider in _KNOWN_PROVIDERS:
+            return True
+        if provider not in ("", "none") and provider not in _warned_providers:
+            _warned_providers.add(provider)
+            logger.warning(
+                "llm: unknown provider %r — no inference will run (known: %s). "
+                "For local MLX text models use 'mlx-lm'; 'mlx-vlm' is unsupported.",
+                provider,
+                ", ".join(sorted(_KNOWN_PROVIDERS)),
+            )
+        return False
 
     def _env(self) -> dict[str, str]:
         env = os.environ.copy()

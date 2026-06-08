@@ -27,6 +27,15 @@ class TestAvailable:
     def test_claude_cli_available(self) -> None:
         assert llm.LlmClient(_cfg(provider="claude-cli")).available() is True
 
+    def test_mlx_lm_available(self) -> None:
+        assert llm.LlmClient(_cfg(provider="mlx-lm")).available() is True
+
+    def test_unknown_provider_unavailable(self) -> None:
+        # An unsupported provider (e.g. the VLM runtime "mlx-vlm") must report
+        # unavailable, not silently produce "" — that footgun skipped a whole
+        # eval run with no error. See docs/plans/10.
+        assert llm.LlmClient(_cfg(provider="mlx-vlm")).available() is False
+
 
 class TestCompleteClaudeCli:
     def test_parses_result_field(self, monkeypatch) -> None:
