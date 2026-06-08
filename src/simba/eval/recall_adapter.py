@@ -21,6 +21,7 @@ import typing
 import simba.eval.kg_corpus
 import simba.kg.entities
 import simba.memory.config
+import simba.memory.entity_bridge
 import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.recall_plan
@@ -76,6 +77,8 @@ async def _search(
     extra_embedding: list[float] | None,
     plan: simba.memory.recall_plan.RecallPlan,
     llm_client: typing.Any,
+    entity_bridge_index: typing.Any = None,
+    entity_bridge_lookup: dict[str, dict[str, typing.Any]] | None = None,
     kg: typing.Any = None,
     kg_record_lookup: dict[str, dict[str, typing.Any]] | None = None,
     kg_seeds: list[str] | None = None,
@@ -96,6 +99,8 @@ async def _search(
         candidate_pool=plan.candidate_pool,
         extra_embedding=extra_embedding,
         llm_client=llm_client,
+        entity_bridge_index=entity_bridge_index,
+        entity_bridge_lookup=entity_bridge_lookup,
         kg_adjacency=kg.adjacency if kg is not None else None,
         kg_entity_memories=kg.entity_memories if kg is not None else None,
         kg_record_lookup=kg_record_lookup,
@@ -137,24 +142,43 @@ def build_retriever(
     with simba.memory.fts.connect(fts_path, cfg.fts_tokenize):
         simba.memory.fts.rebuild(rows)
 
+    # Shared record shape for the optional folds below (id -> materializable
+    # record): both entity-bridge and Track-B PPR map a corpus id to the same dict.
+    def _record(m: Memory) -> dict[str, typing.Any]:
+        return {
+            "id": m.id,
+            "type": m.type,
+            "content": m.content,
+            "context": m.context,
+            "similarity": 0.0,
+            "confidence": float(m.confidence),
+            "createdAt": m.created_at or build_now,
+            "projectPath": m.project_path,
+        }
+
+    # Optional entity-bridge index (spec 09): built from the corpus so the lever is
+    # measurable on corpora that ship no KG — cheap (regex NER, no LLM).
+    eb_index = None
+    eb_lookup: dict[str, dict[str, typing.Any]] = {}
+    if getattr(cfg, "entity_bridge_enabled", False):
+        _ner = getattr(cfg, "entity_bridge_ner", "regex")
+        _extract = (
+            simba.memory.entity_bridge.spacy_entities
+            if _ner == "spacy"
+            else simba.memory.entity_bridge.extract_entities
+        )
+        eb_index = simba.memory.entity_bridge.build_index(
+            ((m.id, f"{m.content} {m.context}".strip()) for m in dataset.corpus),
+            extract=_extract,
+        )
+        eb_lookup = {m.id: _record(m) for m in dataset.corpus}
+
     # Optional Track B throwaway KG + record lookup (id -> materializable record).
     kg = None
     kg_lookup: dict[str, dict[str, typing.Any]] = {}
     if getattr(cfg, "kg_ppr_enabled", False) and kg_extract is not None:
         kg = simba.eval.kg_corpus.build_corpus_kg(dataset.corpus, kg_extract)
-        kg_lookup = {
-            m.id: {
-                "id": m.id,
-                "type": m.type,
-                "content": m.content,
-                "context": m.context,
-                "similarity": 0.0,
-                "confidence": float(m.confidence),
-                "createdAt": m.created_at or build_now,
-                "projectPath": m.project_path,
-            }
-            for m in dataset.corpus
-        }
+        kg_lookup = {m.id: _record(m) for m in dataset.corpus}
 
     def retriever(query: str) -> list[str]:
         # Eval is always the sync (no-cache) path: hyde_mode=="llm" generates the
@@ -181,6 +205,8 @@ def build_retriever(
                 extra,
                 plan,
                 llm_client,
+                entity_bridge_index=eb_index,
+                entity_bridge_lookup=eb_lookup,
                 kg=kg,
                 kg_record_lookup=kg_lookup,
                 kg_seeds=seeds,

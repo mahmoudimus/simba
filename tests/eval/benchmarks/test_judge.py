@@ -33,6 +33,48 @@ def test_answer_prompt_includes_question_and_contexts() -> None:
     assert "went 7 May" in p and "B: hi" in p
 
 
+def test_answer_prompt_no_dates_has_no_recency_language() -> None:
+    # Backward-compatible: without dates the prompt stays the bare format.
+    p = judge.build_answer_prompt("Q?", ["a", "b"])
+    assert "most recent" not in p.lower()
+    assert "- a" in p and "- b" in p
+
+
+def test_answer_prompt_recency_labels_and_flags_newest() -> None:
+    # Mirrors format_memories: date-label each memory and flag the newest, plus a
+    # most-recent-wins instruction. This is what the product injects; the eval was
+    # stripping it, understating temporal accuracy.
+    p = judge.build_answer_prompt(
+        "current income?",
+        ["income 18000", "income 22000"],
+        dates=["2025-01-01", "2025-06-01"],
+    )
+    assert "2025-01-01" in p and "2025-06-01" in p
+    assert "most recent" in p.lower()
+    bullet_lines = [ln for ln in p.splitlines() if ln.startswith("- ")]
+    flagged = [ln for ln in bullet_lines if "most recent" in ln.lower()]
+    assert len(flagged) == 1 and "22000" in flagged[0]
+
+
+def test_answer_prompt_parses_halumem_date_format() -> None:
+    p = judge.build_answer_prompt("Q?", ["x"], dates=["Sep 04, 2025, 21:12:18"])
+    assert "2025-09-04" in p
+
+
+def test_score_case_threads_dates_from_id2date() -> None:
+    case = EvalCase(id="q1", query="income?", relevant_ids=["c1"], answer="22000")
+    llm = FakeLlm(answer="22000", verdict={"correct": True})
+    judge.score_case(
+        case,
+        lambda q: ["c1", "c2"],
+        {"c1": "income 18000", "c2": "income 22000"},
+        llm,
+        k=2,
+        id2date={"c1": "2025-01-01", "c2": "2025-06-01"},
+    )
+    assert "2025-06-01" in llm.prompts[0] and "most recent" in llm.prompts[0].lower()
+
+
 def test_judge_prompt_includes_gold_predicted_and_asks_json() -> None:
     p = judge.build_judge_prompt("Q?", gold="7 May", predicted="May 7th")
     assert "7 May" in p and "May 7th" in p and "Q?" in p

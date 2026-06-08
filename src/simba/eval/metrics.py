@@ -28,6 +28,19 @@ def recall_at_k(ranked: Sequence[str], relevant: Iterable[str], k: int) -> float
     return hits / len(rel)
 
 
+def bridge_recall_at_k(ranked: Sequence[str], relevant: Iterable[str], k: int) -> float:
+    """1.0 only if *all* relevant items are in the top ``k``, else 0.0.
+
+    The multi-hop metric: a question is "bridged" only when every supporting
+    paragraph is retrieved (recall@k of *any* hop isn't enough — you need them
+    all to reason across). Reduces to hit@k / recall@k when there's one relevant.
+    """
+    rel = _relset(relevant)
+    if not rel or k <= 0:
+        return 0.0
+    return 1.0 if rel <= set(ranked[:k]) else 0.0
+
+
 def precision_at_k(ranked: Sequence[str], relevant: Iterable[str], k: int) -> float:
     """Fraction of the top ``k`` results that are relevant."""
     rel = _relset(relevant)

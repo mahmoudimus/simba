@@ -11,10 +11,14 @@ import simba.config
 @simba.config.configurable("llm")
 @dataclasses.dataclass
 class LlmConfig:
-    # Backend CLI. "none" disables all LLM features (they degrade gracefully).
-    # Cloud: claude-cli, llm-cli. 100%-local: llama-cli (llama.cpp), mlx-lm (MLX,
-    # Apple Silicon). For local, set ``model_path`` to the model/GGUF.
-    provider: str = "claude-cli"  # claude-cli | llm-cli | llama-cli | mlx-lm | none
+    # Backend. "none" disables all LLM features (they degrade gracefully).
+    # Cloud CLIs: claude-cli, llm-cli. 100%-local CLIs (reload per call — slow):
+    # llama-cli (llama.cpp), mlx-lm (MLX) — set ``model_path``. HTTP/persistent
+    # (OpenAI-compatible, set ``base_url``; model loaded once): mlx-server &
+    # llama-server (auto-spawned locally) and openai-http (a server you run, local
+    # or remote GPU box). See docs/eval-remote-gpu.md.
+    # claude-cli|llm-cli|llama-cli|mlx-lm|mlx-server|llama-server|openai-http|none
+    provider: str = "claude-cli"
     # Model name as the chosen CLI expects it (claude aliases: haiku/sonnet/opus;
     # llm: whatever `llm models` lists, e.g. a deepseek alias).
     model: str = "haiku"
@@ -30,6 +34,10 @@ class LlmConfig:
     # Extra CLI args (shell-split) appended to the chosen provider's argv — an
     # escape hatch for provider-specific flags (e.g. --n-gpu-layers, --temp).
     extra_args: str = ""
+    # Auto-spawn command template for mlx-server / llama-server (or a custom one,
+    # e.g. vLLM). Empty -> the provider's preset in llm/local_server.py.
+    # {model}/{host}/{port} are substituted; see docs/eval-remote-gpu.md.
+    serve_cmd: str = ""
     timeout_seconds: float = 60.0
     max_tokens: int = 2048
 

@@ -21,6 +21,9 @@ class TestCheckToolRulesScoping:
             return []
 
         monkeypatch.setattr(ptu, "_hooks_cfg", _default_cfg)
+        # The project has rules, so the recall short-circuit doesn't fire and we
+        # actually reach (and can assert on) the scoped recall.
+        monkeypatch.setattr(ptu, "_project_has_tool_rules", lambda *a, **k: True)
         monkeypatch.setattr(
             "simba.hooks._memory_client.recall_memories", fake_recall
         )
@@ -38,6 +41,7 @@ class TestCheckToolRulesScoping:
         # The daemon (faked) scopes strictly: a rule tagged with another
         # project's id is invisible when recalling under this project's id.
         monkeypatch.setattr(ptu, "_hooks_cfg", _default_cfg)
+        monkeypatch.setattr(ptu, "_project_has_tool_rules", lambda *a, **k: True)
         monkeypatch.setattr(
             simba.db, "resolve_project_id", lambda p=None: "simba-id"
         )

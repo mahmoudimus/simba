@@ -32,7 +32,12 @@ def run_recall(
     ``kg_extract`` (eval-only) is forwarded to ``build_retriever`` so the Track B
     PPR fold can be measured when ``cfg.kg_ppr_enabled`` — a no-op otherwise.
     """
-    metric_names = [f"recall@{k}" for k in ks] + [f"ndcg@{k}" for k in ks] + ["mrr"]
+    metric_names = (
+        [f"recall@{k}" for k in ks]
+        + [f"bridge_recall@{k}" for k in ks]
+        + [f"ndcg@{k}" for k in ks]
+        + ["mrr"]
+    )
     by_cat: dict[str, list[dict[str, float]]] = {}
     overall: list[dict[str, float]] = []
     all_latencies: list[float] = []

@@ -41,8 +41,11 @@ jobs:
                   UV_EXTRA_INDEX_URL: https://abetlen.github.io/llama-cpp-python/whl/cpu
               run: uv sync --python 3.13
 
+            # Both steps below call scripts/checks.sh — the SAME script the git
+            # hooks run (.githooks/pre-commit, pre-push) — so CI and local can't
+            # drift. Kept as two steps for readable per-check status in the UI.
             - name: Lint (ruff)
-              run: uv run ruff check src/ tests/
+              run: ./scripts/checks.sh lint
 
             - name: Tests (pytest)
-              run: uv run pytest -q
+              run: ./scripts/checks.sh test

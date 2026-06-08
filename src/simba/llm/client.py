@@ -11,10 +11,29 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
+import re
 import shlex
 import subprocess
 import typing
+
+logger = logging.getLogger("simba.llm")
+
+# Providers the client can actually run (must match the branches in ``_argv``).
+# An unknown provider (e.g. the *vision* runtime "mlx-vlm", which this client does
+# not implement) must report unavailable rather than silently returning "" — that
+# footgun once skipped an entire eval run with no error.
+# Providers that talk to an OpenAI-compatible HTTP endpoint (``_complete_http``).
+# ``mlx-server`` (Apple Silicon) and ``llama-server`` (llama.cpp, cross-platform)
+# may be auto-spawned locally (``local_server.ensure_for_config``); ``openai-http``
+# is a generic endpoint (Ollama / llama.cpp / vLLM on, say, a CUDA box) that this
+# client never starts — you run it yourself. See docs/eval-remote-gpu.md.
+_HTTP_PROVIDERS = frozenset({"mlx-server", "llama-server", "openai-http"})
+_KNOWN_PROVIDERS = frozenset(
+    {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx", *_HTTP_PROVIDERS}
+)
+_warned_providers: set[str] = set()
 
 
 def _extract_json(text: str) -> typing.Any | None:
@@ -49,6 +68,41 @@ def _extract_json(text: str) -> typing.Any | None:
     return None
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_HARMONY_FINAL_RE = re.compile(
+    r"<\|channel\|>\s*final\s*<\|message\|>(.*?)(?:<\|return\|>|<\|end\|>|<\|start\|>|\Z)",
+    re.DOTALL,
+)
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[^|]*?\|>")
+
+
+def _strip_reasoning(text: str) -> str:
+    """Return just the final answer from a reasoning model's output.
+
+    Handles two formats so a thinking answerer can stand in cleanly:
+    - gpt-oss **harmony** channels — the answer is ONLY the ``final`` channel's
+      message; ``analysis`` channels are reasoning and are dropped (no final
+      channel ⇒ truncated reasoning ⇒ "").
+    - Qwen-style ``<think>…</think>`` blocks — dropped; an unterminated ``<think>``
+      means reasoning ran out of room before an answer ⇒ "".
+
+    A no-op for plain instruct output, so it is safe to apply to every
+    ``mlx-server`` completion (answerer or judge).
+    """
+    if not text:
+        return ""
+    if "<|channel|>" in text or "<|message|>" in text:
+        finals = _HARMONY_FINAL_RE.findall(text)
+        text = finals[-1] if finals else ""
+    text = _THINK_BLOCK_RE.sub("", text)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[-1]
+    elif "<think>" in text:
+        return ""
+    text = _SPECIAL_TOKEN_RE.sub("", text)
+    return text.strip()
+
+
 def _strip_mlx(text: str) -> str:
     """Drop mlx_lm.generate's ``====`` separators and trailing stats lines."""
     keep = []
@@ -67,7 +121,22 @@ class LlmClient:
         self._cfg = cfg
 
     def available(self) -> bool:
-        return self._cfg.provider not in ("", "none")
+        provider = self._cfg.provider
+        if provider in _HTTP_PROVIDERS:
+            # OpenAI-compatible HTTP endpoint (mlx_lm.server / remote Ollama / …) —
+            # needs a base_url to reach it.
+            return bool(self._cfg.base_url)
+        if provider in _KNOWN_PROVIDERS:
+            return True
+        if provider not in ("", "none") and provider not in _warned_providers:
+            _warned_providers.add(provider)
+            logger.warning(
+                "llm: unknown provider %r — no inference will run (known: %s). "
+                "For local MLX text models use 'mlx-lm'; 'mlx-vlm' is unsupported.",
+                provider,
+                ", ".join(sorted(_KNOWN_PROVIDERS)),
+            )
+        return False
 
     def _env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -122,10 +191,40 @@ class LlmClient:
             ]
         return []
 
+    def _complete_http(self, prompt: str) -> str:
+        """OpenAI-compatible chat completion against a persistent local/remote server.
+
+        Works with any OpenAI ``/v1`` server — mlx_lm.server, llama.cpp's
+        llama-server, Ollama, vLLM. The model is loaded once by the server, so each
+        call is just inference — this is what makes local LLM-judged eval affordable
+        (no per-call reload). Fail-open: any error (server down, bad response)
+        returns "".
+        """
+        import httpx
+
+        url = self._cfg.base_url.rstrip("/") + "/v1/chat/completions"
+        payload = {
+            "model": self._cfg.model or self._local_model(),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self._cfg.max_tokens,
+            "temperature": 0.0,
+        }
+        try:
+            resp = httpx.post(url, json=payload, timeout=self._cfg.timeout_seconds)
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+        except Exception:
+            return ""
+        # Strip reasoning scaffolding (gpt-oss harmony / <think>) so a thinking
+        # answerer surfaces only its final answer; no-op for instruct models.
+        return _strip_reasoning(content) if isinstance(content, str) else ""
+
     def complete(self, prompt: str) -> str:
         """Run the prompt and return the model's text, or "" on any failure."""
         if not self.available():
             return ""
+        if self._cfg.provider in _HTTP_PROVIDERS:
+            return self._complete_http(prompt)
         argv = self._argv(prompt)
         if not argv:
             return ""

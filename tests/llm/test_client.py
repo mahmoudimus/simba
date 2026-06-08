@@ -27,6 +27,127 @@ class TestAvailable:
     def test_claude_cli_available(self) -> None:
         assert llm.LlmClient(_cfg(provider="claude-cli")).available() is True
 
+    def test_mlx_lm_available(self) -> None:
+        assert llm.LlmClient(_cfg(provider="mlx-lm")).available() is True
+
+    def test_unknown_provider_unavailable(self) -> None:
+        # An unsupported provider (e.g. the VLM runtime "mlx-vlm") must report
+        # unavailable, not silently produce "" — that footgun skipped a whole
+        # eval run with no error. See docs/plans/10.
+        assert llm.LlmClient(_cfg(provider="mlx-vlm")).available() is False
+
+    def test_mlx_server_available_needs_base_url(self) -> None:
+        assert llm.LlmClient(_cfg(provider="mlx-server")).available() is False
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).available() is True
+
+    def test_llama_server_available_needs_base_url(self) -> None:
+        # Cross-platform llama.cpp llama-server — same HTTP path as mlx-server,
+        # auto-spawnable via local_server.
+        assert llm.LlmClient(_cfg(provider="llama-server")).available() is False
+        cfg = _cfg(provider="llama-server", base_url="http://127.0.0.1:8080")
+        assert llm.LlmClient(cfg).available() is True
+
+    def test_openai_http_available_needs_base_url(self) -> None:
+        # Generic OpenAI-compatible endpoint (e.g. a remote Ollama / llama.cpp /
+        # vLLM box) — same HTTP path as mlx-server, but never spawns anything.
+        assert llm.LlmClient(_cfg(provider="openai-http")).available() is False
+        cfg = _cfg(provider="openai-http", base_url="http://192.168.1.50:11434/v1")
+        assert llm.LlmClient(cfg).available() is True
+
+    def test_openai_http_completes_via_http(self, monkeypatch) -> None:
+        import httpx
+
+        cfg = _cfg(
+            provider="openai-http",
+            base_url="http://192.168.1.50:11434/v1",
+            model="gpt-oss:20b",
+        )
+        monkeypatch.setattr(
+            httpx,
+            "post",
+            lambda url, json, timeout: types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": " Paris "}}]},
+            ),
+        )
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
+
+class TestMlxServer:
+    def test_complete_via_http(self, monkeypatch) -> None:
+        import httpx
+
+        cfg = _cfg(
+            provider="mlx-server", base_url="http://127.0.0.1:8082", model="m"
+        )
+
+        def _post(url, json, timeout):
+            assert url.endswith("/v1/chat/completions")
+            assert json["messages"][0]["content"] == "hi"
+            return types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": " Paris "}}]},
+            )
+
+        monkeypatch.setattr(httpx, "post", _post)
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
+    def test_complete_failopen_on_error(self, monkeypatch) -> None:
+        import httpx
+
+        def _boom(*a, **k):
+            raise ConnectionError("server down")
+
+        monkeypatch.setattr(httpx, "post", _boom)
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).complete("hi") == ""
+
+    def test_complete_http_strips_reasoning(self, monkeypatch) -> None:
+        # A reasoning answerer (gpt-oss harmony) must surface only the final
+        # answer; the analysis channel is reasoning, not the prediction.
+        import httpx
+
+        raw = (
+            "<|channel|>analysis<|message|>think about the capital<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>Paris<|return|>"
+        )
+        monkeypatch.setattr(
+            httpx,
+            "post",
+            lambda url, json, timeout: types.SimpleNamespace(
+                raise_for_status=lambda: None,
+                json=lambda: {"choices": [{"message": {"content": raw}}]},
+            ),
+        )
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
+        assert llm.LlmClient(cfg).complete("hi") == "Paris"
+
+
+class TestStripReasoning:
+    def test_passthrough_plain(self) -> None:
+        assert llm._strip_reasoning("Paris") == "Paris"
+
+    def test_strips_qwen_think_block(self) -> None:
+        assert llm._strip_reasoning("<think>the capital is...</think>Paris") == "Paris"
+
+    def test_harmony_keeps_final_channel(self) -> None:
+        raw = (
+            "<|channel|>analysis<|message|>reasoning<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>Paris<|return|>"
+        )
+        assert llm._strip_reasoning(raw) == "Paris"
+
+    def test_harmony_without_final_is_empty(self) -> None:
+        # Truncated before the final channel -> reasoning only, not an answer.
+        assert llm._strip_reasoning("<|channel|>analysis<|message|>thinking") == ""
+
+    def test_truncated_think_is_empty(self) -> None:
+        assert llm._strip_reasoning("<think>still reasoning, no answer") == ""
+
+    def test_strips_stray_special_tokens(self) -> None:
+        assert llm._strip_reasoning("Paris<|return|>") == "Paris"
+
 
 class TestCompleteClaudeCli:
     def test_parses_result_field(self, monkeypatch) -> None:

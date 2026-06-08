@@ -119,6 +119,29 @@ def test_render_markdown_no_qa_section_when_qa_is_none() -> None:
     assert "### QA" not in md
 
 
+def test_render_markdown_renders_halumem_block() -> None:
+    # HaluMem stores its metrics under a "halumem" key (overall accuracy /
+    # hallucination_rate / omission_rate), not recall/qa. Without a dedicated
+    # renderer the section came out empty — the new eval looked broken in the
+    # committed BENCHMARKS.md.
+    rec = {
+        "dataset": "halumem",
+        "git_sha": "deadbee",
+        "split": None,
+        "halumem": {
+            "overall": {
+                "accuracy": 0.62,
+                "hallucination_rate": 0.06,
+                "omission_rate": 0.30,
+            }
+        },
+    }
+    md = render_markdown(latest_two_by_group([rec]))
+    assert "## halumem" in md
+    assert "hallucination_rate" in md
+    assert "0.620" in md
+
+
 def test_render_markdown_includes_methodology_caveats() -> None:
     # The committed BENCHMARKS.md is a standalone artifact, so it must carry the
     # caveats that make the numbers honest: what "(full)" means, that the
