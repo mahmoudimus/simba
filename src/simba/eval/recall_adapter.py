@@ -18,6 +18,8 @@ import pathlib
 import time
 import typing
 
+import simba.eval.kg_corpus
+import simba.kg.entities
 import simba.memory.config
 import simba.memory.fts
 import simba.memory.hybrid
@@ -74,6 +76,9 @@ async def _search(
     extra_embedding: list[float] | None,
     plan: simba.memory.recall_plan.RecallPlan,
     llm_client: typing.Any,
+    kg: typing.Any = None,
+    kg_record_lookup: dict[str, dict[str, typing.Any]] | None = None,
+    kg_seeds: list[str] | None = None,
 ) -> list[str]:
     import lancedb
 
@@ -91,6 +96,10 @@ async def _search(
         candidate_pool=plan.candidate_pool,
         extra_embedding=extra_embedding,
         llm_client=llm_client,
+        kg_adjacency=kg.adjacency if kg is not None else None,
+        kg_entity_memories=kg.entity_memories if kg is not None else None,
+        kg_record_lookup=kg_record_lookup,
+        kg_seeds=kg_seeds,
     )
     return [r["id"] for r in fused]
 
@@ -103,8 +112,14 @@ def build_retriever(
     embed_query: EmbedFn,
     data_dir: str | pathlib.Path,
     llm_client: typing.Any = None,
+    kg_extract: typing.Any = None,
 ) -> Retriever:
-    """Build the LanceDB+FTS store from ``dataset.corpus`` and return a retriever."""
+    """Build the LanceDB+FTS store from ``dataset.corpus`` and return a retriever.
+
+    When ``cfg.kg_ppr_enabled`` and ``kg_extract`` is given, also build a throwaway
+    corpus KG (via the injected extractor) + a record lookup, so the retriever
+    exercises the Track B PPR fold on a corpus that ships no KG.
+    """
     cfg = cfg or simba.memory.config.MemoryConfig()
     data_dir = pathlib.Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +137,25 @@ def build_retriever(
     with simba.memory.fts.connect(fts_path, cfg.fts_tokenize):
         simba.memory.fts.rebuild(rows)
 
+    # Optional Track B throwaway KG + record lookup (id -> materializable record).
+    kg = None
+    kg_lookup: dict[str, dict[str, typing.Any]] = {}
+    if getattr(cfg, "kg_ppr_enabled", False) and kg_extract is not None:
+        kg = simba.eval.kg_corpus.build_corpus_kg(dataset.corpus, kg_extract)
+        kg_lookup = {
+            m.id: {
+                "id": m.id,
+                "type": m.type,
+                "content": m.content,
+                "context": m.context,
+                "similarity": 0.0,
+                "confidence": float(m.confidence),
+                "createdAt": m.created_at or build_now,
+                "projectPath": m.project_path,
+            }
+            for m in dataset.corpus
+        }
+
     def retriever(query: str) -> list[str]:
         # Eval is always the sync (no-cache) path: hyde_mode=="llm" generates the
         # hypothetical answer inline so the benchmark exercises the same 2nd-arm
@@ -131,9 +165,25 @@ def build_retriever(
         )
         embedding = embed_query(query)
         extra = embed_query(plan.hyde_text) if plan.hyde_text else None
+        seeds = None
+        if kg is not None:
+            seeds = [
+                simba.kg.entities.normalize_entity(t)
+                for t in simba.eval.kg_corpus.entities_of(query)
+            ]
         return asyncio.run(
             _search(
-                db_path, str(fts_path), cfg, query, embedding, extra, plan, llm_client
+                db_path,
+                str(fts_path),
+                cfg,
+                query,
+                embedding,
+                extra,
+                plan,
+                llm_client,
+                kg=kg,
+                kg_record_lookup=kg_lookup,
+                kg_seeds=seeds,
             )
         )
 
