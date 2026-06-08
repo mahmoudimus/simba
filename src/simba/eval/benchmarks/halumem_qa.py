@@ -115,6 +115,9 @@ def run_halumem_qa(
         if not corpus:
             continue
         id2content = {m.id: m.content for m in corpus}
+        # Recency annotation the daemon injects (format_memories): the Dynamic
+        # Update / Memory Conflict categories are unanswerable without it.
+        id2date = {m.id: (m.created_at or "") for m in corpus}
         ds = Dataset(name=user.uuid, corpus=corpus, cases=[])
         with tempfile.TemporaryDirectory(prefix="simba-halu-") as td:
             retriever = simba.eval.recall_adapter.build_retriever(
@@ -127,9 +130,12 @@ def run_halumem_qa(
             )
             for session in user.sessions:
                 for q in session.questions:
-                    ids = retriever(q.question)[:k]
-                    contexts = [id2content[i] for i in ids if i in id2content]
-                    predicted = llm.complete(build_answer_prompt(q.question, contexts))
+                    ids = [i for i in retriever(q.question)[:k] if i in id2content]
+                    contexts = [id2content[i] for i in ids]
+                    dates = [id2date.get(i, "") for i in ids]
+                    predicted = llm.complete(
+                        build_answer_prompt(q.question, contexts, dates)
+                    )
                     if not predicted or not predicted.strip():
                         skipped += 1
                         continue

@@ -13,6 +13,7 @@ so the grading flow is unit-tested with fakes (no LanceDB, no live model).
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import tempfile
 import time
 import typing
@@ -27,9 +28,67 @@ EmbedFn = typing.Callable[[str], list[float]]
 Retriever = typing.Callable[[str], list[str]]
 
 
-def build_answer_prompt(question: str, contexts: list[str]) -> str:
-    """Prompt the model to answer strictly from the retrieved context."""
-    joined = "\n".join(f"- {c}" for c in contexts) if contexts else "(no context)"
+def _parse_date(s: str) -> datetime.datetime | None:
+    """Parse the corpus date formats we see (ISO-8601 and HaluMem's 'Mon DD, YYYY')."""
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in ("%b %d, %Y, %H:%M:%S", "%b %d, %Y"):
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _date_label(s: str) -> str:
+    d = _parse_date(s)
+    return d.strftime("%Y-%m-%d") if d else s.strip()
+
+
+def build_answer_prompt(
+    question: str, contexts: list[str], dates: list[str] | None = None
+) -> str:
+    """Prompt the model to answer strictly from the retrieved context.
+
+    When ``dates`` (parallel to ``contexts``) is given and non-empty, the prompt
+    mirrors what the daemon injects via ``format_memories``: each memory is
+    date-labelled and the most-recent one is flagged, with a most-recent-wins
+    instruction. This is the recency signal the product ships; omitting it (the
+    old bare format) understates temporal accuracy. Falls back to the bare format
+    when no dates are available.
+    """
+    if not contexts:
+        return (
+            "You are answering a question using ONLY the conversation memories "
+            "below. If the answer is not present, say you don't know. Answer "
+            f"concisely.\n\nMemories:\n(no context)\n\nQuestion: {question}\nAnswer:"
+        )
+    if dates and any(d for d in dates):
+        parsed = [(_parse_date(dates[i]) if i < len(dates) else None)
+                  for i in range(len(contexts))]
+        dated = [(i, p) for i, p in enumerate(parsed) if p is not None]
+        newest_idx = max(dated, key=lambda t: t[1])[0] if dated else -1
+        lines = []
+        for i, c in enumerate(contexts):
+            raw = dates[i] if i < len(dates) else ""
+            tag = f"[{_date_label(raw)}] " if raw else ""
+            flag = " (most recent)" if i == newest_idx else ""
+            lines.append(f"- {tag}{c}{flag}")
+        joined = "\n".join(lines)
+        return (
+            "You are answering a question using ONLY the conversation memories "
+            "below. Each memory is tagged with the date it was recorded. When "
+            "memories give different values for the same fact, the one marked "
+            "(most recent) is the current truth. If the answer is not present, say "
+            f"you don't know. Answer concisely.\n\nMemories:\n{joined}\n\n"
+            f"Question: {question}\nAnswer:"
+        )
+    joined = "\n".join(f"- {c}" for c in contexts)
     return (
         "You are answering a question using ONLY the conversation memories below. "
         "If the answer is not present, say you don't know. Answer concisely.\n\n"
@@ -59,6 +118,7 @@ def score_case(
     k: int = 10,
     cache: typing.Any = None,
     judge_model: str = "",
+    id2date: dict[str, str] | None = None,
 ) -> bool | None:
     """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
 
@@ -67,13 +127,16 @@ def score_case(
 
     When ``cache`` is a ``JudgeCache``, an identical (judge_model, question, gold,
     predicted) verdict is served from disk instead of re-calling the judge LLM.
+
+    ``id2date`` (id -> created_at) adds the recency annotation the daemon injects.
     """
     _judge = judge if judge is not None else answerer
     if not judge_model and judge is not None:
         judge_model = getattr(getattr(_judge, "_cfg", None), "model", "")
-    ids = retriever(case.query)[:k]
-    contexts = [id2content[i] for i in ids if i in id2content]
-    predicted = answerer.complete(build_answer_prompt(case.query, contexts))
+    ids = [i for i in retriever(case.query)[:k] if i in id2content]
+    contexts = [id2content[i] for i in ids]
+    dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
+    predicted = answerer.complete(build_answer_prompt(case.query, contexts, dates))
     if not predicted or not predicted.strip():
         return None
     if cache is not None:
@@ -111,6 +174,7 @@ def score_abstention(
     judge: typing.Any | None = None,
     k: int = 10,
     abstention_phrases: list[str] | None = None,
+    id2date: dict[str, str] | None = None,
 ) -> bool | None:
     """Retrieve, generate, then check for refusal.
 
@@ -120,9 +184,10 @@ def score_abstention(
     """
     _judge = judge if judge is not None else answerer
     phrases = abstention_phrases if abstention_phrases is not None else []
-    ids = retriever(case.query)[:k]
-    contexts = [id2content[i] for i in ids if i in id2content]
-    predicted = answerer.complete(build_answer_prompt(case.query, contexts))
+    ids = [i for i in retriever(case.query)[:k] if i in id2content]
+    contexts = [id2content[i] for i in ids]
+    dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
+    predicted = answerer.complete(build_answer_prompt(case.query, contexts, dates))
     if not predicted or not predicted.strip():
         return None
     lowered = predicted.lower()
@@ -263,6 +328,9 @@ def run_qa(
     ircot_on = eval_cfg is not None and getattr(eval_cfg, "ircot_enabled", False)
     for dset in datasets:
         id2content = {m.id: m.content for m in dset.corpus}
+        # Recency annotation the daemon injects (format_memories) — mirrored here
+        # so the benchmark measures what ships, not a no-recency degradation.
+        id2date = {m.id: (m.created_at or "") for m in dset.corpus}
         with tempfile.TemporaryDirectory(prefix="simba-qa-") as td:
             retriever = simba.eval.recall_adapter.build_retriever(
                 dset,
@@ -283,6 +351,7 @@ def run_qa(
                         judge=judge,
                         k=k,
                         abstention_phrases=abstention_phrases,
+                        id2date=id2date,
                     )
                     latencies.append((time.perf_counter() - t0) * 1000)
                     if result is None:
@@ -319,6 +388,7 @@ def run_qa(
                         k=k,
                         cache=cache,
                         judge_model=judge_model,
+                        id2date=id2date,
                     )
                 latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
