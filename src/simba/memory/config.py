@@ -143,6 +143,20 @@ class MemoryConfig:
     dormant_filter_enabled: bool = True
     # Default delta applied per good/bad feedback signal. Overridable per-call.
     feedback_default_weight: float = 0.3
+    # Entity-bridge multi-hop (spec 09): after RRF, fold memories that share a
+    # *named entity* with the top seeds into the candidate set (BFS depth N over
+    # the shared-entity graph), as a third RRF arm before composite rescore +
+    # reranker. Default-OFF — the one multi-hop mechanism with a positive external
+    # result (YourMemory +12pp HotpotQA), distinct from kg co-occurrence/PPR
+    # (sparse, high-precision links). No-op unless a caller supplies the index.
+    entity_bridge_enabled: bool = False
+    entity_bridge_hops: int = 1  # BFS depth from the seeds over shared entities
+    entity_bridge_seeds: int = 3  # top fused hits used as traversal seeds
+    entity_bridge_max: int = 10  # cap on bridged ids folded in
+    entity_bridge_weight: float = 1.0  # RRF-arm weight of the bridge contribution
+    entity_bridge_min_shared: int = 1  # min seed-entities a bridge must share
+    entity_bridge_max_df: int = 0  # drop entities in > N memories (0 = off); precision
+    entity_bridge_ner: str = "regex"  # entity extractor: "regex" | "spacy" (real NER)
     # Retrieval-time GraphRAG (Track B): after RRF, fold PPR-ranked KG neighbors
     # (seeded by the query's entities) into the candidate set as a third arm,
     # before composite rescore + the reranker. Default-OFF — the measured ceiling

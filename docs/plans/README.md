@@ -38,6 +38,9 @@ one and implement it on its own branch off `main`.
 | [05](05-reflection-neurosymbolic-ops.md) | Reflection + neuro-symbolic + ops | `REFLECTION` memory type + reflect pass (Phase 5); derive→verify→revise→distill→induce loop over the KG with Z3/Datalog (Phase 7); latency metrics, TOOL_RULE TTL, lighter install extras, release glob fix | Phases 5 & 7 + ops |
 | [06](06-multihop.md) | Multi-hop: close the weak axis | evidence-gated; Track A productionize reasoning-time IRCoT, Track B retrieval-time GraphRAG (PPR + community, *not* C1's co-occurrence), Track C Phase 7 deductive closure | the multi-hop frontier |
 | [07](07-recall-excellence.md) | Recall excellence program | 5 pillars — fix the eval instrument, attack weak axes, embedder/extraction foundation, feedback flywheel (Phase 6), fusion tuning; + proof-carrying recall as the moat | make recall exceptional |
+| [08](08-borrow-survey.md) | Borrow survey (8 memory systems) | digest of forgetful/auto-memory/shodh/YourMemory/dna/memory-palace/animaworks/yantrikdb — entity-bridge multi-hop (positive!), Hebbian graph-topology learning, procedural memory, cheap levers | mine competitors for ideas |
+| [09](09-entity-bridge-multihop.md) | Entity-bridge multi-hop experiment | the one *positive* multi-hop lever (shared-named-entity edges, YourMemory +12pp HotpotQA); distinct from C1/Track-B; measured on HotpotQA/LME-multi-session, not LoCoMo | reopen multi-hop — win or kill |
+| [10](10-halumem-forgetting-eval.md) | HaluMem forgetting/hallucination eval | the inverse-pressure benchmark (Target Precision / FMR / Hallucination-Rate / Updating) where forgetting + contradiction-resolution PAY OFF — validates Phase-6 dormant tier + Phase-7; local judge, subsampled | measure what recall@k can't |
 
 ## Suggested order
 

@@ -39,12 +39,32 @@ def append_result(path: pathlib.Path, record: dict[str, object]) -> None:
         fh.write(json.dumps(record) + "\n")
 
 
-def config_snapshot(mcfg: object, bcfg: object) -> dict[str, object]:
-    """Snapshot both configs into the record so future diffs can pinpoint a change."""
-    return {
-        "memory": dataclasses.asdict(mcfg),
-        "bench": dataclasses.asdict(bcfg),
+def config_snapshot(
+    mcfg: object,
+    bcfg: object,
+    llm_cfg: object | None = None,
+    judge_cfg: object | None = None,
+) -> dict[str, object]:
+    """Snapshot the configs into the record so future diffs can pinpoint a change.
+
+    ``llm_cfg`` / ``judge_cfg`` (the answerer + grader) are included when given:
+    QA accuracy depends on which models answered and judged, so a record is only
+    attributable to a model — e.g. gpt-oss vs Qwen — if both are captured.
+    """
+    def _as_dict(obj: object) -> dict[str, object]:
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return dataclasses.asdict(obj)
+        return dict(vars(obj)) if hasattr(obj, "__dict__") else {}
+
+    snap: dict[str, object] = {
+        "memory": _as_dict(mcfg),
+        "bench": _as_dict(bcfg),
     }
+    if llm_cfg is not None:
+        snap["llm"] = _as_dict(llm_cfg)
+    if judge_cfg is not None:
+        snap["judge"] = _as_dict(judge_cfg)
+    return snap
 
 
 def load_results(path: pathlib.Path) -> list[dict[str, object]]:

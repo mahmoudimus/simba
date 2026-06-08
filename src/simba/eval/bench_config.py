@@ -17,6 +17,14 @@ import simba.config
 class BenchConfig:
     locomo_path: str = ""
     longmemeval_path: str = ""
+    # HotpotQA distractor dev set (genuine bridge-entity multi-hop). Default to the
+    # gitignored benchmarks dir; fetch via scripts/fetch_benchmarks.sh (Wayback,
+    # since the CMU host is offline). Scored with bridge_recall@k (all hops in k).
+    hotpotqa_path: str = ".simba/benchmarks/hotpot_dev_distractor_v1.json"
+    # HaluMem (memory-hallucination eval; docs/plans/10). >1M tokens/user, so
+    # default to a small subsample (0 = all users).
+    halumem_path: str = ".simba/benchmarks/HaluMem-Medium.jsonl"
+    halumem_user_limit: int = 10
     embedding_cache_path: str = ".simba/eval/embedding_cache.db"
     judge_cache_path: str = ".simba/eval/judge_cache.db"
     default_k: int = 10

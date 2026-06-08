@@ -12,6 +12,26 @@ RANKED = ["a", "b", "c", "d", "e"]
 RELEVANT = {"b", "d"}
 
 
+class TestBridgeRecallAtK:
+    """All gold ids must be in top-k (multi-hop needs *every* hop, not any)."""
+
+    def test_all_in_topk_is_one(self) -> None:
+        assert m.bridge_recall_at_k(RANKED, RELEVANT, 5) == 1.0  # b,d both in top5
+
+    def test_missing_one_hop_is_zero(self) -> None:
+        assert m.bridge_recall_at_k(RANKED, RELEVANT, 3) == 0.0  # d at rank 4
+
+    def test_single_relevant_behaves_like_recall(self) -> None:
+        assert m.bridge_recall_at_k(RANKED, {"b"}, 2) == 1.0
+        assert m.bridge_recall_at_k(RANKED, {"d"}, 2) == 0.0
+
+    def test_empty_relevant_is_zero(self) -> None:
+        assert m.bridge_recall_at_k(RANKED, set(), 5) == 0.0
+
+    def test_k_zero_is_zero(self) -> None:
+        assert m.bridge_recall_at_k(RANKED, RELEVANT, 0) == 0.0
+
+
 class TestRecallAtK:
     def test_recall_at_1(self) -> None:
         assert m.recall_at_k(RANKED, RELEVANT, 1) == 0.0

@@ -1,0 +1,15 @@
+#!/bin/sh
+# simba pre-push — full CI mirror (lint + tests) before code leaves the machine,
+# so you can't push something CI will reject. Delegates to scripts/checks.sh (the
+# same script CI runs). Bypass once: git push --no-verify
+#
+# Enable (once per clone): git config core.hooksPath .githooks
+ROOT="$(git rev-parse --show-toplevel)"
+echo "[pre-push] running full CI checks (lint + tests, ~70s)…"
+if ! "$ROOT/scripts/checks.sh" all; then
+    echo "" >&2
+    echo "✗ CI checks failed (see above). Fix them, or bypass with:" >&2
+    echo "    git push --no-verify" >&2
+    exit 1
+fi
+echo "✓ CI checks pass locally"

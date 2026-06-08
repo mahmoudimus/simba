@@ -16,6 +16,7 @@ import typing
 
 import simba.db
 import simba.kg.ppr
+import simba.memory.entity_bridge
 import simba.memory.fts
 import simba.memory.keywords
 import simba.memory.kg_fold
@@ -166,6 +167,8 @@ async def hybrid_search(
     rerank_cache: typing.Any = None,
     bg_tasks: set | None = None,
     cwd: pathlib.Path | None = None,
+    entity_bridge_index: typing.Any = None,
+    entity_bridge_lookup: dict[str, dict[str, typing.Any]] | None = None,
     kg_adjacency: dict[str, set[str]] | None = None,
     kg_entity_memories: dict[str, set[str]] | None = None,
     kg_record_lookup: dict[str, dict[str, typing.Any]] | None = None,
@@ -223,6 +226,30 @@ async def hybrid_search(
         keyword_weight=cfg.keyword_weight,
         extra_vector_results=extra_vector_results,
     )
+
+    # Optional entity-bridge fold (spec 09): fold memories that share a named
+    # entity with the top seeds into the candidates as a third RRF arm, before
+    # composite rescore + the reranker (so the ranker still orders the assembled
+    # set). No-op unless a caller supplies the index. Fail-open.
+    if getattr(cfg, "entity_bridge_enabled", False) and entity_bridge_index is not None:
+        with contextlib.suppress(Exception):
+            seeds = [r["id"] for r in fused[: getattr(cfg, "entity_bridge_seeds", 5)]]
+            bridged = simba.memory.entity_bridge.bridged_ids(
+                entity_bridge_index,
+                seeds,
+                hops=getattr(cfg, "entity_bridge_hops", 1),
+                min_shared=getattr(cfg, "entity_bridge_min_shared", 1),
+                max_df=getattr(cfg, "entity_bridge_max_df", 0),
+                max_out=getattr(cfg, "entity_bridge_max", 10),
+            )
+            if bridged:
+                fused = simba.memory.entity_bridge.fold_into_candidates(
+                    fused,
+                    bridged,
+                    record_lookup=entity_bridge_lookup or {},
+                    rrf_k=cfg.rrf_k,
+                    weight=getattr(cfg, "entity_bridge_weight", 1.0),
+                )
 
     # Optional retrieval-time GraphRAG fold (Track B): seed PPR with the query's
     # KG entities, rank neighbor memories by stationary mass, and fold the top-N
