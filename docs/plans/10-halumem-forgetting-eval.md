@@ -195,3 +195,64 @@ Update hallucination drop**. That establishes the *ceiling* of forgetting:
 - if the ceiling is flat → forgetting can't help here, stop;
 - if it moves → wire simba's real Phase-7 supersession at ingest and measure how much
   of the ceiling it captures (detection accuracy becomes the lever).
+
+---
+
+## Thinking-answerer + ceiling decomposition — 2026-06-07
+
+**Setup.** Swapped the answerer to a *reasoning* model (`gpt-oss-20b-MXFP4-Q8`, MoE
+3.6B-active) on a second mlx-server port, keeping the fast `Qwen3-4B-Instruct` judge
+on 8083 (answerer ≠ judge). `llm/client.py` gained `_strip_reasoning()` to pull the
+gpt-oss **harmony** `final` channel (dropping `analysis`) and Qwen `<think>` blocks —
+verified on real output (commit `581e65e`). Result snapshots now record the
+answerer + judge models (`00debfc`).
+
+**The thinking answerer is more *honest*, not strictly better.** vs Qwen3-4B-Instruct
+it abstains on conflicting / under-specified evidence instead of guessing: lower
+hallucination everywhere, higher omission, a large win on Generalization & Application
+(+0.184), and ~flat overall (0.66 → 0.61, within noise). The instruct model's higher
+Dynamic-Update score was partly **lucky guessing** — it commits to a value where the
+reasoner correctly declines because recency is unknowable from the context.
+
+**Decisive experiment — forget vs oracle ceiling (gpt-oss, 5 users):**
+
+| Category | baseline | forget (drop oracle-superseded) | **oracle (gold evidence)** |
+|---|---|---|---|
+| Dynamic Update (n=50) | acc 0.22 / hal 0.28 | acc 0.26 / hal 0.20 | **acc 0.86 / hal 0.00** |
+| Memory Conflict (n=182) | acc 0.31 / hal 0.01 | acc 0.31 / hal 0.01 | acc 0.29 / hal 0.01 |
+
+Two **different** failure modes — and neither is "retention vs forgetting":
+
+1. **Dynamic Update is RETRIEVAL-bound.** Given the gold facts the reasoner nails it
+   (**0.86 / zero hallucination**) — the answerer is not the bottleneck. Oracle
+   *forgetting* helps only modestly (0.22→0.26; hal 0.28→0.20) because exact/normalized
+   supersession-match catches just ~50 of ~150 stale points. **Root cause:**
+   `build_answer_prompt` lists memory *content* with **no timestamps / ordering**, so
+   "what is the current X?" is unanswerable from a bag of "updated A→B" events unless
+   the current value is isolated. **The real lever is recency-aware retrieval /
+   surfacing timestamps**, with Phase-7 forgetting a modest second-order help — NOT the
+   headline it was scoped to be.
+2. **Memory Conflict is NOT a memory defect.** Oracle ≈ baseline (~0.30) — perfect
+   evidence doesn't move it. Instrumenting 6 questions showed two causes: (a) the local
+   judge graded a bare **"No."** (correct polarity, gold "No, <elaboration>") as
+   *omission* — it penalized the reasoner's terse style but not the instruct model's
+   verbose one (fixed: judge prompt now credits polarity-matching Yes/No, commit
+   `deb5480`); (b) gpt-oss abstains on questions embedding unverifiable dates ("on
+   Sep 06, 2025") even when the core fact is present. Both are answer/grade issues, not
+   retrieval/forgetting. The judge fix only moved MC +0.04 (within noise), so most MC
+   omissions are genuine abstentions, not mis-grades.
+
+**Measurement caveat.** 5-user LLM-judged HaluMem has **±0.04 run-to-run noise** and a
+~0–3 % skip rate (empty answers / unjudgeable verdicts) — consistent with
+[[eval-ablation-latency-trap]]. Only large gaps are trustworthy (the 0.22→0.86
+Dynamic-Update oracle swing is real; ±0.04 aggregate deltas are not). Answerer ==
+self-grading caveat does not apply here (separate judge model), but the judge is a
+local 4B, not GPT-4 — absolute numbers are internal-only.
+
+**Revised conclusion for spec 10.** The forgetting / Phase-7 thesis earns a *small*
+real win on Dynamic-Update hallucination (≈ −0.08); the dominant, noise-robust lever
+is **recency-aware retrieval** (carry timestamps into the candidate set + the answer
+context). Memory Conflict is an answer-policy / judge-calibration axis, not a memory
+axis. Next experiment to run: add recency/timestamps to the answer context (and/or a
+recency tie-break in scoring) and re-measure Dynamic Update — that is where the 0.22→
+0.86 headroom lives.
