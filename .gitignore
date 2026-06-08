@@ -31,5 +31,7 @@ src/simba/memory/data/
 .DS_Store
 .claude
 docs/*
-# ...but track implementation plans (handed to implementers / smaller models).
+# ...but track implementation plans (handed to implementers / smaller models)
+# and durable operational runbooks.
 !docs/plans/
+!docs/eval-remote-gpu.md
