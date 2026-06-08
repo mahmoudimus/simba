@@ -92,3 +92,43 @@ be on its own judge; the point is the *delta* from our features, not the leaderb
 - CC-BY-NC-ND: internal eval only; do not redistribute the dataset.
 - Same org (MemTensor) ships MemOS/MemRL/HaluMem — treat their leaderboard numbers
   as their-judge; report simba's own-judge deltas.
+
+---
+
+## Build status (2026-06-07, branch `feat/halumem-eval`)
+
+**Apparatus DONE + proven; full run blocked by local-LLM *serving* latency.**
+
+Built + committed (TDD, ruff-clean):
+- `eval/benchmarks/halumem.py` — loader + `aggregate_qa` (accuracy / hallucination_rate
+  / omission_rate + boundary block). 5 tests.
+- `eval/benchmarks/halumem_qa.py` — recall → answer → 3-way boundary-aware judge. 4 tests.
+- `simba eval halumem` CLI + `bench.halumem_path/halumem_user_limit` + fetch wired.
+- Dataset fetched: HaluMem-Medium (20 users / 33 MB).
+
+**Pipeline proven end-to-end** (answerer → "Paris"; judge → valid `{"outcome":...}`;
+unit tests green). The first run returned `graded=0, skipped=352` — NOT a HaluMem
+bug; two infra issues uncovered:
+
+1. **Silent-provider footgun (fixed):** `LlmClient.available()` returned True for the
+   unsupported `mlx-vlm` provider → `complete()` silently returned `""` → all 352 Q
+   skipped with no error. Fixed: `available()` validates known providers + warns
+   (`fix(llm): unknown provider -> unavailable + warn`).
+2. **The branch's local eval-LLM was misconfigured:** answerer `gemma-4-e4b` is a
+   *VLM* checkpoint (weights prefixed `language_model.`) that `mlx_lm` can't load;
+   only the 26b judge model loads. Set `llm.model_path` → the working
+   `gemma-4-26b-a4b-it-4bit` (now answerer≈judge — note the self-grading caveat).
+
+**The real blocker — serving latency (Pillar-1 gap):** simba's `mlx-lm` client spawns
+`mlx_lm.generate` **per call**, reloading the model every time (~tens of seconds for
+the 26b). 352 Q × 2 calls ⇒ hours. The local path does **not** escape the
+[[eval-ablation-latency-trap]] with this design. **The fix is a persistent local
+model server** (load once, serve many) — that's the true Pillar-1 unlock that makes
+HaluMem *and* all local LLM-judged eval affordable. Until then a full run means
+cloud (the 17s/call trap) or an overnight job.
+
+**Next:** (a) build the persistent mlx server, then run HaluMem subsampled + the
+Phase-6/7 ablation; OR (b) one bounded overnight/cloud run for a first baseline.
+Also still TODO for the *ablation*: confirm `recall_adapter.build_retriever` applies
+store-time supersession + the decay/dormant pass (else dormancy/supersession won't
+actually be exercised by the eval ingest).
