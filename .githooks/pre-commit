@@ -1,0 +1,13 @@
+#!/bin/sh
+# simba pre-commit — fast lint guard. Delegates to scripts/checks.sh (the same
+# script CI runs) so local and CI can't drift. The full test suite (~70s) runs in
+# pre-push, not here, so commits stay instant. Bypass once: git commit --no-verify
+#
+# Enable (once per clone): git config core.hooksPath .githooks
+ROOT="$(git rev-parse --show-toplevel)"
+if ! "$ROOT/scripts/checks.sh" lint; then
+    echo "" >&2
+    echo "✗ lint failed (same check CI runs). Fix the above, or bypass with:" >&2
+    echo "    git commit --no-verify" >&2
+    exit 1
+fi
