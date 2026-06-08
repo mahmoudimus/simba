@@ -150,10 +150,11 @@ class MemoryConfig:
     # result (YourMemory +12pp HotpotQA), distinct from kg co-occurrence/PPR
     # (sparse, high-precision links). No-op unless a caller supplies the index.
     entity_bridge_enabled: bool = False
-    entity_bridge_hops: int = 2  # BFS depth from the seeds over shared entities
-    entity_bridge_seeds: int = 5  # top fused hits used as traversal seeds
+    entity_bridge_hops: int = 1  # BFS depth from the seeds over shared entities
+    entity_bridge_seeds: int = 3  # top fused hits used as traversal seeds
     entity_bridge_max: int = 10  # cap on bridged ids folded in
     entity_bridge_weight: float = 1.0  # RRF-arm weight of the bridge contribution
+    entity_bridge_min_shared: int = 1  # min seed-entities a bridge must share
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

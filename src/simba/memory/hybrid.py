@@ -231,7 +231,8 @@ async def hybrid_search(
             bridged = simba.memory.entity_bridge.bridged_ids(
                 entity_bridge_index,
                 seeds,
-                hops=getattr(cfg, "entity_bridge_hops", 2),
+                hops=getattr(cfg, "entity_bridge_hops", 1),
+                min_shared=getattr(cfg, "entity_bridge_min_shared", 1),
                 max_out=getattr(cfg, "entity_bridge_max", 10),
             )
             if bridged:

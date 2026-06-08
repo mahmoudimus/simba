@@ -7,9 +7,11 @@ entities, not co-occurrence/PPR density) and traversed from the retrieved seeds.
 
 At index time each memory contributes its proper-noun entities (normalized, with a
 2-word-prefix bridge key so "Shirley Temple Black" ↔ "Shirley Temple"). At recall
-time we BFS depth-N from the top seeds over the memory—entity—memory bipartite
-graph and fold the bridged memory ids into the candidate set. Pure + deterministic;
-no NER dependency (capitalized-span regex + ``kg.entities.normalize_entity``).
+time we score candidate memories by how many of the *seed* entities they share
+(precision signal — NOT arbitrary traversal order), keep those above
+``min_shared``, and fold the **missed** ones (not already retrieved) into the
+candidate set. ADD-only: a fully-retrieved corpus is a no-op (no scramble). Pure +
+deterministic; no NER dependency (capitalized-span regex + ``normalize_entity``).
 """
 
 from __future__ import annotations
@@ -71,33 +73,49 @@ def bridged_ids(
     seeds: typing.Iterable[str],
     *,
     hops: int = 1,
+    min_shared: int = 1,
     max_out: int | None = None,
 ) -> list[str]:
-    """Memory ids reachable within ``hops`` of a seed via shared entities.
+    """Memories sharing ≥``min_shared`` of the *seed* entities, ranked by overlap.
 
-    BFS over the memory—entity—memory bipartite graph. Seeds are excluded from the
-    output (we want *new* bridged evidence). Deterministic order: by hop, then
-    first-seen. ``max_out`` caps the result. Fail-open: unknown seeds → ``[]``.
+    BFS reaches candidates within ``hops`` of a seed, but each candidate is scored
+    by how many of the original seed entities it shares (a precision signal, not
+    arbitrary traversal order), so distractors that merely touch the graph are
+    filtered by ``min_shared`` and genuine co-references rank first. Seeds are
+    excluded. Deterministic: by shared-count desc, then id. ``[]`` on empty/unknown.
     """
     seed_set = set(seeds)
+    seed_ents: set[str] = set()
+    for s in seed_set:
+        seed_ents |= index.memory_to_entities.get(s, set())
+    if not seed_ents:
+        return []
+
+    shared_count: dict[str, int] = {}
     visited = set(seed_set)
-    frontier = set(seed_set)
-    out: list[str] = []
-    for _ in range(max(0, hops)):
-        nxt: list[str] = []
-        for mem in sorted(frontier):
-            for key in index.memory_to_entities.get(mem, ()):
-                for neighbor in sorted(index.entity_to_memories.get(key, ())):
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        nxt.append(neighbor)
-                        out.append(neighbor)
-                        if max_out is not None and len(out) >= max_out:
-                            return out
-        if not nxt:
+    frontier_ents = set(seed_ents)
+    for _ in range(max(1, hops)):
+        cand: set[str] = set()
+        for ent in frontier_ents:
+            cand |= index.entity_to_memories.get(ent, set())
+        cand -= visited
+        if not cand:
             break
-        frontier = set(nxt)
-    return out
+        next_ents: set[str] = set()
+        for mem in cand:
+            ents = index.memory_to_entities.get(mem, set())
+            shared = len(ents & seed_ents)
+            if shared > shared_count.get(mem, 0):
+                shared_count[mem] = shared
+            next_ents |= ents
+        visited |= cand
+        frontier_ents = next_ents
+
+    ranked = sorted(
+        (m for m, sh in shared_count.items() if sh >= min_shared),
+        key=lambda m: (-shared_count[m], m),
+    )
+    return ranked[:max_out] if max_out is not None else ranked
 
 
 def fold_into_candidates(
@@ -108,25 +126,28 @@ def fold_into_candidates(
     rrf_k: int,
     weight: float,
 ) -> list[dict[str, typing.Any]]:
-    """Merge ``bridged`` ids into ``fused`` as a third RRF arm and re-sort.
+    """ADD-only fold: insert *missed* bridged ids; never reorder retrieved items.
 
-    Each bridged id (ordered by traversal) contributes ``weight / (rrf_k + rank)``
-    to its fusion score, so a graph-surfaced memory competes for the top-k instead
-    of being appended below it. Already-present ids are boosted; new ids are pulled
-    from ``record_lookup`` (skipped if missing). Mirrors ``rrf_fuse``'s math.
+    Bridged ids already present in ``fused`` are left untouched (no boost → no
+    scramble of the already-correct relevance order). Each genuinely-missed id is
+    materialized from ``record_lookup`` and scored ``weight / (rrf_k + insert_rank)``
+    so high-overlap bridges can enter the top-k. On a fully-retrieved corpus there
+    is nothing to insert → a no-op.
     """
     scores = {r["id"]: r.get("rrf_score", 0.0) for r in fused}
     records = {r["id"]: r for r in fused}
-    for rank, mid in enumerate(bridged, start=1):
-        contrib = weight / (rrf_k + rank)
-        if mid in records:
-            scores[mid] = scores.get(mid, 0.0) + contrib
-        else:
-            rec = record_lookup.get(mid)
-            if rec is None:
-                continue
-            records[mid] = dict(rec)
-            scores[mid] = scores.get(mid, 0.0) + contrib
+    present = set(records)
+    inserted = 0
+    for mid in bridged:
+        if mid in present:
+            continue  # ADD-only: don't touch retrieved items
+        rec = record_lookup.get(mid)
+        if rec is None:
+            continue
+        inserted += 1
+        records[mid] = dict(rec)
+        scores[mid] = weight / (rrf_k + inserted)
+
     ordered = sorted(records.values(), key=lambda r: scores[r["id"]], reverse=True)
     for r in ordered:
         r["rrf_score"] = round(scores[r["id"]], 6)
