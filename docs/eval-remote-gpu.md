@@ -66,7 +66,23 @@ vllm serve openai/gpt-oss-20b --host 0.0.0.0 --port 8000
 Base URL: `http://192.168.1.50:8000/v1`. vLLM batches concurrent requests — the
 biggest win for a full run.
 
-## Mac — point simba at the box
+## Which provider?
+
+- **`openai-http`** — talk to a server you started yourself (the hybrid case here:
+  Ollama/llama.cpp/vLLM on the GPU box, eval on the Mac). Never auto-spawns.
+- **`llama-server`** — llama.cpp, **auto-spawned** by simba for a *local* endpoint.
+  Use this on the **full-offload** path (eval + server both on the GPU box): set
+  `llm.model` to a GGUF path and simba starts `llama-server` for you. Cross-platform
+  parity with `mlx-server` (Apple Silicon).
+- **`mlx-server`** — Apple-Silicon `mlx_lm.server`, auto-spawned locally.
+- Custom server (e.g. vLLM auto-spawn): set `llm.serve_cmd` to a template, e.g.
+  `vllm serve {model} --host {host} --port {port}`.
+
+> Auto-spawn (`mlx-server`/`llama-server`) only fires for a **local** base_url. A
+> remote base_url is check-only — start the server on that host yourself (or use
+> `openai-http`, which is the same thing made explicit).
+
+## Mac — point simba at the box (hybrid)
 
 ```bash
 # Answerer

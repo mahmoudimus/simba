@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-08
+
+### Added
+
+- **Engine-agnostic persistent LLM server.** The local OpenAI-compatible server
+  launcher is no longer MLX-only. New providers/presets join `mlx-server`:
+  - `llama-server` — llama.cpp's `llama-server` (cross-platform, CUDA), with the
+    same one-command auto-spawn convenience `mlx-server` had on Apple Silicon.
+  - `openai-http` — talk to any running OpenAI `/v1` server (Ollama / llama.cpp /
+    vLLM, local or on a remote GPU box); never auto-spawns — you run it.
+  - `llm.serve_cmd` / `judge.serve_cmd` — a launch-command template
+    (`{model}/{host}/{port}`) to drive any other server (e.g. vLLM); empty uses
+    the provider's preset.
+  These share one transport (`_complete_http`) and load the model once, so the
+  reranker and LLM-judged eval stop paying the `llama-cli`/`mlx-lm` per-call reload.
+  `ensure_for_config` auto-spawns only for **local** endpoints; a remote base_url
+  is check-only (run the server on that host). See `docs/eval-remote-gpu.md`.
+- **HaluMem forgetting eval** (`simba eval halumem`) — operation-level
+  memory-hallucination benchmark (correct / hallucination / omission + boundary
+  abstention). See `docs/plans/10`.
+- **Recency-annotated answer context** in the eval — `build_answer_prompt` mirrors
+  what the daemon injects (`format_memories`): date-labels each memory and flags
+  the most recent. Closes a large temporal-accuracy gap the eval was hiding.
+
+### Changed
+
+- **BREAKING: `simba/llm/mlx_server.py` → `simba/llm/local_server.py`** and its API
+  is now engine-agnostic (`ensure_server(serve_cmd, *, base_url=...)`,
+  `build_serve_cmd(template, model, host, port)`, `SERVE_PRESETS`). No back-compat
+  shim. Update any direct imports.
+- Result snapshots now record the answerer + judge model, so QA numbers are
+  attributable. The leaderboard renders a HaluMem block.
+
+### Fixed
+
+- `LlmClient.available()` now rejects unknown providers (e.g. the vision runtime
+  `mlx-vlm`) instead of silently returning `""` and skipping work.
+
 ## [0.5.1] — 2026-06-07
 
 ### Fixed

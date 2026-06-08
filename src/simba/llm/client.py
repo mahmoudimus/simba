@@ -25,10 +25,11 @@ logger = logging.getLogger("simba.llm")
 # not implement) must report unavailable rather than silently returning "" — that
 # footgun once skipped an entire eval run with no error.
 # Providers that talk to an OpenAI-compatible HTTP endpoint (``_complete_http``).
-# ``mlx-server`` may be auto-spawned locally (``mlx_server.ensure_for_config``);
-# ``openai-http`` is a generic remote endpoint (Ollama / llama.cpp / vLLM on, say,
-# a CUDA box) that this client never tries to start — you run it yourself.
-_HTTP_PROVIDERS = frozenset({"mlx-server", "openai-http"})
+# ``mlx-server`` (Apple Silicon) and ``llama-server`` (llama.cpp, cross-platform)
+# may be auto-spawned locally (``local_server.ensure_for_config``); ``openai-http``
+# is a generic endpoint (Ollama / llama.cpp / vLLM on, say, a CUDA box) that this
+# client never starts — you run it yourself. See docs/eval-remote-gpu.md.
+_HTTP_PROVIDERS = frozenset({"mlx-server", "llama-server", "openai-http"})
 _KNOWN_PROVIDERS = frozenset(
     {"claude-cli", "llm-cli", "llama-cli", "mlx-lm", "mlx", *_HTTP_PROVIDERS}
 )
@@ -191,11 +192,13 @@ class LlmClient:
         return []
 
     def _complete_http(self, prompt: str) -> str:
-        """OpenAI-compatible chat completion against a persistent mlx_lm.server.
+        """OpenAI-compatible chat completion against a persistent local/remote server.
 
-        The model is loaded once by the server, so each call is just inference —
-        this is what makes local LLM-judged eval affordable (no per-call reload).
-        Fail-open: any error (server down, bad response) returns "".
+        Works with any OpenAI ``/v1`` server — mlx_lm.server, llama.cpp's
+        llama-server, Ollama, vLLM. The model is loaded once by the server, so each
+        call is just inference — this is what makes local LLM-judged eval affordable
+        (no per-call reload). Fail-open: any error (server down, bad response)
+        returns "".
         """
         import httpx
 

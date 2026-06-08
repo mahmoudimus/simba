@@ -41,6 +41,13 @@ class TestAvailable:
         cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082")
         assert llm.LlmClient(cfg).available() is True
 
+    def test_llama_server_available_needs_base_url(self) -> None:
+        # Cross-platform llama.cpp llama-server — same HTTP path as mlx-server,
+        # auto-spawnable via local_server.
+        assert llm.LlmClient(_cfg(provider="llama-server")).available() is False
+        cfg = _cfg(provider="llama-server", base_url="http://127.0.0.1:8080")
+        assert llm.LlmClient(cfg).available() is True
+
     def test_openai_http_available_needs_base_url(self) -> None:
         # Generic OpenAI-compatible endpoint (e.g. a remote Ollama / llama.cpp /
         # vLLM box) — same HTTP path as mlx-server, but never spawns anything.

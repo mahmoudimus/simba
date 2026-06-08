@@ -2624,12 +2624,13 @@ def _eval_halumem(args: list[str]) -> int:
     )
     answerer = llm_client.get_client()
     judge_client = jcfg.get_judge_client()
-    # If answerer/judge use the persistent mlx-server provider, ensure it's up
-    # (loads the model once, so the run doesn't reload per call). Fail-open.
-    import simba.llm.mlx_server as mlx_server
+    # If answerer/judge use an auto-spawn local server (mlx-server / llama-server),
+    # ensure it's up (loads the model once, so the run doesn't reload per call).
+    # No-op for openai-http / CLI providers. Fail-open.
+    import simba.llm.local_server as local_server
 
-    mlx_server.ensure_for_config(answerer._cfg)
-    mlx_server.ensure_for_config(judge_client._cfg)
+    local_server.ensure_for_config(answerer._cfg)
+    local_server.ensure_for_config(judge_client._cfg)
     report = halumem_qa.run_halumem_qa(
         users,
         embed_doc=embed_doc,
