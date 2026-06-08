@@ -59,7 +59,11 @@ def test_ranked_by_shared_count_and_min_shared_threshold():
 def test_pure_transitive_neighbor_excluded():
     # m3 shares an entity with m2 but NOT with the seed m1 → precision excludes it.
     idx = eb.build_index(
-        [("m1", "Alice met Bob."), ("m2", "Bob knows Carol."), ("m3", "Carol saw Dave.")]
+        [
+            ("m1", "Alice met Bob."),
+            ("m2", "Bob knows Carol."),
+            ("m3", "Carol saw Dave."),
+        ]
     )
     bridged = set(eb.bridged_ids(idx, ["m1"], hops=2, min_shared=1))
     assert "m2" in bridged  # shares Bob with the seed
