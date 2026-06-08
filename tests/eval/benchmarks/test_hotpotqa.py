@@ -55,6 +55,39 @@ def test_comparison_intent():
     assert set(ds[1].cases[0].relevant_ids) == {"A", "B"}
 
 
+def test_pooled_shares_one_large_corpus_across_questions():
+    # Pooling deduplicates paragraphs by title into ONE corpus so each question
+    # must recall its gold from thousands of competitors (the fullwiki recall
+    # regime), not a 10-paragraph haystack.
+    pooled = hq.load_hotpotqa_pooled(RAW)
+    assert len(pooled) == 1
+    d = pooled[0]
+    # q1 has Film X / Jane Doe / Distractor; q2 has A / B → 5 unique titles.
+    assert {m.id for m in d.corpus} == {"Film X", "Jane Doe", "Distractor", "A", "B"}
+    assert len(d.cases) == 2  # one case per question, shared corpus
+    q1 = next(c for c in d.cases if c.id == "q1")
+    assert set(q1.relevant_ids) == {"Film X", "Jane Doe"}
+
+
+def test_pooled_dedupes_shared_titles():
+    raw = [
+        {"_id": "x", "question": "q", "answer": "a", "type": "bridge",
+         "context": [["Shared", ["s1."]], ["OnlyX", ["x1."]]],
+         "supporting_facts": [["Shared", 0], ["OnlyX", 0]]},
+        {"_id": "y", "question": "q2", "answer": "b", "type": "bridge",
+         "context": [["Shared", ["s1."]], ["OnlyY", ["y1."]]],
+         "supporting_facts": [["Shared", 0], ["OnlyY", 0]]},
+    ]
+    d = hq.load_hotpotqa_pooled(raw)[0]
+    assert {m.id for m in d.corpus} == {"Shared", "OnlyX", "OnlyY"}  # Shared once
+    assert len(d.cases) == 2
+
+
+def test_pooled_caps_questions():
+    d = hq.load_hotpotqa_pooled(RAW, max_questions=1)[0]
+    assert len(d.cases) == 1  # only the first question pooled
+
+
 def test_drops_question_with_unresolvable_gold():
     raw = [
         {

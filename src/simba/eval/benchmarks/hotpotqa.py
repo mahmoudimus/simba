@@ -68,6 +68,39 @@ def load_hotpotqa_data(raw: list[dict[str, typing.Any]]) -> list[Dataset]:
     return datasets
 
 
+def load_hotpotqa_pooled(
+    raw: list[dict[str, typing.Any]], *, max_questions: int | None = None
+) -> list[Dataset]:
+    """Pool many questions' paragraphs into ONE shared corpus (the recall regime).
+
+    Per-question HotpotQA distractor haystacks are only ~10 paragraphs, so recall
+    saturates (top-10 = everything). Pooling deduplicates paragraphs by Wikipedia
+    title across ``max_questions`` questions into a single large corpus, so each
+    question must recall its 2 gold paragraphs from thousands of competitors — a
+    genuine recall problem, the setting where an entity-bridge ADD lever can
+    surface *missed* multi-hop gold (cf. HotpotQA fullwiki). Returns a single
+    Dataset with one case per question over the shared corpus.
+    """
+    corpus: list[Memory] = []
+    seen_titles: set[str] = set()
+    cases: list[EvalCase] = []
+    for item in raw:
+        if max_questions is not None and len(cases) >= max_questions:
+            break
+        per_q = load_hotpotqa_data([item])
+        if not per_q:
+            continue
+        d = per_q[0]
+        for mem in d.corpus:
+            if mem.id not in seen_titles:
+                seen_titles.add(mem.id)
+                corpus.append(mem)
+        cases.append(d.cases[0])
+    if not corpus or not cases:
+        return []
+    return [Dataset(name="hotpotqa-pooled", corpus=corpus, cases=cases)]
+
+
 def load_hotpotqa(path: str | pathlib.Path) -> list[Dataset]:
     """Load + parse a HotpotQA distractor JSON into per-question Datasets."""
     raw = json.loads(pathlib.Path(path).read_text())
