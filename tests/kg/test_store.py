@@ -367,3 +367,67 @@ class TestEntityResolution:
         kg_add("the github_token", "blocks", "gh", "p", project_path="proj-2")
         subj2 = {r["subject"] for r in kg_query(project_path="proj-2")}
         assert subj2 == {"the github_token"}
+
+
+class TestKgSupersede:
+    """Phase 7 supersession seam: close the old fact, add the new, and (when
+    record_audit is requested) preserve the loser in the append-only audit."""
+
+    def test_supersede_closes_old_adds_new(self) -> None:
+        from simba.kg.store import KgEdge, kg_supersede
+
+        kg_add("Alice", "location", "NYC", "p", project_path="proj-1")
+        result = kg_supersede(
+            "Alice", "location", "NYC", "LA", "moved", project_path="proj-1"
+        )
+        assert result["added"] == "added"
+        assert result["closed"] == 1
+
+        # Old fact is closed (valid_to set), new fact is open.
+        current = {
+            r["object"] for r in kg_query(subject="Alice", project_path="proj-1")
+        }
+        assert current == {"LA"}
+        with simba.db.connect():
+            closed = list(
+                KgEdge.select().where(
+                    (KgEdge.subject == "Alice") & (KgEdge.object == "NYC")
+                )
+            )
+        assert len(closed) == 1
+        assert closed[0].valid_to is not None
+
+    def test_supersede_records_audit_when_requested(self) -> None:
+        import simba.neuron.resolve_ops as ops
+        from simba.kg.store import KgEdge, kg_supersede
+
+        kg_add("Alice", "location", "NYC", "p", project_path="proj-1")
+        with simba.db.connect():
+            old_id = (
+                KgEdge.select()
+                .where((KgEdge.subject == "Alice") & (KgEdge.object == "NYC"))
+                .get()
+                .id
+            )
+
+        kg_supersede(
+            "Alice",
+            "location",
+            "NYC",
+            "LA",
+            "moved",
+            project_path="proj-1",
+            record_audit=True,
+        )
+        rows = ops.query_audit(loser_edge_id=old_id, project_path="proj-1")
+        assert len(rows) == 1
+        assert rows[0]["loser_object"] == "NYC"
+        assert rows[0]["winner_object"] == "LA"
+
+    def test_supersede_no_audit_by_default(self) -> None:
+        import simba.neuron.resolve_ops as ops
+        from simba.kg.store import kg_supersede
+
+        kg_add("Alice", "location", "NYC", "p", project_path="proj-1")
+        kg_supersede("Alice", "location", "NYC", "LA", "moved", project_path="proj-1")
+        assert ops.query_audit(project_path="proj-1") == []
