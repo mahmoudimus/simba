@@ -133,6 +133,16 @@ class MemoryConfig:
     feedback_weight: float = 0.2
     # Memories whose strength falls below this after a decay pass become dormant.
     strength_dormancy_threshold: float = 0.1
+    # Arousal-modulated decay (Phase 6.5): a multiplier applied to the time-decay
+    # factor (in [0, 1]) as ``d ** arousal_decay_multiplier`` before reinforcement.
+    #   == 1.0 → exact no-op (default; behavior unchanged, zero runtime effect)
+    #   <  1.0 → slower decay (more arousal / importance), memory retains longer
+    #   >  1.0 → faster decay (less arousal), memory is forgotten sooner
+    # Default-OFF: the multiplier is 1.0 and ``arousal_decay_enabled`` is False
+    # until a measured win justifies turning it on. The enabled flag is advisory
+    # documentation — the multiplier of 1.0 is already a behavioral no-op.
+    arousal_decay_enabled: bool = False
+    arousal_decay_multiplier: float = 1.0  # sensible range [0.1, 3.0]; 1.0 = no-op
     # Max non-dormant memories per (type, project_path). 0 = unlimited. When > 0,
     # the weakest memories beyond this cap are set dormant.
     decay_capacity_per_type: int = 0
