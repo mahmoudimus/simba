@@ -73,3 +73,34 @@ answerer=`deepseek-v4-flash`, judge=`deepseek-v4-pro` (single judge for everyone
 Lower than prior local-judge runs (LoCoMo 0.54 gpt-oss/Qwen; LME-oracle 0.79) —
 **v4-pro is a stricter grader**. That's the whole point: one strict current judge,
 same for every system. These are the comparable-axis baselines for Step B (mem0).
+
+## Step B result (2026-06-08) — simba vs mem0, same axis
+
+Same 122 LoCoMo cases, same answerer (`deepseek-v4-flash`), same judge
+(`deepseek-v4-pro`). mem0 graded TWICE — its harness `grade.py` AND simba's exact
+judge path (`build_judge_prompt`+`_extract_json`) — both agree, so it's not a
+grading artifact:
+
+| System (same axis) | LoCoMo QA |
+|---|---|
+| **simba** | **0.426** (n=122) |
+| mem0-OSS | **~0.09–0.10** (11/114; single-hop 0.0, multi-hop 0.14) |
+
+**This is NOT "simba beats mem0 / simba is SoTA."** Critical caveats:
+- We ran mem0's **OSS `mem0.Memory`** with **deepseek-v4-flash** extraction +
+  **bge-small** embedder — NOT mem0's paper config (hosted Platform + OpenAI
+  embeddings + GPT-4 extraction + server-side graph/rerank), which reports ~66%.
+- The dominant failure is mem0's **store-time LLM fact-extraction** mangling LoCoMo
+  temporal facts with a non-GPT-4 LLM (hallucinated absolute dates 2023→"2026",
+  summarized-away specifics → "No information available" on temporal Qs).
+
+**The real, defensible finding = architecture robustness, not a leaderboard win:**
+simba's **store-raw-memories + hybrid retrieve** is robust to a weaker/substituted
+LLM, whereas mem0's **extract-facts-at-store** is only as good as its extraction
+LLM — it collapses off GPT-4. With the SAME (non-frontier) LLM stack, simba retains
+the facts mem0 loses. To claim anything about mem0's *ceiling* we'd need its real
+GPT-4 config (impractical now: GPT-4o deprecated, hosted needs a paid key).
+
+**Methodology learning:** reproducing baselines "fairly" is itself a finding —
+extract-first memory systems are LLM-dependent in a way retrieve-raw systems aren't,
+so a same-stack comparison flatters retrieve-raw. Report the stack explicitly.
