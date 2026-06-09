@@ -206,6 +206,16 @@ class MemoryConfig:
     # daemon store-route hook is a deferred follow-up (B2b).
     conflict_detect_on_write: bool = False
     conflict_write_max_neighbors: int = 5  # neighbors checked per write
+    # Query-aware recall re-check (B2b): the write-time pass can be a GENEROUS,
+    # high-recall PRE-FILTER (store candidate conflicts query-independently, off
+    # the hot path); this flag recovers precision at recall. When True, recall
+    # runs ONE query-aware confirm over the stored candidate(s) among the recalled
+    # set (gives the LLM the question + candidate descriptions, asks which — if any
+    # — is a real conflict that matters for THIS question). A confirmed candidate
+    # is surfaced; a query-irrelevant candidate is dropped (the precision win).
+    # Default-OFF — when False, recall reads the first stored candidate with no LLM
+    # call (current behavior). Always fail-open (any error falls back).
+    conflict_recall_recheck: bool = False
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

@@ -87,13 +87,33 @@ def detect_conflict(
     return ConflictResult(a=memories[a], b=memories[b], description=description.strip())
 
 
-def build_pair_detect_prompt(a: str, b: str, query: str) -> str:
+def build_pair_detect_prompt(
+    a: str, b: str, query: str, *, generous: bool = False
+) -> str:
     """Prompt the model to judge whether exactly TWO memories conflict.
 
     A focused variant of :func:`build_detect_prompt`: isolating the pair removes
     the distractors that bury a subtle contradiction in the all-at-once prompt.
     Replies JSON only: ``{"conflict": bool, "description": "<short>"}``.
+
+    ``generous`` (B2b) switches to a recall-biased prompt used at WRITE time: it
+    flags the pair if they COULD plausibly conflict / be inconsistent / compete,
+    maximizing RECALL. Precision is recovered later at recall via the query-aware
+    re-check (:func:`conflict_note_from_store`), so over-flagging here is fine.
+    Default ``False`` keeps the strict (mutual-exclusion) prompt unchanged.
     """
+    if generous:
+        return (
+            "You are pre-screening two retrieved memories for a POSSIBLE "
+            "contradiction. Decide whether the TWO memories below could plausibly "
+            "conflict — be inconsistent, compete, or fail to both hold — for some "
+            "question. Be GENEROUS: flag the pair if there is any plausible tension "
+            "between them; a later step confirms whether it truly matters. Only "
+            "skip pairs that are clearly about unrelated topics. Reply with JSON "
+            'only: {"conflict": true, "description": "<short explanation>"} or '
+            '{"conflict": false}.\n\n'
+            f"Question: {query}\nMemory A: {a}\nMemory B: {b}\nJSON:"
+        )
     return (
         "You are checking two retrieved memories for a contradiction that matters "
         "for answering a question. Decide whether the TWO memories below CONFLICT "
@@ -230,6 +250,7 @@ def detect_conflicts_on_write(
     *,
     llm_client: typing.Any,
     max_neighbors: int = 5,
+    generous: bool = False,
 ) -> list[tuple[str, str]]:
     """Compare a NEW memory against its nearest neighbors; flag conflicts.
 
@@ -241,6 +262,12 @@ def detect_conflicts_on_write(
     caller's bookkeeping). FAIL-OPEN: empty neighbors, a missing client, or any
     exception yields ``[]`` — never raises into the write path. One
     ``llm_client.complete_json`` call per checked neighbor.
+
+    ``generous`` (B2b) uses the recall-biased pair prompt: this write-time pass
+    becomes a cheap, high-recall/low-precision PRE-FILTER that stores candidate
+    conflicts. Precision is recovered at recall by the query-aware re-check
+    (:func:`conflict_note_from_store`). Default ``False`` = strict prompt
+    (current behavior unchanged).
     """
     if not neighbors or llm_client is None:
         return []
@@ -248,7 +275,7 @@ def detect_conflicts_on_write(
     try:
         for neighbor_id, neighbor_text in neighbors[:max_neighbors]:
             verdict = llm_client.complete_json(
-                build_pair_detect_prompt(new_text, neighbor_text, "")
+                build_pair_detect_prompt(new_text, neighbor_text, "", generous=generous)
             )
             if not isinstance(verdict, dict) or not verdict.get("conflict"):
                 continue
@@ -261,11 +288,61 @@ def detect_conflicts_on_write(
     return out
 
 
+def build_recall_recheck_prompt(query: str, descriptions: list[str]) -> str:
+    """Prompt the model to confirm which stored candidate conflict matters HERE.
+
+    The write-time pre-filter stores candidate conflicts query-INDEPENDENTLY
+    (high recall). At recall we have the question, so one query-aware call asks
+    which (if any) of the candidate conflict descriptions is a REAL conflict that
+    matters for answering THIS question — recovering precision. Replies JSON only:
+    ``{"relevant": true, "index": <int>}`` (index into ``descriptions``) or
+    ``{"relevant": false}``.
+    """
+    numbered = "\n".join(f"{i}. {d}" for i, d in enumerate(descriptions))
+    return (
+        "You are deciding whether a previously-flagged candidate conflict between "
+        "two memories actually MATTERS for answering the question below. Given the "
+        "question and the numbered candidate conflict descriptions, pick the ONE "
+        "that is a real conflict relevant to answering this specific question. If "
+        "none is relevant to this question, say so. Reply with JSON only: "
+        '{"relevant": true, "index": <int index>} or {"relevant": false}.\n\n'
+        f"Question: {query}\nCandidate conflicts:\n{numbered}\nJSON:"
+    )
+
+
+def _recall_recheck_directive(
+    query: str,
+    descriptions: list[str],
+    *,
+    llm_client: typing.Any,
+) -> str | None:
+    """One query-aware confirm over the stored candidate descriptions.
+
+    Returns the directive for the confirmed candidate, ``""`` when the model
+    confirms NONE is relevant (the precision filter), or ``None`` on any
+    failure/garbage (the caller then falls back to the non-recheck path). Mirrors
+    the robust JSON parse of ``eval/benchmarks/judge.py``.
+    """
+    if not descriptions or llm_client is None or not query:
+        return None
+    verdict = llm_client.complete_json(build_recall_recheck_prompt(query, descriptions))
+    if not isinstance(verdict, dict) or "relevant" not in verdict:
+        return None
+    if not verdict.get("relevant"):
+        return ""  # the precision win: no candidate matters for this question
+    idx = verdict.get("index", 0)
+    if not isinstance(idx, int) or not (0 <= idx < len(descriptions)):
+        return None
+    return surface_directive_from_description(descriptions[idx])
+
+
 def conflict_note_from_store(
     recalled_ids: list[str],
     *,
     project_path: str,
     cfg: typing.Any,
+    query: str = "",
+    llm_client: typing.Any = None,
 ) -> str:
     """Gated, fail-open recall-read: annotate a precomputed conflict.
 
@@ -276,6 +353,16 @@ def conflict_note_from_store(
     texts, and the description already names both sides). Returns ``""`` — with
     zero LLM cost and no detection — when the feature is disabled, no conflict is
     recorded, or anything fails. Must run inside a ``simba.db.connect()`` context.
+
+    B2b query-aware re-check: when ``cfg.conflict_recall_recheck`` is True AND an
+    ``llm_client`` and ``query`` are wired AND there are stored candidate(s) among
+    the recalled set, run ONE query-aware confirm over the candidate descriptions
+    (:func:`build_recall_recheck_prompt`). A confirmed candidate yields its
+    directive; a "none relevant" verdict yields ``""`` (the precision filter that
+    drops a query-irrelevant stored candidate). FAIL-OPEN: any exception in the
+    re-check falls back to the non-recheck path (the first stored candidate).
+    Default (flag off) keeps the current behavior — first stored candidate, no
+    LLM call — backward compatible with existing callers.
     """
     if not getattr(cfg, "conflict_surfacing_enabled", False):
         return ""
@@ -287,5 +374,13 @@ def conflict_note_from_store(
         return ""
     if not rows:
         return ""
-    row = rows[0]
-    return surface_directive_from_description(row.description)
+    if getattr(cfg, "conflict_recall_recheck", False) and llm_client and query:
+        try:
+            directive = _recall_recheck_directive(
+                query, [r.description for r in rows], llm_client=llm_client
+            )
+            if directive is not None:
+                return directive
+        except Exception:
+            pass  # fall back to the non-recheck path below
+    return surface_directive_from_description(rows[0].description)
