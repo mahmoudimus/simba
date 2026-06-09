@@ -98,10 +98,45 @@ chain **converts** (better detection ⇒ better answers).
   pairwise is an optional extra. Right-sized expectation: B2 ships ~0.27–0.32 contradictory
   (from 0.03), bounded by the 0.65 detection ceiling × surfacing.
 
-## B2 — the shippable write-time architecture (next)
-Answer-time pairwise is O(k²) LLM calls/query — fine for measurement, too slow to ship.
-Move it to **write time**: on store, compare a new memory against its nearest neighbors
-(O(neighbors), amortized), persist detected conflicts as edges / `neuron/resolve_ops.py`
-audit rows; recall-time **reads** pre-computed conflicts and annotates (zero answer-time
-detection latency); answer-time surfaces. Then B3 (extraction density → recall toward
-the 0.65 ceiling).
+## B2 result — engine built + round-trip validated; a latency↔recall tradeoff surfaced
+
+`memory/conflict_store.py` (append-only `memory_conflicts` table) + `detect_conflicts_on_write`
+(new memory vs neighbors, query-independent) + `conflict_note_from_store` (recall reads
+precomputed conflicts, annotates). Default-OFF. 40 conflict + 8 store tests green.
+
+**End-to-end smoke (n=12 SubtleMemory contradictory, k=6, deepseek-v4-flash + v4-pro):**
+- The **round-trip provably fires on real data** — conflicts detected at write, persisted,
+  read back + surfaced (fire-rate 0.25).
+- BUT as-built it **underperformed** B1 pairwise: `base 0.083 / b2 0.000 / fire 0.25`
+  (vs B1 pairwise 0.317 / fire 0.467). The smoke caught **two real issues units missed:**
+  1. **Directive defect (FIXED, commit 32d2f1b):** `conflict_note_from_store` passed the
+     stored memory *ids* as the conflict's `a`/`b`, so the directive named opaque ids
+     (`"…-s1" vs "…-s2"`) instead of texts — noise that stopped fired cases from
+     converting. Fix: build the directive from the stored *description* (which already
+     names both sides), via `surface_directive_from_description`. TDD regression test added.
+  2. **Lower fire-rate (inherent, NOT fixed): 0.25 vs B1's 0.467.** Write-time detection is
+     **query-independent** (`query=""` — there's no query at write time), so it flags fewer
+     conflicts than B1's question-aware pairwise. This is the **latency↔recall tradeoff**:
+     B2 moves detection off the answer-time hot path (the architectural win) but detects
+     less. To recover recall, B2b should add a **query-aware recall-time re-check** of the
+     stored-conflict candidates (write-time pre-filters cheaply; recall confirms with the
+     query) — a hybrid that keeps the latency win while regaining B1's fire-rate.
+
+**Verdict:** B2-core (engine + persistence round-trip) is **built and validated**; the
+directive defect is fixed; the honest measured finding is that pure write-time detection
+trades recall for latency and needs the B2b query-aware recall re-check to match B1. A
+post-fix re-measure (expected: fired cases now convert, but fire-rate still ~0.25 until
+the recall re-check lands) is the remaining confirmation.
+
+## B2b — daemon wiring + recall-time re-check (next)
+The B2 engine exists; B2b makes it live + recovers the recall the latency win cost:
+1. **Live daemon wiring** — hook `detect_conflicts_on_write` → `record_conflict` into the
+   store path (`routes.py store_memory`) as a **background task** (non-blocking, like the
+   reranker), gated by `conflict_detect_on_write`; wire `conflict_note_from_store` into
+   `format_memories`'s recall annotation, gated by `conflict_surfacing_enabled`.
+2. **Query-aware recall-time re-check** — the latency↔recall fix: at recall, take the
+   write-time-recorded conflict *candidates* among the recalled set and confirm them with a
+   single **query-aware** check (recover B1's 0.467 fire-rate while keeping detection mostly
+   off the hot path). Hybrid: cheap query-independent write-time pre-filter + one query-aware
+   recall confirmation.
+3. Then **B3** — extraction density → write-time detection recall toward the 0.65 ceiling.
