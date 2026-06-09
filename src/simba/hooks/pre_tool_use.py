@@ -373,7 +373,7 @@ def main(hook_input: dict) -> str:
                 _save_hash(thinking)
 
             formatted = simba.hooks._memory_client.format_memories(
-                memories, source="thinking-block"
+                memories, source="thinking-block", query=thinking
             )
             if formatted:
                 parts.append(formatted)

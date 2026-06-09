@@ -178,6 +178,16 @@ class MemoryConfig:
     kg_ppr_top: int = 10  # how many PPR-ranked memories to fold
     kg_ppr_weight: float = 1.0  # RRF-arm weight of the PPR contribution
     kg_ppr_damping: float = 0.85
+    # Answer-time conflict surfacing (src/simba/memory/conflict.py): after recall,
+    # one LLM call asks whether any two retrieved memories CONFLICT for the query;
+    # if so, a directive that NAMES the specific conflict is appended to the
+    # injected context so the answerer surfaces it (states what must be confirmed)
+    # instead of silently picking a side. Default-OFF — a *generic* always-on
+    # directive over-hedges non-conflict cases (measured harm), so this lever is
+    # gated on a detected, named conflict. No LLM cost when disabled or below the
+    # minimum candidate count; always fail-open (any error leaves context intact).
+    conflict_surfacing_enabled: bool = False
+    conflict_surfacing_min_memories: int = 2  # min candidates before detection runs
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
