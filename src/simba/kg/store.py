@@ -311,6 +311,121 @@ def kg_invalidate(
         )
 
 
+def kg_supersede(
+    subject: str,
+    predicate: str,
+    old_object: str,
+    new_object: str,
+    proof: str,
+    *,
+    subject_type: str = "concept",
+    object_type: str = "concept",
+    transcript_id: str | None = None,
+    char_start: int | None = None,
+    project_path: str | None = None,
+    occurred_at: str | None = None,
+    record_audit: bool = False,
+    strategy_id: str = "lww",
+) -> dict[str, object]:
+    """Supersede a fact: close the old ``(subject, predicate, old_object)`` edge
+    and add the new ``(subject, predicate, new_object)`` edge.
+
+    This is the Phase-7 supersession seam. When ``record_audit`` is True (the
+    caller opts in; default OFF for backward-compat), the superseded fact is
+    preserved in the append-only ``kg_audit_resolutions`` trail via the typed
+    resolution operator named by ``strategy_id`` (N3 recoverability) — the old
+    edge becomes the loser, the new edge the winner. The belief-time close and
+    the audit row are both append-only; no row is deleted or overwritten.
+
+    Returns ``{"closed": <n>, "added": "added"|"exists", "audited": <n>}``.
+    """
+    if project_path is None:
+        project_path = simba.db.resolve_project_id()
+
+    losers: list[dict[str, object]] = []
+    if record_audit:
+        with simba.db.connect():
+            rows = KgEdge.select().where(
+                (KgEdge.subject == subject)
+                & (KgEdge.predicate == predicate)
+                & (KgEdge.object == old_object)
+                & (KgEdge.project_path == project_path)
+                & (KgEdge.valid_to.is_null())
+            )
+            losers = [_row_to_dict(r) for r in rows]
+
+    closed = kg_invalidate(
+        subject, predicate, old_object, project_path=project_path
+    )
+    added = kg_add(
+        subject,
+        predicate,
+        new_object,
+        proof,
+        subject_type=subject_type,
+        object_type=object_type,
+        transcript_id=transcript_id,
+        char_start=char_start,
+        project_path=project_path,
+        occurred_at=occurred_at,
+    )
+
+    audited = 0
+    if record_audit and losers:
+        import simba.neuron.resolve_ops as resolve_ops
+
+        with simba.db.connect():
+            winner_row = (
+                KgEdge.select()
+                .where(
+                    (KgEdge.subject == subject)
+                    & (KgEdge.predicate == predicate)
+                    & (KgEdge.object == new_object)
+                    & (KgEdge.project_path == project_path)
+                    & (KgEdge.valid_to.is_null())
+                )
+                .first()
+            )
+            winner_id = winner_row.id if winner_row else -1
+
+        now = _now()
+        for loser in losers:
+            winner_fact = {
+                "edge_id": winner_id,
+                "subject": subject,
+                "predicate": predicate,
+                "object": new_object,
+                "confidence": 0.8,
+                "valid_from": now,
+                "valid_to": "9999-12-31",
+                "occurred_at": occurred_at,
+                "provenance": proof,
+            }
+            loser_fact = {
+                "edge_id": loser["id"],
+                "subject": loser["subject"],
+                "predicate": loser["predicate"],
+                "object": loser["object"],
+                "confidence": 0.8,
+                "valid_from": loser.get("valid_from") or "",
+                "valid_to": "9999-12-31",
+                "occurred_at": loser.get("occurred_at"),
+                "provenance": loser.get("proof") or "",
+            }
+            # The new edge is the winner by construction (deliberate
+            # supersession): it has a later valid_from and a higher edge_id, so
+            # the LWW selection key (valid_from, edge_id) elects it. Stamp the
+            # audit with the caller's strategy id for provenance.
+            _winner, audit = resolve_ops.resolve_pair_unchecked(
+                winner_fact, loser_fact, strategy_id="lww"
+            )
+            audit.strategy_id = strategy_id
+            resolve_ops.record_audit(audit, project_path=project_path)
+            audited += 1
+
+    return {"closed": closed, "added": added, "audited": audited}
+
+
 def kg_neighbors(
     entity: str,
     *,
