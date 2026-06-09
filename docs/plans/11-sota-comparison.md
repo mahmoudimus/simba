@@ -18,9 +18,15 @@ cheap → use it as the single grader for simba **and** the baselines.
 - **Baselines runnable locally** (source cloned in `~/src/ai/memory`, not yet
   installed): **`mem0`** (the most-cited LoCoMo baseline) and **`letta`** (MemGPT
   lineage). These we can run end-to-end → grade their answers with the same judge.
-- **Published-only baselines:** Zep / Graphiti (cloud-leaning, hard to self-host) →
-  use their published numbers + a small **calibration subset** (same triples graded
-  by both deepseek-v4 and GPT-4o) to place them on our axis with a known offset.
+- **Published-only baselines:** Zep / Graphiti (cloud-leaning). **GPT-4o — the judge
+  behind every published LoCoMo/LME number — is deprecated/unserved**, so those
+  numbers are a **frozen, un-extendable axis**: we can't re-grade their predictions
+  and can't calibrate a current judge against GPT-4o. Calibration bridge is dead.
+  Published-only systems are **loose references only**; the sole real comparison is
+  **reproduce + re-judge with v4**.
+- **Fully-local judge fallback** (offline / zero-API only): **Qwen3-30B-A3B**
+  (MoE, ≈GPT-4o-class, runs on Mac-MLX or the 4090). A capability *downgrade* from
+  v4-pro — use only if API-free grading is required; otherwise v4-pro is stronger.
 - **Datasets on hand:** `locomo10.json`, `longmemeval_oracle.json`,
   `HaluMem-Medium.jsonl`, `hotpot_dev_distractor_v1.json`. **Missing:**
   `longmemeval_s` (the hard full haystack — fetch for the real LME test).
@@ -36,8 +42,8 @@ cheap → use it as the single grader for simba **and** the baselines.
    (question, gold, predicted) triples → one leaderboard, one axis.
 4. **Datasets:** LoCoMo (have), LongMemEval — fetch `_s` (hard) + keep oracle as
    upper bound, HaluMem (have). HotpotQA stays the multi-hop recall instrument.
-5. **Bridge published-only (Zep):** ~50–100-triple calibration set graded by both
-   deepseek-v4 and GPT-4o → report the offset, place Zep's published number ±delta.
+5. **Published-only (Zep):** GPT-4o is gone → no calibration possible. Cite as a
+   loose reference only, or reproduce it too — never a fake apples-to-apples.
 6. **Report:** `BENCHMARKS.md` gains a "vs baselines (deepseek-v4 judge)" block;
    record per system + git SHA in `results.jsonl`.
 
@@ -57,3 +63,44 @@ A) Fetch `longmemeval_s`; wire `judge.model=deepseek-v4-pro`; re-baseline **simb
    under the v4 judge (cheap, no new system). →
 B) Stand up **mem0** on LoCoMo, grade with v4, first head-to-head. →
 C) Add **letta**; add LongMemEval_s + HaluMem; (optional) Zep calibration bridge.
+
+## Step A result (2026-06-08) — simba on the v4 axis
+
+answerer=`deepseek-v4-flash`, judge=`deepseek-v4-pro` (single judge for everyone):
+- **LoCoMo QA = 0.426** (n=122); recall@5=0.614 (unchanged, answerer-independent)
+- **LongMemEval-oracle QA = 0.644** (n=180); recall@5=0.815
+
+Lower than prior local-judge runs (LoCoMo 0.54 gpt-oss/Qwen; LME-oracle 0.79) —
+**v4-pro is a stricter grader**. That's the whole point: one strict current judge,
+same for every system. These are the comparable-axis baselines for Step B (mem0).
+
+## Step B result (2026-06-08) — simba vs mem0, same axis
+
+Same 122 LoCoMo cases, same answerer (`deepseek-v4-flash`), same judge
+(`deepseek-v4-pro`). mem0 graded TWICE — its harness `grade.py` AND simba's exact
+judge path (`build_judge_prompt`+`_extract_json`) — both agree, so it's not a
+grading artifact:
+
+| System (same axis) | LoCoMo QA |
+|---|---|
+| **simba** | **0.426** (n=122) |
+| mem0-OSS | **~0.09–0.10** (11/114; single-hop 0.0, multi-hop 0.14) |
+
+**This is NOT "simba beats mem0 / simba is SoTA."** Critical caveats:
+- We ran mem0's **OSS `mem0.Memory`** with **deepseek-v4-flash** extraction +
+  **bge-small** embedder — NOT mem0's paper config (hosted Platform + OpenAI
+  embeddings + GPT-4 extraction + server-side graph/rerank), which reports ~66%.
+- The dominant failure is mem0's **store-time LLM fact-extraction** mangling LoCoMo
+  temporal facts with a non-GPT-4 LLM (hallucinated absolute dates 2023→"2026",
+  summarized-away specifics → "No information available" on temporal Qs).
+
+**The real, defensible finding = architecture robustness, not a leaderboard win:**
+simba's **store-raw-memories + hybrid retrieve** is robust to a weaker/substituted
+LLM, whereas mem0's **extract-facts-at-store** is only as good as its extraction
+LLM — it collapses off GPT-4. With the SAME (non-frontier) LLM stack, simba retains
+the facts mem0 loses. To claim anything about mem0's *ceiling* we'd need its real
+GPT-4 config (impractical now: GPT-4o deprecated, hosted needs a paid key).
+
+**Methodology learning:** reproducing baselines "fairly" is itself a finding —
+extract-first memory systems are LLM-dependent in a way retrieve-raw systems aren't,
+so a same-stack comparison flatters retrieve-raw. Report the stack explicitly.

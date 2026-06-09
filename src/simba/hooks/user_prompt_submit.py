@@ -80,7 +80,7 @@ def main(hook_input: dict) -> str:
             prompt, project_path=project_path, min_similarity=cfg.prompt_min_similarity
         )
         formatted = simba.hooks._memory_client.format_memories(
-            memories, source="user-prompt"
+            memories, source="user-prompt", query=prompt
         )
         if formatted:
             parts.append(formatted)

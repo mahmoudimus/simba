@@ -33,6 +33,18 @@ class NeuronConfig:
     induce_min_activations: int = 3
     induce_min_confidence: float = 0.7
     contradiction_sample_size: int = 200
+    # Phase 7 contradiction-resolution operators (borrowed from toki).
+    # Default-OFF: when False, REVISE keeps the legacy entrenchment-only
+    # dormancy path. When True, contradictions are resolved by the typed
+    # operator named in ``resolution_default_operator`` and the superseded
+    # fact is preserved in the append-only ``kg_audit_resolutions`` trail
+    # (N3 recoverability). ``judge_log_enabled`` gates the keyed judge-log
+    # used for deterministic AwaitConfirm / PerRule replay (N1 defence).
+    resolution_ops_enabled: bool = False
+    resolution_default_operator: str = "lww"  # lww / evi / await / rule
+    judge_log_enabled: bool = False
+    audit_trail_table: str = "kg_audit_resolutions"
+    judge_log_table: str = "neuron_judge_log"
 
 
 # Backward-compat alias for existing callers that constructed ``ServerConfig``.
