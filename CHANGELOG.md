@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-08
+
 ### Added
 
 - **Built-in redirect rule for the grep→rg `-r` trap** — every project now gets it
@@ -15,6 +17,14 @@
 - **Per-rule redirect `mode`** (`RedirectRule.mode`, "deny"|"rewrite"; empty ⇒
   global) so a safe, unambiguous fix can auto-apply even when the project default
   is `deny` (the built-in rg rule uses it).
+
+### Fixed
+
+- **Eval faithfulness:** `build_answer_prompt` now mirrors `format_memories` (date
+  labels + newest flag, no recency-resolution instruction). An A/B (deepseek)
+  showed the instruction is a no-op for a capable consumer — the date+newest
+  annotation the daemon already ships is the lever — so the benchmark stops
+  handing the answerer a hint the product never injects.
 
 ## [0.6.0] — 2026-06-08
 
