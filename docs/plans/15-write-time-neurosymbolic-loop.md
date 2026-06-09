@@ -58,3 +58,31 @@ the conflict-lever verdict ([[answer-time-conflict-surfacing-lever]]).
 SubtleMemory contradictory (primary) + HaluMem (forgetting/conflict) + non-regression on
 complementary/nuanced (the gate) and the bundled recall sets (no latency/recall hit when
 off). Honesty rules throughout ([[eval-do-not-chase-1.0]]); report flat/negative.
+
+---
+
+## B1 result — GO (2026-06-09)
+Added a `pairwise` detection strategy (`memory.conflict_detect_strategy`, default
+`single`; `conflict_detect_max_pairs=45`). End-to-end SubtleMemory **contradictory**
+(n=30, k=8, deepseek-v4-flash answerer + detector, deepseek-v4-pro judge):
+
+| arm | accuracy | detection fire-rate |
+|---|---|---|
+| no-lever | 0.033 | — |
+| lever (single) | 0.267 | 0.267 |
+| **lever (pairwise)** | **0.367** | **0.467** |
+
+Within-run (same cases/k): **pairwise > single** (+0.10 acc, +0.20 fire), fire-rate
+0.467 approaching the 0.65 clean-fact ceiling ⇒ remaining gap is extraction noise (B3).
+Both ≫ the no-lever 0.033 baseline and ≫ the 0.1 kill threshold ⇒ the detect→surface
+chain **converts** (better detection ⇒ better answers). Caveat: absolute numbers are
+k/sample-sensitive (single was 0.05 at n=20/k=10 in `docs/plans/14`); the *ordering* is
+robust, the *magnitudes* need a larger-n firming run. **Verdict: proceed to B2.**
+
+## B2 — the shippable write-time architecture (next)
+Answer-time pairwise is O(k²) LLM calls/query — fine for measurement, too slow to ship.
+Move it to **write time**: on store, compare a new memory against its nearest neighbors
+(O(neighbors), amortized), persist detected conflicts as edges / `neuron/resolve_ops.py`
+audit rows; recall-time **reads** pre-computed conflicts and annotates (zero answer-time
+detection latency); answer-time surfaces. Then B3 (extraction density → recall toward
+the 0.65 ceiling).
