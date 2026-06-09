@@ -450,6 +450,28 @@ simba eval leaderboard                          # render BENCHMARKS.md from resu
 - **Multi-hop instruments (default-OFF, measured)**: entity-bridge (`memory.entity_bridge_enabled`, the one mechanism with a positive external signal) and Track B retrieval-time GraphRAG (`memory.kg_ppr_enabled`, a measured negative kept as an instrument). Both fold a third graph arm into recall before rescore; off until a proven in-repo delta.
 - Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.
 
+### Where simba stands — measured, on one axis (not a leaderboard SoTA claim)
+
+The honest position from a **same-axis** program (one answerer + one judge for *every* system, so only the memory system varies): simba is **competitive-with / ahead-of the OSS baselines we could run, robust to a weaker LLM and to a real distractor haystack, and gradeable as GPT-4o-equivalent — but a demonstrated leaderboard SoTA is _unproven_, and we don't claim it.**
+
+**Protocol.** Answerer = `deepseek-v4-flash`, judge = `deepseek-v4-pro` (a *different* model — no self-grading), identical question set + gold for every system.
+
+| simba (deepseek-v4 axis) | recall@5 | QA |
+|---|---|---|
+| LoCoMo (n=122, stratified) | 0.61 | **0.426** |
+| LongMemEval-oracle (n=180) | 0.82 | 0.644 |
+| LongMemEval-**s**, real haystack (n=30, ~498 turns/q) | 0.78 | **0.567** |
+
+The oracle→real-haystack drop is only **−0.04 recall@5 / −0.08 QA** — retrieval holds up against hundreds of distractor sessions, not a collapse.
+
+- **Same-axis head-to-head (LoCoMo QA, identical 122 cases/answerer/judge):** simba **0.426** vs **mem0-OSS ~0.09** vs **letta = could-not-reproduce** (v0.16.8 runtime is Postgres-only). The simba-vs-mem0 gap is **architecture robustness**, not a ceiling win: simba *stores raw* and reads at answer time, so it survives a substituted LLM; mem0 *extracts facts at store time*, which collapses off a GPT-4-class extractor (its published ~0.66 used the hosted Platform + GPT-4).
+- **Validity check 1 — the judge ≈ GPT-4o.** On 122 LoCoMo triples, `deepseek-v4-pro` and GPT-4o agree **98.4%** (Cohen's κ = 0.90) with *zero net bias* — so these numbers grade as GPT-4o-equivalent (GPT-4o is the judge behind the public leaderboards).
+- **Validity check 2 — the answerer choice is non-penalizing.** Swapping the answerer `deepseek-v4-flash` → `gpt-4o` (same retrieval, same judge, same cases) moves LoCoMo QA **0.38 → 0.31** (Δ −0.07, McNemar p≈0.15 — *not significant*): deepseek-v4 ≈ gpt-4o as answerer, so the deepseek-based numbers don't understate simba.
+- **What we cannot claim, and why.** The published leaderboards (mem0 ~66%, Zep, ReMe ~86) ran those systems in their **real configs** (hosted graph/rerank + GPT-4-class), not the bare OSS stacks we reproduced — so simba's 0.43 is **not** directly comparable to a published 0.66. The judge and answerer axes are bridged; the remaining gap is the **system stack**, which would need reproducing each baseline in its real config.
+- **A measured weakness, stated plainly.** On **SubtleMemory** (relational/contradiction eval) simba surfaces an unresolved contradiction **0/20 even with _perfect_ retrieval** — it collapses the conflict at answer-generation time. That is an *answer-time* gap, not a retrieval one, and it is the clearest next target.
+
+Full methodology + numbers: [`docs/plans/11-sota-comparison.md`](docs/plans/11-sota-comparison.md) and [`docs/plans/13-sota-stepc-verdict.md`](docs/plans/13-sota-stepc-verdict.md). The honesty rule throughout: tune on dev, report on test, never tune to the number, and report flat/negative results.
+
 ## Neuron — Neuro-Symbolic Logic Server
 
 Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools (Z3 theorem prover, Souffle Datalog) and a truth database.
