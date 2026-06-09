@@ -188,6 +188,14 @@ class MemoryConfig:
     # minimum candidate count; always fail-open (any error leaves context intact).
     conflict_surfacing_enabled: bool = False
     conflict_surfacing_min_memories: int = 2  # min candidates before detection runs
+    # Detection strategy. "single" (default) = one LLM call over all top-k
+    # memories at once ("do any of these conflict?"). "pairwise" = check candidate
+    # pairs in isolation, returning the first flagged pair. Isolating the pair
+    # lifts detection recall on subtle/buried conflicts (the all-at-once prompt
+    # buries the conflicting pair among k distractors); pairwise costs up to
+    # ``conflict_detect_max_pairs`` LLM calls (short-circuits on the first hit).
+    conflict_detect_strategy: str = "single"  # "single" | "pairwise"
+    conflict_detect_max_pairs: int = 45  # cap on pairs checked in "pairwise" mode
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

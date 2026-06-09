@@ -87,6 +87,69 @@ def detect_conflict(
     return ConflictResult(a=memories[a], b=memories[b], description=description.strip())
 
 
+def build_pair_detect_prompt(a: str, b: str, query: str) -> str:
+    """Prompt the model to judge whether exactly TWO memories conflict.
+
+    A focused variant of :func:`build_detect_prompt`: isolating the pair removes
+    the distractors that bury a subtle contradiction in the all-at-once prompt.
+    Replies JSON only: ``{"conflict": bool, "description": "<short>"}``.
+    """
+    return (
+        "You are checking two retrieved memories for a contradiction that matters "
+        "for answering a question. Decide whether the TWO memories below CONFLICT "
+        "— mutually exclusive, contradictory, or competing claims that cannot both "
+        "be true for this question. If they merely differ in topic or are "
+        "compatible, that is NOT a conflict. Reply with JSON only: "
+        '{"conflict": true, "description": "<short explanation>"} or '
+        '{"conflict": false}.\n\n'
+        f"Question: {query}\nMemory A: {a}\nMemory B: {b}\nJSON:"
+    )
+
+
+def detect_conflict_pairwise(
+    memories: list[str],
+    query: str,
+    *,
+    llm_client: typing.Any,
+    max_pairs: int = 45,
+) -> ConflictResult | None:
+    """Check candidate PAIRS in isolation; return the first flagged conflict.
+
+    For each unordered pair ``(i < j)`` — up to ``max_pairs`` pairs in order —
+    one focused LLM call asks whether THOSE TWO memories conflict for the
+    question. Isolating the pair lifts detection recall on subtle conflicts that
+    a single all-at-once prompt buries among k distractors. Short-circuits on the
+    first pair the model flags, returning a ``ConflictResult`` (``a=memories[i]``,
+    ``b=memories[j]``). FAIL-OPEN: returns ``None`` on empty input, fewer than two
+    memories, a missing client, or any exception — never raises into the recall
+    path.
+    """
+    if not memories or len(memories) < 2 or llm_client is None:
+        return None
+    try:
+        checked = 0
+        n = len(memories)
+        for i in range(n):
+            for j in range(i + 1, n):
+                if checked >= max_pairs:
+                    return None
+                checked += 1
+                verdict = llm_client.complete_json(
+                    build_pair_detect_prompt(memories[i], memories[j], query)
+                )
+                if not isinstance(verdict, dict) or not verdict.get("conflict"):
+                    continue
+                description = verdict.get("description")
+                if not isinstance(description, str):
+                    description = ""
+                return ConflictResult(
+                    a=memories[i], b=memories[j], description=description.strip()
+                )
+    except Exception:
+        return None
+    return None
+
+
 def surface_directive(conflict: ConflictResult) -> str:
     """A directive that NAMES the specific conflict and tells the consumer to
     surface it (state what must be confirmed) rather than pick a side."""
@@ -109,8 +172,10 @@ def conflict_note(
 
     Returns ``""`` (with no LLM cost) when the feature is disabled, the candidate
     set is below ``cfg.conflict_surfacing_min_memories``, or no ``llm_client`` is
-    wired. Otherwise runs ``detect_conflict`` and returns ``surface_directive``
-    for a real conflict, or ``""`` when none is found.
+    wired. Otherwise runs the configured detector (``cfg.conflict_detect_strategy``
+    — ``"single"`` one all-at-once call, ``"pairwise"`` focused pairs in isolation)
+    and returns ``surface_directive`` for a real conflict, or ``""`` when none is
+    found.
     """
     if not getattr(cfg, "conflict_surfacing_enabled", False):
         return ""
@@ -119,7 +184,14 @@ def conflict_note(
     min_memories = getattr(cfg, "conflict_surfacing_min_memories", 2)
     if len(memories) < min_memories:
         return ""
-    conflict = detect_conflict(memories, query, llm_client=llm_client)
+    strategy = getattr(cfg, "conflict_detect_strategy", "single")
+    if strategy == "pairwise":
+        max_pairs = getattr(cfg, "conflict_detect_max_pairs", 45)
+        conflict = detect_conflict_pairwise(
+            memories, query, llm_client=llm_client, max_pairs=max_pairs
+        )
+    else:
+        conflict = detect_conflict(memories, query, llm_client=llm_client)
     if conflict is None:
         return ""
     return surface_directive(conflict)
