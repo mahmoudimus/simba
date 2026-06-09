@@ -18,9 +18,15 @@ cheap → use it as the single grader for simba **and** the baselines.
 - **Baselines runnable locally** (source cloned in `~/src/ai/memory`, not yet
   installed): **`mem0`** (the most-cited LoCoMo baseline) and **`letta`** (MemGPT
   lineage). These we can run end-to-end → grade their answers with the same judge.
-- **Published-only baselines:** Zep / Graphiti (cloud-leaning, hard to self-host) →
-  use their published numbers + a small **calibration subset** (same triples graded
-  by both deepseek-v4 and GPT-4o) to place them on our axis with a known offset.
+- **Published-only baselines:** Zep / Graphiti (cloud-leaning). **GPT-4o — the judge
+  behind every published LoCoMo/LME number — is deprecated/unserved**, so those
+  numbers are a **frozen, un-extendable axis**: we can't re-grade their predictions
+  and can't calibrate a current judge against GPT-4o. Calibration bridge is dead.
+  Published-only systems are **loose references only**; the sole real comparison is
+  **reproduce + re-judge with v4**.
+- **Fully-local judge fallback** (offline / zero-API only): **Qwen3-30B-A3B**
+  (MoE, ≈GPT-4o-class, runs on Mac-MLX or the 4090). A capability *downgrade* from
+  v4-pro — use only if API-free grading is required; otherwise v4-pro is stronger.
 - **Datasets on hand:** `locomo10.json`, `longmemeval_oracle.json`,
   `HaluMem-Medium.jsonl`, `hotpot_dev_distractor_v1.json`. **Missing:**
   `longmemeval_s` (the hard full haystack — fetch for the real LME test).
@@ -36,8 +42,8 @@ cheap → use it as the single grader for simba **and** the baselines.
    (question, gold, predicted) triples → one leaderboard, one axis.
 4. **Datasets:** LoCoMo (have), LongMemEval — fetch `_s` (hard) + keep oracle as
    upper bound, HaluMem (have). HotpotQA stays the multi-hop recall instrument.
-5. **Bridge published-only (Zep):** ~50–100-triple calibration set graded by both
-   deepseek-v4 and GPT-4o → report the offset, place Zep's published number ±delta.
+5. **Published-only (Zep):** GPT-4o is gone → no calibration possible. Cite as a
+   loose reference only, or reproduce it too — never a fake apples-to-apples.
 6. **Report:** `BENCHMARKS.md` gains a "vs baselines (deepseek-v4 judge)" block;
    record per system + git SHA in `results.jsonl`.
 
@@ -57,3 +63,13 @@ A) Fetch `longmemeval_s`; wire `judge.model=deepseek-v4-pro`; re-baseline **simb
    under the v4 judge (cheap, no new system). →
 B) Stand up **mem0** on LoCoMo, grade with v4, first head-to-head. →
 C) Add **letta**; add LongMemEval_s + HaluMem; (optional) Zep calibration bridge.
+
+## Step A result (2026-06-08) — simba on the v4 axis
+
+answerer=`deepseek-v4-flash`, judge=`deepseek-v4-pro` (single judge for everyone):
+- **LoCoMo QA = 0.426** (n=122); recall@5=0.614 (unchanged, answerer-independent)
+- **LongMemEval-oracle QA = 0.644** (n=180); recall@5=0.815
+
+Lower than prior local-judge runs (LoCoMo 0.54 gpt-oss/Qwen; LME-oracle 0.79) —
+**v4-pro is a stricter grader**. That's the whole point: one strict current judge,
+same for every system. These are the comparable-axis baselines for Step B (mem0).
