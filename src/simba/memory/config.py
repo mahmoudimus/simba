@@ -196,6 +196,16 @@ class MemoryConfig:
     # ``conflict_detect_max_pairs`` LLM calls (short-circuits on the first hit).
     conflict_detect_strategy: str = "single"  # "single" | "pairwise"
     conflict_detect_max_pairs: int = 45  # cap on pairs checked in "pairwise" mode
+    # Write-time conflict engine (B2, src/simba/memory/conflict_store.py): move
+    # detection OFF the answer-time path. When enabled, on store a new memory is
+    # compared against its nearest neighbors (one focused pairwise LLM call each,
+    # capped at conflict_write_max_neighbors); any real contradiction is persisted
+    # to the append-only memory_conflicts table. At recall the precomputed conflict
+    # among the recalled set is READ (no detection latency) and surfaced via the
+    # same directive. Default-OFF — the engine is exposed for measurement; the live
+    # daemon store-route hook is a deferred follow-up (B2b).
+    conflict_detect_on_write: bool = False
+    conflict_write_max_neighbors: int = 5  # neighbors checked per write
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
