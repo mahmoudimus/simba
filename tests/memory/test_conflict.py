@@ -348,6 +348,35 @@ def test_conflict_note_from_store_reads_recorded_conflict(
     assert "confirm" in note.lower()  # steers toward surfacing
 
 
+def test_conflict_note_from_store_uses_description_not_raw_ids(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Regression (B2 smoke): the recall-read directive must lead with the LLM
+    # description, NOT the opaque memory IDs (which are noise to the answerer and
+    # were why the write-time path underperformed the live B1 directive).
+    cfg = FakeCfg(conflict_surfacing_enabled=True)
+    desc = "Memory A says the user prefers reusable bags; Memory B says never"
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict(
+            "related-persona_0-export-deadbeef-s1",
+            "related-persona_0-export-deadbeef-s2",
+            desc,
+            project_path="proj",
+            now=1.0,
+        )
+        note = conflict.conflict_note_from_store(
+            [
+                "related-persona_0-export-deadbeef-s1",
+                "related-persona_0-export-deadbeef-s2",
+            ],
+            project_path="proj",
+            cfg=cfg,
+        )
+    assert desc in note
+    assert "deadbeef" not in note  # raw memory IDs must NOT leak into the directive
+    assert "confirm" in note.lower()
+
+
 def test_conflict_note_from_store_empty_when_disabled(
     tmp_path: pathlib.Path,
 ) -> None:

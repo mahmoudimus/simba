@@ -161,6 +161,22 @@ def surface_directive(conflict: ConflictResult) -> str:
     )
 
 
+def surface_directive_from_description(description: str) -> str:
+    """Directive built from a precomputed conflict's description alone.
+
+    The recall-read path (:func:`conflict_note_from_store`) has the two memories'
+    *ids*, not their texts — and the LLM-generated ``description`` already names
+    both sides ("Memory A says X; Memory B says Y"). Leading with opaque ids is
+    noise to the answerer (it underperformed the live B1 directive in the B2
+    smoke), so build the directive from the description.
+    """
+    body = (description or "").strip() or "two retrieved memories conflict"
+    return (
+        f"NOTE: {body}. Do not choose one or guess; surface this conflict and "
+        "state what must be confirmed to resolve it."
+    )
+
+
 def conflict_note(
     memories: list[str],
     query: str,
@@ -255,10 +271,11 @@ def conflict_note_from_store(
 
     Reads ``conflict_store.conflicts_among(recalled_ids, project_path=...)`` and,
     if any conflict among the recalled set was precomputed at write time, builds a
-    :func:`surface_directive` from the first recorded conflict (its two memory ids
-    + stored description). Returns ``""`` — with zero LLM cost and no detection —
-    when the feature is disabled, no conflict is recorded, or anything fails. Must
-    run inside a ``simba.db.connect()`` context (the store helpers do).
+    directive from the first recorded conflict's stored description (via
+    :func:`surface_directive_from_description` — the store has memory *ids*, not
+    texts, and the description already names both sides). Returns ``""`` — with
+    zero LLM cost and no detection — when the feature is disabled, no conflict is
+    recorded, or anything fails. Must run inside a ``simba.db.connect()`` context.
     """
     if not getattr(cfg, "conflict_surfacing_enabled", False):
         return ""
@@ -271,6 +288,4 @@ def conflict_note_from_store(
     if not rows:
         return ""
     row = rows[0]
-    return surface_directive(
-        ConflictResult(a=row.memory_a, b=row.memory_b, description=row.description)
-    )
+    return surface_directive_from_description(row.description)
