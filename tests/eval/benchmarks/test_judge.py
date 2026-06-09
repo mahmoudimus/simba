@@ -61,6 +61,22 @@ def test_answer_prompt_parses_halumem_date_format() -> None:
     assert "2025-09-04" in p
 
 
+def test_answer_prompt_mirrors_format_memories_no_resolution_instruction() -> None:
+    # Faithful to the daemon's format_memories: annotate (date label + newest
+    # flag) but DON'T inject a recency-resolution instruction — the product never
+    # does, and an A/B showed it's a no-op for a capable consumer. The eval must
+    # measure what ships, not hand the answerer an extra hint.
+    p = judge.build_answer_prompt(
+        "current income?",
+        ["income 18000", "income 22000"],
+        dates=["2025-01-01", "2025-06-01"],
+    )
+    assert "[2025-01-01]" in p and "[2025-06-01]" in p  # date labels kept
+    assert "(most recent)" in p  # newest flag kept
+    # no resolution instruction (the phrase the A/B showed was a no-op)
+    assert "current truth" not in p.lower()
+
+
 def test_score_case_threads_dates_from_id2date() -> None:
     case = EvalCase(id="q1", query="income?", relevant_ids=["c1"], answer="22000")
     llm = FakeLlm(answer="22000", verdict={"correct": True})

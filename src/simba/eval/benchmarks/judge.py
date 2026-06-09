@@ -80,13 +80,17 @@ def build_answer_prompt(
             flag = " (most recent)" if i == newest_idx else ""
             lines.append(f"- {tag}{c}{flag}")
         joined = "\n".join(lines)
+        # Mirror the daemon's format_memories: annotate each memory with its date
+        # and flag the most recent, but do NOT inject a recency-resolution
+        # instruction — the product never does, and an A/B (deepseek) showed the
+        # instruction is a no-op for a capable consumer (the date+newest
+        # annotation already does the work). Keeps the benchmark measuring what
+        # ships rather than handing the answerer an extra hint.
         return (
             "You are answering a question using ONLY the conversation memories "
-            "below. Each memory is tagged with the date it was recorded. When "
-            "memories give different values for the same fact, the one marked "
-            "(most recent) is the current truth. If the answer is not present, say "
-            f"you don't know. Answer concisely.\n\nMemories:\n{joined}\n\n"
-            f"Question: {question}\nAnswer:"
+            "below. Each memory is tagged with the date it was recorded. If the "
+            "answer is not present, say you don't know. Answer concisely.\n\n"
+            f"Memories:\n{joined}\n\nQuestion: {question}\nAnswer:"
         )
     joined = "\n".join(f"- {c}" for c in contexts)
     return (
