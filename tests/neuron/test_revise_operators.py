@@ -90,6 +90,35 @@ def test_revise_with_operators_records_audit(tmp_db) -> None:
     assert audit_rows[0]["strategy_id"] == "lww"
 
 
+def test_revise_with_operators_preserves_loser_provenance(tmp_db) -> None:
+    """N2/N3: the audit row's merged provenance must dominate BOTH conflicting
+    edges' source lineage — the loser is reconstructable, no partition drifts.
+
+    Regression: ``_fetch_edges`` must carry the edge ``proof`` into the fact so
+    ``_to_fact`` populates provenance; otherwise the merge is hollow (empty
+    summands) and the N2 reconstruction invariant silently fails.
+    """
+    import simba.neuron.resolve_ops as ops
+    from simba.neuron.config import NeuronConfig
+    from simba.neuron.revise import revise_unsat_core
+
+    ids = _seed_conflict()
+    cfg = NeuronConfig(
+        revise_enabled=True,
+        resolution_ops_enabled=True,
+        resolution_default_operator="lww",
+    )
+    result = revise_unsat_core(ids, project_path="/proj", cfg=cfg)
+    rows = ops.query_audit(
+        loser_edge_id=result.dormant_edge_ids[0], project_path="/proj"
+    )
+    assert len(rows) == 1
+    merge = rows[0]["provenance_merge"]
+    # Both summands' source lineage is reachable in the merge (the "test" proof
+    # _seed_conflict passes to kg_add for both edges).
+    assert ops.provenance_dominates("test", merge)
+
+
 def test_revise_disabled_returns_empty(tmp_db) -> None:
     from simba.neuron.config import NeuronConfig
     from simba.neuron.revise import revise_unsat_core
