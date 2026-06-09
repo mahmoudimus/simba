@@ -83,6 +83,10 @@ def _fetch_edges(unsat_edge_ids: list[int], project_path: str) -> list[dict]:
                     "valid_from": r.valid_from,
                     "valid_to": r.valid_to,
                     "confidence": getattr(r, "confidence", 0.8) or 0.8,
+                    # Carry the source lineage so the operator path's provenance
+                    # merge dominates both summands (N2/N3 reconstruction). The
+                    # legacy path ignores it; only _to_fact reads "proof".
+                    "proof": r.proof,
                 }
             )
     return out
