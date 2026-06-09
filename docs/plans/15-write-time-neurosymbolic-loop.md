@@ -75,9 +75,28 @@ Added a `pairwise` detection strategy (`memory.conflict_detect_strategy`, defaul
 Within-run (same cases/k): **pairwise > single** (+0.10 acc, +0.20 fire), fire-rate
 0.467 approaching the 0.65 clean-fact ceiling ⇒ remaining gap is extraction noise (B3).
 Both ≫ the no-lever 0.033 baseline and ≫ the 0.1 kill threshold ⇒ the detect→surface
-chain **converts** (better detection ⇒ better answers). Caveat: absolute numbers are
-k/sample-sensitive (single was 0.05 at n=20/k=10 in `docs/plans/14`); the *ordering* is
-robust, the *magnitudes* need a larger-n firming run. **Verdict: proceed to B2.**
+chain **converts** (better detection ⇒ better answers).
+
+### B1 FIRMED (n=60, k=8) — verdict: proceed to B2
+| arm | accuracy | fire-rate |
+|---|---|---|
+| no-lever | 0.033 | — |
+| lever (single) | **0.267** | 0.333 |
+| lever (pairwise) | **0.317** | 0.400 |
+
+- **The headline win is the LEVER ITSELF: 0.033 → 0.267 (8×)** on contradictory. Single
+  held at 0.267 across both n=30 and n=60 (not optimistic).
+- **Pairwise adds a modest, real increment over single: +0.05 acc / +0.067 fire** (the
+  n=30 +0.10 was a touch lucky). Pairwise is a *refinement*, not the main event.
+- **This CORRECTS `docs/plans/14`**, which reported the lever at ~0.05 — that was an
+  unlucky n=20 sample **at k=10**. The lever is k-sensitive: detection fire-rate climbs
+  **0.15 (k=10 all-at-once) → 0.33 (k=8) → 0.40 (pairwise) → 0.65 (clean isolated pair)**.
+  Fewer candidates fed to detection = less burial = higher recall.
+- **B2 implication:** write-time detection (new memory vs a *few* nearest neighbors) sits
+  at the low-burial end *naturally* — so it makes the lever (a) shippable (no answer-time
+  latency) and (b) high-recall (few candidates) even with cheap single-pass detection;
+  pairwise is an optional extra. Right-sized expectation: B2 ships ~0.27–0.32 contradictory
+  (from 0.03), bounded by the 0.65 detection ceiling × surfacing.
 
 ## B2 — the shippable write-time architecture (next)
 Answer-time pairwise is O(k²) LLM calls/query — fine for measurement, too slow to ship.
