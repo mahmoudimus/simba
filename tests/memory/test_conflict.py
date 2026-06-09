@@ -400,3 +400,194 @@ def test_conflict_note_from_store_empty_when_none_recorded(
             ["mem_a", "mem_b"], project_path="proj", cfg=cfg
         )
     assert note == ""
+
+
+# --- B2b: generous write-time pre-filter + query-aware recall re-check --------
+
+
+class PromptKeyedLlm:
+    """llm_client whose verdict depends on a marker in the prompt text.
+
+    Lets a test assert that the GENEROUS prompt (not the strict one) was the one
+    that flagged the borderline pair: the generous prompt carries a distinctive
+    marker substring, so we return ``conflict: True`` only when it is present.
+    """
+
+    def __init__(self, *, only_if_contains: str, conflict_desc: str = "borderline"):
+        self._marker = only_if_contains
+        self._desc = conflict_desc
+        self.calls = 0
+        self.prompts: list[str] = []
+
+    def complete_json(self, prompt: str):
+        self.calls += 1
+        self.prompts.append(prompt)
+        if self._marker in prompt:
+            return {"conflict": True, "description": self._desc}
+        return {"conflict": False}
+
+
+def test_generous_pair_prompt_differs_from_strict():
+    # The generous prompt must instruct toward RECALL ("could", "plausibly")
+    # whereas the strict prompt insists on mutual exclusion.
+    strict = conflict.build_pair_detect_prompt("A", "B", "q")
+    generous = conflict.build_pair_detect_prompt("A", "B", "q", generous=True)
+    assert strict != generous
+    assert "plausibl" in generous.lower() or "could" in generous.lower()
+    # Default keyword keeps the strict prompt identical to the legacy signature.
+    assert conflict.build_pair_detect_prompt("A", "B", "q", generous=False) == strict
+
+
+def test_detect_on_write_generous_flags_borderline_pair_strict_skips():
+    # A borderline pair the STRICT prompt would skip but the GENEROUS one flags.
+    # The fake only flags when the generous marker is present in the prompt.
+    marker = "could plausibly"  # appears only in the generous prompt
+    neighbors = [("n_old", "The user usually drinks tea in the morning.")]
+
+    strict_llm = PromptKeyedLlm(only_if_contains=marker)
+    strict_out = conflict.detect_conflicts_on_write(
+        "new", "The user had coffee this morning.", neighbors, llm_client=strict_llm
+    )
+    assert strict_out == []  # strict prompt lacks the marker → no flag
+
+    generous_llm = PromptKeyedLlm(only_if_contains=marker)
+    generous_out = conflict.detect_conflicts_on_write(
+        "new",
+        "The user had coffee this morning.",
+        neighbors,
+        llm_client=generous_llm,
+        generous=True,
+    )
+    assert [nid for nid, _ in generous_out] == ["n_old"]
+
+
+def test_detect_on_write_generous_default_false_unchanged():
+    # Default (generous=False) sends the strict prompt — verify by the marker.
+    marker = "could plausibly"
+    llm = PromptKeyedLlm(only_if_contains=marker)
+    conflict.detect_conflicts_on_write("new", "t", [("n", "m")], llm_client=llm)
+    assert all(marker not in p for p in llm.prompts)
+
+
+class RecheckCfg(FakeCfg):
+    """FakeCfg extended with the B2b recall re-check flag."""
+
+    def __init__(self, *, conflict_recall_recheck: bool = False, **kw):
+        super().__init__(**kw)
+        self.conflict_recall_recheck = conflict_recall_recheck
+
+
+def test_recall_recheck_confirms_relevant_candidate(
+    tmp_path: pathlib.Path,
+) -> None:
+    cfg = RecheckCfg(conflict_surfacing_enabled=True, conflict_recall_recheck=True)
+    desc = "Memory A says Paris; Memory B says Berlin"
+    # Confirm-LLM says candidate index 0 is the real, relevant conflict.
+    llm = FakeLlm({"relevant": True, "index": 0})
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict("mem_a", "mem_b", desc, project_path="proj", now=1.0)
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b", "mem_c"],
+            project_path="proj",
+            cfg=cfg,
+            query="Where does Alice live?",
+            llm_client=llm,
+        )
+    assert desc in note
+    assert "confirm" in note.lower()
+    assert llm.calls == 1  # one query-aware confirm call
+
+
+def test_recall_recheck_filters_irrelevant_candidate(
+    tmp_path: pathlib.Path,
+) -> None:
+    # The precision win: a stored candidate the confirm-LLM deems not relevant for
+    # THIS question is dropped → empty directive.
+    cfg = RecheckCfg(conflict_surfacing_enabled=True, conflict_recall_recheck=True)
+    llm = FakeLlm({"relevant": False})
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict(
+            "mem_a", "mem_b", "some conflict", project_path="proj", now=1.0
+        )
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"],
+            project_path="proj",
+            cfg=cfg,
+            query="Totally unrelated question?",
+            llm_client=llm,
+        )
+    assert note == ""
+    assert llm.calls == 1
+
+
+def test_recall_recheck_falls_back_without_llm_or_query(
+    tmp_path: pathlib.Path,
+) -> None:
+    # recheck=True but no llm_client / no query → non-recheck path (first stored).
+    cfg = RecheckCfg(conflict_surfacing_enabled=True, conflict_recall_recheck=True)
+    desc = "first stored conflict"
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict("mem_a", "mem_b", desc, project_path="proj", now=1.0)
+        # No llm_client.
+        note_no_llm = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"],
+            project_path="proj",
+            cfg=cfg,
+            query="some question?",
+        )
+        # No query.
+        llm = FakeLlm({"relevant": True, "index": 0})
+        note_no_query = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"],
+            project_path="proj",
+            cfg=cfg,
+            llm_client=llm,
+        )
+    assert desc in note_no_llm
+    assert desc in note_no_query
+    assert llm.calls == 0  # no query → never reached the confirm call
+
+
+def test_recall_recheck_disabled_default_unchanged(
+    tmp_path: pathlib.Path,
+) -> None:
+    # recheck=False (default): current behavior, no LLM call even if one is wired.
+    cfg = RecheckCfg(conflict_surfacing_enabled=True, conflict_recall_recheck=False)
+    desc = "first stored conflict"
+    llm = FakeLlm({"relevant": True, "index": 0})
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict("mem_a", "mem_b", desc, project_path="proj", now=1.0)
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"],
+            project_path="proj",
+            cfg=cfg,
+            query="some question?",
+            llm_client=llm,
+        )
+    assert desc in note
+    assert llm.calls == 0  # disabled → no confirm call
+
+
+def test_recall_recheck_fail_open_on_confirm_exception(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Any exception in the confirm call → fall back to the non-recheck path.
+    cfg = RecheckCfg(conflict_surfacing_enabled=True, conflict_recall_recheck=True)
+    desc = "first stored conflict"
+    llm = FakeLlm(None, raises=True)
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict("mem_a", "mem_b", desc, project_path="proj", now=1.0)
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"],
+            project_path="proj",
+            cfg=cfg,
+            query="some question?",
+            llm_client=llm,
+        )
+    assert desc in note  # fell back to first stored candidate, never raised
+
+
+def test_default_config_conflict_recall_recheck_is_false():
+    from simba.memory.config import MemoryConfig
+
+    assert MemoryConfig().conflict_recall_recheck is False
