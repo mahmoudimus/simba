@@ -123,8 +123,55 @@ def store_memory(
     return {}
 
 
-def format_memories(memories: list[dict], source: str) -> str:
-    """Format recalled memories as XML context."""
+def _memory_cfg():
+    """Lazy-load the ``memory`` config (registers the section on first use)."""
+    import simba.config
+    import simba.memory.config
+
+    _ = simba.memory.config  # side-effect: registers "memory" section
+    return simba.config.load("memory")
+
+
+def _conflict_note(memories: list[dict], query: str) -> str:
+    """Gated, fail-open answer-time conflict note (default-OFF → "").
+
+    Loads the memory config, and only when ``conflict_surfacing_enabled`` is set
+    does it run the one-LLM-call detection. Disabled (the default) ⇒ zero LLM
+    cost and zero behavior change. Any failure returns "" (context left intact).
+    """
+    if not query:
+        return ""
+    try:
+        cfg = _memory_cfg()
+        if not getattr(cfg, "conflict_surfacing_enabled", False):
+            return ""
+        import simba.llm.client
+        import simba.memory.conflict
+
+        llm_client = simba.llm.client.get_client()
+        if not llm_client.available():
+            return ""
+        texts = [m.get("content", "") for m in memories]
+        return simba.memory.conflict.conflict_note(
+            texts, query, cfg=cfg, llm_client=llm_client
+        )
+    except Exception:
+        return ""
+
+
+def format_memories(
+    memories: list[dict],
+    source: str,
+    *,
+    query: str = "",
+) -> str:
+    """Format recalled memories as XML context.
+
+    When the ``memory`` config has ``conflict_surfacing_enabled`` (default OFF)
+    and ``query`` is supplied, a gated, fail-open conflict-surfacing note is
+    appended after the recalled-memories block. With the flag off this is a pure
+    no-op (no LLM call, identical output).
+    """
     if not memories:
         return ""
 
@@ -155,4 +202,7 @@ def format_memories(memories: list[dict], source: str) -> str:
         lines.append(f"    {content}")
         lines.append("  </memory>")
     lines.append("</recalled-memories>")
+    note = _conflict_note(memories, query)
+    if note:
+        lines.append(note)
     return "\n".join(lines)
