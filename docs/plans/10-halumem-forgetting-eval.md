@@ -256,3 +256,41 @@ context). Memory Conflict is an answer-policy / judge-calibration axis, not a me
 axis. Next experiment to run: add recency/timestamps to the answer context (and/or a
 recency tie-break in scoring) and re-measure Dynamic Update — that is where the 0.22→
 0.86 headroom lives.
+
+---
+
+## Recency-instruction A/B — verdict: lever already shipped (2026-06-08)
+
+The ceiling work pointed at recency. But the daemon's `format_memories` **already**
+annotates injected memories with `created="<date>"` + a `recency="newest"` flag
+(Phase-1). The open question for 0.7.0 was whether to *also* inject an explicit
+recency-resolution **instruction** ("the most recent is the current truth"). The
+prior gpt-oss lift (DU 0.22→0.68) conflated *adding dates* with *the instruction*,
+so it didn't answer that.
+
+**Clean A/B** (deepseek-chat answerer **and** judge — a capable non-Claude consumer;
+same model both arms ⇒ judge bias is common-mode and cancels in the delta). Both
+arms get the **identical** date-labelled + newest-flagged context; the only
+difference is the instruction sentence:
+
+| Category | A: dates+flag, no instruction | B: + instruction | Δ |
+|---|---|---|---|
+| Dynamic Update (n=50) | acc **0.720** / hal 0.220 | 0.660 / 0.300 | −0.060 |
+| Memory Conflict (n=182) | acc **0.780** / hal 0.093 | 0.808 / 0.077 | +0.028 |
+| **Pooled (n=232)** | acc **0.767** | 0.776 | **+0.009 (noise)** |
+
+**Verdict:**
+- The explicit instruction is a **no-op** for a capable consumer (pooled +0.009,
+  inside ±0.04 noise; DU even dips). Claude ≥ deepseek, so it's a no-op there too.
+- **The lever that matters — date labels + newest flag — is already in production**
+  (`format_memories`). With *just* that annotation, deepseek hits 0.72 / 0.78,
+  near the 0.86 oracle. The earlier gpt-oss jump was the **dates**, not the hint.
+- So **recency-aware retrieval is validated and already shipped** — not new 0.7.0
+  work. Don't add the instruction to `format_memories`.
+- **Eval-fidelity fix applied:** `build_answer_prompt` carried the instruction
+  (from the #55 recency change) that the product never injects — handing the
+  answerer an extra hint the daemon doesn't. Dropped it (kept date labels +
+  newest flag), so the benchmark measures what ships. The A/B shows removal is a
+  no-op-to-slight-improvement.
+
+**0.7.0 looks elsewhere** (the recency axis is closed).
