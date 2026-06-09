@@ -133,6 +133,16 @@ class MemoryConfig:
     feedback_weight: float = 0.2
     # Memories whose strength falls below this after a decay pass become dormant.
     strength_dormancy_threshold: float = 0.1
+    # Arousal-modulated decay (Phase 6.5): a multiplier applied to the time-decay
+    # factor (in [0, 1]) as ``d ** arousal_decay_multiplier`` before reinforcement.
+    #   == 1.0 → exact no-op (default; behavior unchanged, zero runtime effect)
+    #   <  1.0 → slower decay (more arousal / importance), memory retains longer
+    #   >  1.0 → faster decay (less arousal), memory is forgotten sooner
+    # Default-OFF: the multiplier is 1.0 and ``arousal_decay_enabled`` is False
+    # until a measured win justifies turning it on. The enabled flag is advisory
+    # documentation — the multiplier of 1.0 is already a behavioral no-op.
+    arousal_decay_enabled: bool = False
+    arousal_decay_multiplier: float = 1.0  # sensible range [0.1, 3.0]; 1.0 = no-op
     # Max non-dormant memories per (type, project_path). 0 = unlimited. When > 0,
     # the weakest memories beyond this cap are set dormant.
     decay_capacity_per_type: int = 0
@@ -168,6 +178,24 @@ class MemoryConfig:
     kg_ppr_top: int = 10  # how many PPR-ranked memories to fold
     kg_ppr_weight: float = 1.0  # RRF-arm weight of the PPR contribution
     kg_ppr_damping: float = 0.85
+    # Answer-time conflict surfacing (src/simba/memory/conflict.py): after recall,
+    # one LLM call asks whether any two retrieved memories CONFLICT for the query;
+    # if so, a directive that NAMES the specific conflict is appended to the
+    # injected context so the answerer surfaces it (states what must be confirmed)
+    # instead of silently picking a side. Default-OFF — a *generic* always-on
+    # directive over-hedges non-conflict cases (measured harm), so this lever is
+    # gated on a detected, named conflict. No LLM cost when disabled or below the
+    # minimum candidate count; always fail-open (any error leaves context intact).
+    conflict_surfacing_enabled: bool = False
+    conflict_surfacing_min_memories: int = 2  # min candidates before detection runs
+    # Detection strategy. "single" (default) = one LLM call over all top-k
+    # memories at once ("do any of these conflict?"). "pairwise" = check candidate
+    # pairs in isolation, returning the first flagged pair. Isolating the pair
+    # lifts detection recall on subtle/buried conflicts (the all-at-once prompt
+    # buries the conflicting pair among k distractors); pairwise costs up to
+    # ``conflict_detect_max_pairs`` LLM calls (short-circuits on the first hit).
+    conflict_detect_strategy: str = "single"  # "single" | "pairwise"
+    conflict_detect_max_pairs: int = 45  # cap on pairs checked in "pairwise" mode
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:

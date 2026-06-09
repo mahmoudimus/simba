@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from simba.kg.store import kg_add, kg_invalidate, kg_query
+from simba.kg.store import kg_add, kg_invalidate, kg_query, kg_supersede
 
-__all__ = ["kg_add", "kg_invalidate", "kg_query"]
+__all__ = ["kg_add", "kg_invalidate", "kg_query", "kg_supersede"]

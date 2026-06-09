@@ -62,6 +62,7 @@ def run_decay_pass(
     scale = float(getattr(cfg, "reinforcement_scale", 0.5))
     fb_weight = float(getattr(cfg, "feedback_weight", 0.2))
     threshold = float(getattr(cfg, "strength_dormancy_threshold", 0.1))
+    arousal_mult = float(getattr(cfg, "arousal_decay_multiplier", 1.0))
 
     with simba.db.connect(cwd):
         rows = simba.memory.usage.get_all_for_decay(include_dormant=True)
@@ -76,6 +77,7 @@ def run_decay_pass(
                     half_life=half_life,
                     reinforcement_scale=scale,
                     feedback_weight=fb_weight,
+                    arousal_decay_multiplier=arousal_mult,
                 )
                 if abs(new_strength - row.strength) > _STRENGTH_TOLERANCE:
                     simba.memory.usage.set_strength(row.memory_id, new_strength)

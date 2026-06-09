@@ -25,6 +25,13 @@ class BenchConfig:
     # default to a small subsample (0 = all users).
     halumem_path: str = ".simba/benchmarks/HaluMem-Medium.jsonl"
     halumem_user_limit: int = 10
+    # SubtleMemory (relational / contradiction eval). One dir per persona
+    # (persona_0..9), each ~100 cases / ~2.5k turns. Default to the cloned data
+    # dir; subsample to a small persona count for cheap runs (0 = all personas).
+    subtlememory_path: str = (
+        "/Users/mahmoud/src/ai/memory/SubtleMemory/data/subtlememory"
+    )
+    subtlememory_persona_limit: int = 1
     embedding_cache_path: str = ".simba/eval/embedding_cache.db"
     judge_cache_path: str = ".simba/eval/judge_cache.db"
     default_k: int = 10

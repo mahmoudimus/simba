@@ -126,3 +126,46 @@ def test_compute_strength_clamps_to_one() -> None:
         feedback_weight=0.2,
     )
     assert result == 1.0
+
+
+# --- Arousal-modulated decay (default no-op) -------------------------------
+
+
+def _arousal_kw() -> dict:
+    return dict(
+        created_at_epoch=0.0,
+        now=30 * _DAY,  # one half-life of age, no access/feedback
+        access_count=0,
+        feedback_score=0.0,
+        half_life=30.0,
+        reinforcement_scale=0.5,
+        feedback_weight=0.2,
+    )
+
+
+def test_arousal_multiplier_default_is_noop() -> None:
+    """Omitting the multiplier matches passing 1.0 exactly."""
+    baseline = compute_strength(**_arousal_kw())
+    explicit_one = compute_strength(arousal_decay_multiplier=1.0, **_arousal_kw())
+    assert explicit_one == baseline
+
+
+def test_arousal_multiplier_below_one_retains_longer() -> None:
+    """High arousal (mult < 1.0) decays slower → higher strength than baseline."""
+    baseline = compute_strength(**_arousal_kw())
+    high_arousal = compute_strength(arousal_decay_multiplier=0.5, **_arousal_kw())
+    assert high_arousal > baseline
+
+
+def test_arousal_multiplier_above_one_decays_faster() -> None:
+    """Low arousal (mult > 1.0) decays faster → lower strength than baseline."""
+    baseline = compute_strength(**_arousal_kw())
+    low_arousal = compute_strength(arousal_decay_multiplier=2.0, **_arousal_kw())
+    assert low_arousal < baseline
+
+
+def test_arousal_multiplier_stays_in_unit_range() -> None:
+    """Modulated strength is still clamped to [0, 1]."""
+    for mult in (0.1, 0.5, 1.0, 2.0, 3.0):
+        result = compute_strength(arousal_decay_multiplier=mult, **_arousal_kw())
+        assert 0.0 <= result <= 1.0

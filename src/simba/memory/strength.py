@@ -55,6 +55,7 @@ def compute_strength(
     half_life: float,
     reinforcement_scale: float,
     feedback_weight: float,
+    arousal_decay_multiplier: float = 1.0,
 ) -> float:
     """Combine decay + reinforcement + feedback into a strength in ``[0.0, 1.0]``.
 
@@ -62,6 +63,7 @@ def compute_strength(
 
         age_days = (now - created_at_epoch) / 86400
         d = decay_factor(age_days, half_life)          # pure time decay
+        d = d ** arousal_decay_multiplier               # arousal modulation
         r = reinforcement_factor(access_count, scale)  # [0, 1), 0 if never accessed
         base = d + (1 - d) * r                          # r pulls base toward 1.0
         feedback_term = 1 + feedback_weight * clamp(feedback_score, -1, 1)
@@ -71,9 +73,17 @@ def compute_strength(
     With 0 accesses ``base == d``; with many accesses ``base → 1.0`` regardless
     of age (the spaced-repetition lift). ``feedback_weight=0.2`` and
     ``feedback_score=+1.0`` lifts by 20%; ``-1.0`` cuts by 20%.
+
+    ``arousal_decay_multiplier`` raises the decay factor (in ``[0, 1]``) to a
+    power, modulating how fast time erodes strength. ``1.0`` is an exact no-op
+    (``d ** 1.0 == d``); ``< 1.0`` pulls the factor toward 1.0 → slower decay
+    (more arousal, retains longer); ``> 1.0`` pushes it toward 0.0 → faster
+    decay (less arousal). The default keeps behavior unchanged.
     """
     age_days = (now - created_at_epoch) / _SECONDS_PER_DAY
     d = decay_factor(age_days, half_life)
+    if arousal_decay_multiplier != 1.0:
+        d = d**arousal_decay_multiplier
     r = reinforcement_factor(access_count, reinforcement_scale)
     base = d + (1.0 - d) * r
     feedback_term = 1.0 + feedback_weight * _clamp(feedback_score, -1.0, 1.0)
