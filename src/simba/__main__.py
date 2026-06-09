@@ -2314,14 +2314,15 @@ def _eval_bench(args: list[str]) -> int:
     import simba.eval.benchmarks.locomo as locomo
     import simba.eval.benchmarks.longmemeval as lme
     import simba.eval.benchmarks.run as bench_run
+    import simba.eval.benchmarks.subtlememory as subtlememory
     import simba.eval.run as run
     import simba.memory.embedding_cache as ec
 
     usage = (
-        "Usage: simba eval bench locomo|longmemeval|hotpotqa [--qa] "
+        "Usage: simba eval bench locomo|longmemeval|hotpotqa|subtlememory [--qa] "
         "[--n N | --per N | all] [--k K] [--split dev|test] "
         "[--path PATH] [--json] [--baseline] [--cache PATH] "
-        "[--abstention] [--full]"
+        "[--abstention] [--full] [--persona-limit L]"
     )
 
     if not args or args[0].startswith("--"):
@@ -2329,10 +2330,10 @@ def _eval_bench(args: list[str]) -> int:
         return 1
 
     dataset_name = args[0]
-    if dataset_name not in ("locomo", "longmemeval", "hotpotqa"):
+    if dataset_name not in ("locomo", "longmemeval", "hotpotqa", "subtlememory"):
         print(
             f"eval bench: unknown dataset {dataset_name!r}; "
-            "choose locomo, longmemeval, or hotpotqa",
+            "choose locomo, longmemeval, hotpotqa, or subtlememory",
             file=sys.stderr,
         )
         return 1
@@ -2348,6 +2349,7 @@ def _eval_bench(args: list[str]) -> int:
     abstention_flag = False
     full_flag = False
     cache_arg = ""
+    persona_limit = -1  # -1 = use config default (subtlememory only)
 
     i = 1
     while i < len(args):
@@ -2384,6 +2386,9 @@ def _eval_bench(args: list[str]) -> int:
         elif args[i] == "--path" and i + 1 < len(args):
             path_arg = args[i + 1]
             i += 2
+        elif args[i] == "--persona-limit" and i + 1 < len(args):
+            persona_limit = int(args[i + 1])
+            i += 2
         elif args[i] == "--json":
             as_json = True
             i += 1
@@ -2399,6 +2404,8 @@ def _eval_bench(args: list[str]) -> int:
         dataset_path = path_arg or bcfg.locomo_path
     elif dataset_name == "hotpotqa":
         dataset_path = path_arg or bcfg.hotpotqa_path
+    elif dataset_name == "subtlememory":
+        dataset_path = path_arg or bcfg.subtlememory_path
     else:
         dataset_path = path_arg or bcfg.longmemeval_path
     if not dataset_path:
@@ -2424,6 +2431,13 @@ def _eval_bench(args: list[str]) -> int:
         datasets = locomo.load_locomo(dataset_path)
     elif dataset_name == "hotpotqa":
         datasets = hotpotqa.load_hotpotqa(dataset_path)
+    elif dataset_name == "subtlememory":
+        plimit = (
+            persona_limit
+            if persona_limit >= 0
+            else bcfg.subtlememory_persona_limit
+        )
+        datasets = subtlememory.load_subtlememory(dataset_path, persona_limit=plimit)
     else:
         datasets = lme.load_longmemeval(
             dataset_path, include_abstention=abstention_flag
