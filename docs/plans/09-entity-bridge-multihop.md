@@ -120,3 +120,37 @@ It's the only multi-hop idea with a *positive* external result, it's mechanistic
 distinct from all three simba negatives, it's **fully local + recall@k-measurable**
 (no cloud-judge trap), and — win or lose — it converts "we think multi-hop is dead"
 into a *measured* conclusion on a benchmark where multi-hop is real. See `08`.
+
+---
+
+## VERDICT — measured NEGATIVE on the corrected (pooled) regime (2026-06-08)
+
+Re-ran the lever the right way, fixing the earlier confound (the per-question
+loader gives ~10 paragraphs ⇒ recall@10 saturates at 1.0, so the fold "helped"
+gold+distractor alike). Used `load_hotpotqa_pooled` (500 questions → **4937**
+shared paragraphs — a genuine recall problem, r@1=0.437) and measured tight
+cutoffs + `bridge_recall@k` (the second-hop signal), entity_bridge OFF vs ON, by
+intent (bridge vs comparison).
+
+| config | r@1 | r@2 | r@5 | r@10 | bridge@2 | bridge@5 |
+|---|---|---|---|---|---|---|
+| OFF | 0.437 | 0.665 | 0.843 | 0.938 | 0.386 | 0.694 |
+| ON (defaults) | 0.437 | 0.665 | 0.843 | 0.931 | 0.386 | 0.694 |
+| ON h2 s5 df0 | 0.437 | 0.665 | 0.843 | 0.931 | 0.386 | 0.694 |
+| ON h2 s5 df3 | 0.437 | 0.665 | 0.843 | 0.933 | 0.386 | 0.694 |
+| ON h1 s8 df2 | 0.437 | 0.665 | 0.843 | 0.932 | 0.386 | 0.694 |
+
+**`bridge_recall` is identical OFF vs ON across every config** (2-hop, more seeds,
+the `max_df` precision filter) — the fold *fires* (it perturbs recall@10 by
+−0.005..−0.007 via displacement) but surfaces **zero** missed second-hop gold. The
+shared-entity neighbours simply aren't the gold paragraphs, and more aggressive
+folding only adds distractors. The YourMemory +12pp claim **does not reproduce**.
+
+**Conclusion:** entity-bridge joins C1 (co-occurrence), Track B (PPR), and Track A
+(IRCoT) as a **measured-negative** multi-hop *retrieval-expansion* lever. It stays
+shipped **default-off** as an instrument (like the others). With this, **every
+retrieval-time multi-hop lever tested is negative** — the only multi-hop win remains
+the **LLM reranker** (which re-ranks already-retrieved candidates). Multi-hop is a
+**reasoning / answer-time** problem, not a retrieval-recall one. The
+multi-hop-via-retrieval frontier is closed; pursue answer-time or extraction-density
+instead.
