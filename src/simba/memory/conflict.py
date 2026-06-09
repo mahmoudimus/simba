@@ -195,3 +195,82 @@ def conflict_note(
     if conflict is None:
         return ""
     return surface_directive(conflict)
+
+
+# ── Write-time conflict engine (B2) ──────────────────────────────────────────
+# Move detection OFF the answer-time path: detect a NEW memory's conflicts
+# against its nearest neighbors at WRITE time (one focused pairwise call per
+# neighbor), persist them via ``simba.memory.conflict_store``, and at recall just
+# READ the precomputed conflict among the recalled set + annotate. Both functions
+# here stay pure of persistence/time: ``detect_conflicts_on_write`` returns the
+# flagged neighbors (the caller records them); ``conflict_note_from_store`` reads
+# the store and builds the directive. FAIL-OPEN throughout.
+
+
+def detect_conflicts_on_write(
+    new_id: str,
+    new_text: str,
+    neighbors: list[tuple[str, str]],
+    *,
+    llm_client: typing.Any,
+    max_neighbors: int = 5,
+) -> list[tuple[str, str]]:
+    """Compare a NEW memory against its nearest neighbors; flag conflicts.
+
+    For each ``(neighbor_id, neighbor_text)`` — up to ``max_neighbors`` in order
+    — one focused 2-memory check (:func:`build_pair_detect_prompt`, neutral
+    query) asks whether the new memory CONFLICTS with that neighbor. Returns the
+    list of ``(neighbor_id, description)`` for the neighbors that conflict. Pure:
+    no persistence, no time, no ``new_id`` mutation (it is accepted for the
+    caller's bookkeeping). FAIL-OPEN: empty neighbors, a missing client, or any
+    exception yields ``[]`` — never raises into the write path. One
+    ``llm_client.complete_json`` call per checked neighbor.
+    """
+    if not neighbors or llm_client is None:
+        return []
+    out: list[tuple[str, str]] = []
+    try:
+        for neighbor_id, neighbor_text in neighbors[:max_neighbors]:
+            verdict = llm_client.complete_json(
+                build_pair_detect_prompt(new_text, neighbor_text, "")
+            )
+            if not isinstance(verdict, dict) or not verdict.get("conflict"):
+                continue
+            description = verdict.get("description")
+            if not isinstance(description, str):
+                description = ""
+            out.append((neighbor_id, description.strip()))
+    except Exception:
+        return []
+    return out
+
+
+def conflict_note_from_store(
+    recalled_ids: list[str],
+    *,
+    project_path: str,
+    cfg: typing.Any,
+) -> str:
+    """Gated, fail-open recall-read: annotate a precomputed conflict.
+
+    Reads ``conflict_store.conflicts_among(recalled_ids, project_path=...)`` and,
+    if any conflict among the recalled set was precomputed at write time, builds a
+    :func:`surface_directive` from the first recorded conflict (its two memory ids
+    + stored description). Returns ``""`` — with zero LLM cost and no detection —
+    when the feature is disabled, no conflict is recorded, or anything fails. Must
+    run inside a ``simba.db.connect()`` context (the store helpers do).
+    """
+    if not getattr(cfg, "conflict_surfacing_enabled", False):
+        return ""
+    try:
+        import simba.memory.conflict_store as conflict_store
+
+        rows = conflict_store.conflicts_among(recalled_ids, project_path=project_path)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    row = rows[0]
+    return surface_directive(
+        ConflictResult(a=row.memory_a, b=row.memory_b, description=row.description)
+    )

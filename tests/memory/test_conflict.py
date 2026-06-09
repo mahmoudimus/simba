@@ -6,8 +6,11 @@ style of test_entity_bridge / judge tests (no live model)."""
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 
+import simba.db
 import simba.memory.conflict as conflict
+import simba.memory.conflict_store as cstore
 
 
 class FakeLlm:
@@ -268,3 +271,103 @@ def test_default_config_strategy_is_single():
     from simba.memory.config import MemoryConfig
 
     assert MemoryConfig().conflict_detect_strategy == "single"
+
+
+# --- Write-time detection (B2): compare a NEW memory vs its neighbors ---------
+
+
+def test_detect_on_write_flags_conflicting_neighbor():
+    # The fake flags any pair as a conflict; we get back (neighbor_id, desc).
+    llm = FakeLlm({"conflict": True, "description": "two cities"})
+    neighbors = [
+        ("n_paris", "Alice lives in Paris."),
+        ("n_coffee", "Bob likes coffee."),
+    ]
+    out = conflict.detect_conflicts_on_write(
+        "new_berlin", "Alice lives in Berlin.", neighbors, llm_client=llm
+    )
+    assert ("n_paris", "two cities") in out
+    assert ("n_coffee", "two cities") in out  # this fake flags everything
+    assert llm.calls == 2  # one call per neighbor
+
+
+def test_detect_on_write_returns_only_conflicting_neighbors():
+    # ScriptedLlm only flags Paris vs Berlin (no distractor in a focused pair).
+    llm = ScriptedLlm(pair_marker="Bob likes coffee.")
+    neighbors = [
+        ("n_paris", "Alice lives in Paris."),
+        ("n_coffee", "Bob likes coffee."),
+    ]
+    out = conflict.detect_conflicts_on_write(
+        "new_berlin", "Alice lives in Berlin.", neighbors, llm_client=llm
+    )
+    ids = [nid for nid, _ in out]
+    assert ids == ["n_paris"]
+
+
+def test_detect_on_write_respects_max_neighbors():
+    llm = FakeLlm({"conflict": False, "description": ""})
+    neighbors = [(f"n{i}", f"mem {i}") for i in range(10)]
+    conflict.detect_conflicts_on_write(
+        "new", "new text", neighbors, llm_client=llm, max_neighbors=3
+    )
+    assert llm.calls == 3  # capped at max_neighbors
+
+
+def test_detect_on_write_fail_open_on_empty_or_no_client():
+    llm = FakeLlm({"conflict": True, "description": "x"})
+    assert conflict.detect_conflicts_on_write("new", "t", [], llm_client=llm) == []
+    assert llm.calls == 0
+    assert (
+        conflict.detect_conflicts_on_write("new", "t", [("n", "m")], llm_client=None)
+        == []
+    )
+
+
+def test_detect_on_write_fail_open_on_exception():
+    llm = FakeLlm(None, raises=True)
+    out = conflict.detect_conflicts_on_write("new", "t", [("n", "m")], llm_client=llm)
+    assert out == []
+
+
+# --- Recall-read (B2): read a precomputed conflict from the store -------------
+
+
+def test_conflict_note_from_store_reads_recorded_conflict(
+    tmp_path: pathlib.Path,
+) -> None:
+    cfg = FakeCfg(conflict_surfacing_enabled=True)
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict(
+            "mem_a", "mem_b", "two cities", project_path="proj", now=1.0
+        )
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b", "mem_c"], project_path="proj", cfg=cfg
+        )
+    assert "two cities" in note
+    assert "confirm" in note.lower()  # steers toward surfacing
+
+
+def test_conflict_note_from_store_empty_when_disabled(
+    tmp_path: pathlib.Path,
+) -> None:
+    cfg = FakeCfg(conflict_surfacing_enabled=False)
+    with simba.db.connect(tmp_path):
+        cstore.record_conflict(
+            "mem_a", "mem_b", "two cities", project_path="proj", now=1.0
+        )
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"], project_path="proj", cfg=cfg
+        )
+    assert note == ""
+
+
+def test_conflict_note_from_store_empty_when_none_recorded(
+    tmp_path: pathlib.Path,
+) -> None:
+    cfg = FakeCfg(conflict_surfacing_enabled=True)
+    with simba.db.connect(tmp_path):
+        note = conflict.conflict_note_from_store(
+            ["mem_a", "mem_b"], project_path="proj", cfg=cfg
+        )
+    assert note == ""
