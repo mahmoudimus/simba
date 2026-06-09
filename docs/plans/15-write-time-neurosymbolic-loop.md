@@ -140,3 +140,30 @@ The B2 engine exists; B2b makes it live + recovers the recall the latency win co
    off the hot path). Hybrid: cheap query-independent write-time pre-filter + one query-aware
    recall confirmation.
 3. Then **B3** — extraction density → write-time detection recall toward the 0.65 ceiling.
+
+## B2b result — built + default-off; utility number INCONCLUSIVE at smoke scale (deferred)
+Implemented (commit `1231cc0`, 49 conflict tests green, default-off): a `generous`
+write-time pre-filter (recall-biased pair prompt) + `conflict_recall_recheck` — a
+query-aware confirm over the stored candidates at recall (`conflict_note_from_store`
+gains `query` + `llm_client`; one confirm call, precision filter, fail-open).
+
+End-to-end re-measure (generous write → store → query-aware recall confirm → surface)
+was **stopped inconclusive**: the generous write-pass is call-heavy (many long-prompt
+pair checks/case, ~3–7 min/case sequential), and at the partial n=6 the numbers were
+uninformative — `base 0.0 / b2b 0.0 / fire 0.167` with **base itself swinging 0.0–0.167
+across runs** (the answerer is uncached → run-to-run variance dominates at this n). Net:
+across B1 (answer-time pairwise, 0.317) vs B2/B2b (write-time, ≈0 on the contradictory
+smoke), the write-time path has **not** demonstrated parity — but the n is far too small
+and noisy to call it a real negative.
+
+**Honest status:** the write-time **engine + round-trip are built and validated** (fires
+on real data, default-off, 49 tests); the **utility verdict is deferred** — it needs (a)
+the larger-n firming the B1 number got (n≥60, with the answerer cached or warmed to kill
+base variance) and (b) the B2c live-daemon wiring so detection runs at real store time
+(not a per-case write-pass proxy). Do NOT claim B2 parity or a B2 negative on n=6.
+
+## B2c — live daemon wiring (deferred, next session)
+Hook `detect_conflicts_on_write`→`record_conflict` into `routes.py store_memory` as a
+background task (gated `conflict_detect_on_write`); wire `conflict_note_from_store`
+(with `query`+`llm_client` when `conflict_recall_recheck`) into `format_memories`. Then
+re-measure at larger n. B3 (extraction density) after.
