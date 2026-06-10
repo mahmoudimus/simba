@@ -224,6 +224,41 @@ gitignored — copy or rebuild from the pattern). Cost: a few hundred deepseek c
 ~1 hr. Metric: **QA accuracy per bucket** (recall@k is N/A on a cluster). Output: a
 table (RAW / A / B per bucket) + the chosen world, committed to this spec.
 
+### Pillar 0 — RESULT (2026-06-10): **GO — World 1 (B ≫ A ≫ RAW)**
+
+Ran a 3-arm version (RAW top-k · A = whole oracle evidence corpus, date-ordered ·
+B = A + an explicit enumerate-then-compute scaffold = LLM proxy for the
+deterministic aggregator). 4 buckets × 15, deepseek-v4-flash answerer /
+deepseek-v4-pro judge. Harness: `.simba/ceiling_probe.py`.
+
+| Bucket | RAW | A (complete) | B (complete+compute) | A−RAW | B−A |
+|---|---|---|---|---|---|
+| multi-session (counting) | 0.467 | 0.733 | 0.800 | **+0.266** | +0.067 |
+| single-session-user | 0.667 | 0.800 | 0.867 | +0.133 | +0.067 |
+| knowledge-update | 0.800 | 0.733 | **0.933** | −0.067 | **+0.200** |
+| temporal-reasoning | 0.933 | 1.000 | 1.000 | +0.067 | 0.0 |
+| **OVERALL** | **0.717** | **0.817** | **0.900** | **+0.10** | **+0.083** |
+
+Overall **B ≫ A ≫ RAW** (+0.183 B vs RAW; B fixed 12 RAW-misses, regressed ~1).
+**Both parts earn their place, on different buckets:**
+- **Completeness (the index)** is the dominant lever for **counting** (multi-session
+  **+0.266** — top-k misses instances "how many" needs).
+- **Aggregation (the compute)** is the dominant lever for **knowledge-update**
+  (completeness alone *hurt*, A −0.067, because historical values drown the current
+  one; "pick latest" → B **+0.20**).
+- **temporal-reasoning** is already ~solved on oracle (RAW 0.933) — its difficulty
+  is at `_s` scale (buried date anchors = a retrieval/index problem, not arithmetic).
+
+Opposite of IRCoT: structured evidence **helps** because we *augment* retrieval, not
+*replace* it. **Caveats:** (1) this is the **oracle answer-time ceiling** with GOLD
+evidence — it does NOT prove the async extractor can rebuild a complete-enough index
+from raw turns (→ the extraction-quality de-risk is the next gate). (2) B is an
+LLM-scaffold proxy → its +0.083 is a **lower bound** on a real Python aggregator.
+(3) n=15/bucket: overall solid, per-bucket suggestive.
+
+**Decision: build the lever — index first (broad counting win), aggregator layered
+for update/latest — but de-risk extraction quality before trusting it end-to-end.**
+
 ---
 
 ## 7. Build (CONTINGENT on Pillar 0 — design sketch, full TDD specced after the gate)
