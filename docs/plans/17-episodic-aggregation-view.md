@@ -259,6 +259,30 @@ LLM-scaffold proxy → its +0.083 is a **lower bound** on a real Python aggregat
 **Decision: build the lever — index first (broad counting win), aggregator layered
 for update/latest — but de-risk extraction quality before trusting it end-to-end.**
 
+### Pillar 0b — extraction-quality de-risk RESULT (2026-06-10): **PASS → BUILD**
+
+Does the REAL async extractor rebuild a complete-enough cluster FROM RAW TURNS to
+recover the ceiling? Re-ran with a **STRUCTURING** prompt (atomic dated facts, never
+summarize/merge; ~104 facts/q vs the digest's ~7) and added EXT-A/EXT-B arms (answer
+from the *extracted* facts instead of gold). Harness `.simba/extract_derisk.py`.
+
+| bucket | RAW | GOLD-A | GOLD-B | EXT-A | EXT-B |
+|---|---|---|---|---|---|
+| knowledge-update | 0.867 | 0.867 | 0.800 | **1.000** | **1.000** |
+| multi-session (count) | 0.467 | 0.600 | 0.800 | 0.533 | 0.667 |
+| single-session-user | 0.667 | 0.733 | 0.733 | 0.800 | 0.733 |
+| temporal-reasoning | 0.933 | 1.000 | 1.000 | 1.000 | 1.000 |
+| **overall** | **0.733** | **0.800** | **0.833** | **0.833** | **0.850** |
+
+**Extraction loss ≈ zero:** GOLD-A−EXT-A=−0.033, GOLD-B−EXT-B=−0.017, **EXT-B−RAW=+0.117**.
+The structuring extraction **recovers (and on knowledge-update exceeds)** the gold
+ceiling — extraction is NOT the wall. The digest collapse was the *summarizing* prompt;
+**"index, don't summarize" is now measured.** Residual: multi-session counting loses a
+few instances (EXT-B 0.667 vs GOLD-B 0.8) → harden extraction *recall on repeats*.
+Caveat: still oracle (validates extraction *fidelity*, not index *lookup* at `_s` scale).
+
+**All gates green → BUILD §7** with the validated structuring prompt as the extractor.
+
 ---
 
 ## 7. Build (CONTINGENT on Pillar 0 — design sketch, full TDD specced after the gate)
