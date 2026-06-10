@@ -32,3 +32,9 @@ def test_engine_defaults():
     assert cfg.engine_max_turns == 12
     assert cfg.engine_max_pointers == 5
     assert cfg.engine_min_new_exchanges == 20
+
+
+def test_digest_stale_after_seconds_default():
+    # 0 => None => no stale-reclaim => preserves current rlm dedup behavior.
+    cfg = simba.config.load("rlm")
+    assert cfg.digest_stale_after_seconds == 0

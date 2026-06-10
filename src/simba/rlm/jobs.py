@@ -1,42 +1,32 @@
-"""rlm_jobs — coordination table for the autonomous RLM engine.
+"""rlm digest lease — at-most-once transcript digestion (over the workflow lease).
 
-Control-plane only (dedup + status), never transcript data. The UNIQUE
-(transcript_id, project_path) constraint makes claim() idempotent so a
-transcript is digested at most once.
+Control-plane only (a per-``(transcript_id, project_path)`` lock), never
+transcript data. A thin delegation over :mod:`simba.workflow.lease`: the
+``(queue, dedup_key)`` UNIQUE row makes :func:`claim` idempotent so a transcript
+is digested at most once. Stale-reclaim of a dead digest worker is gated on
+``rlm.digest_stale_after_seconds`` (0 => no reclaim => original behavior).
 """
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
-import simba._vendor.peewee as pw
-import simba.db
+import simba.config
+import simba.rlm.config  # registers the "rlm" section
+import simba.workflow.lease as lease
 
 if TYPE_CHECKING:
     import pathlib
 
-
-class RlmJob(simba.db.BaseModel):
-    transcript_id = pw.CharField(null=True)
-    project_path = pw.CharField(null=True)
-    status = pw.CharField(null=True)
-    engine = pw.CharField(null=True)
-    started_at = pw.CharField(null=True)
-    finished_at = pw.CharField(null=True)
-    n_stored = pw.IntegerField(default=0)
-
-    class Meta:
-        table_name = "rlm_jobs"
-        primary_key = False  # rowid table, matching the original schema
-        indexes = ((("transcript_id", "project_path"), True),)  # UNIQUE
+_QUEUE = "rlm_digest"
 
 
-simba.db.register_model(RlmJob)
+def _key(transcript_id: str, project_path: str) -> str:
+    return f"{transcript_id}\x00{project_path}"
 
 
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _rlm_cfg(cwd: pathlib.Path | None = None):
+    return simba.config.load("rlm")
 
 
 def claim(
@@ -46,19 +36,15 @@ def claim(
     *,
     cwd: pathlib.Path | None = None,
 ) -> bool:
-    """Insert a 'running' job. Return True if claimed, False if one exists."""
-    with simba.db.connect(cwd):
-        try:
-            RlmJob.create(
-                transcript_id=transcript_id,
-                project_path=project_path,
-                status="running",
-                engine=engine,
-                started_at=_now(),
-            )
-            return True
-        except pw.IntegrityError:
-            return False
+    """Acquire the digest lock. Return True if claimed, False if one exists."""
+    cfg = _rlm_cfg(cwd)
+    return lease.acquire(
+        _QUEUE,
+        _key(transcript_id, project_path),
+        stale_after_seconds=cfg.digest_stale_after_seconds or None,
+        payload={"engine": engine},
+        cwd=cwd,
+    )
 
 
 def complete(
@@ -68,8 +54,10 @@ def complete(
     *,
     cwd: pathlib.Path | None = None,
 ) -> None:
-    with simba.db.connect(cwd):
-        RlmJob.update(status="done", finished_at=_now(), n_stored=n_stored).where(
-            (RlmJob.transcript_id == transcript_id)
-            & (RlmJob.project_path == project_path)
-        ).execute()
+    """Release the digest lock as done, recording the stored-memory count."""
+    lease.release(
+        _QUEUE,
+        _key(transcript_id, project_path),
+        result={"n_stored": n_stored},
+        cwd=cwd,
+    )

@@ -37,3 +37,8 @@ class RlmConfig:
     engine_max_turns: int = 12  # cli cost cap
     engine_max_pointers: int = 5  # transcripts digested per run
     engine_min_new_exchanges: int = 20  # rate-limit: min messages before a digest fires
+    # Stale-reclaim window for the digest lease: a 'running' digest older than
+    # this many seconds is treated as a dead worker and re-acquirable. 0 => no
+    # reclaim (preserves the original rlm_jobs behavior: a dead worker locks a
+    # transcript from re-digesting). Flip up to recover from crashed digests.
+    digest_stale_after_seconds: int = 0
