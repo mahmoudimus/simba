@@ -29,6 +29,7 @@ logger = logging.getLogger("simba.episodes")
 
 _SKIP_TYPES = frozenset({"SYSTEM", "EPISODE"})
 
+# Agentic default (claude-cli): the model runs `simba memory store` itself.
 _EPISODE_PROMPT = (
     "These memories were captured during coding session '{sid}' "
     "(project '{cwd}'). Synthesize ONE concise episode that summarizes the "
@@ -40,6 +41,27 @@ _EPISODE_PROMPT = (
     "Keep --content under 200 characters; put detail in --context. When "
     "finished, run: simba episodes complete '{sid}'.\n\nMemories:\n{members}"
 )
+
+# Completion default (llm-cli): the model returns a JSON array; the engine
+# stores it. Used automatically when rlm.engine = "llm-cli".
+_LLM_EPISODE_PROMPT = (
+    "These memories were captured during session '{sid}' (project '{cwd}'). "
+    "Synthesize ONE concise episode summarizing the session: its goal, the work "
+    "done, and the outcome. Return ONLY a JSON array with a single object: "
+    '{{"type": "EPISODE", "content": "<=200-char summary>", '
+    '"context": "key points + member ids"}}. Keep "content" at most 200 '
+    "characters. Output nothing but the JSON array.\n\nMemories:\n{members}"
+)
+
+
+def _episode_template(ecfg, engine) -> str:
+    """Pick the episode prompt: a config override wins; otherwise the built-in
+    default appropriate to the engine family (JSON for the completion engine)."""
+    if getattr(ecfg, "episode_prompt", ""):
+        return ecfg.episode_prompt
+    if isinstance(engine, simba.rlm.engine.LlmCliEngine):
+        return _LLM_EPISODE_PROMPT
+    return _EPISODE_PROMPT
 
 
 def _episodes_cfg() -> simba.episodes.config.EpisodesConfig:
@@ -95,9 +117,14 @@ def _member_lines(members: list[dict], max_members: int) -> str:
 
 
 def _build_episode_prompt(
-    sid: str, cwd: str, members: list[dict], max_members: int
+    sid: str,
+    cwd: str,
+    members: list[dict],
+    max_members: int,
+    *,
+    template: str = _EPISODE_PROMPT,
 ) -> str:
-    return _EPISODE_PROMPT.format(
+    return template.format(
         sid=sid, cwd=cwd, members=_member_lines(members, max_members)
     )
 
@@ -143,9 +170,15 @@ def consolidate_session(
     ):
         return "in_progress"
 
-    prompt = _build_episode_prompt(sid, project_path, members, ecfg.max_members)
+    prompt = _build_episode_prompt(
+        sid,
+        project_path,
+        members,
+        ecfg.max_members,
+        template=_episode_template(ecfg, engine),
+    )
     try:
-        engine.run(prompt, cwd=project_path)
+        engine.run(prompt, cwd=project_path, session_source=sid)
     except Exception:
         logger.debug("episode dispatch failed for %s", sid, exc_info=True)
         return "error"

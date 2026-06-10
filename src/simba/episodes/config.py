@@ -27,6 +27,11 @@ class EpisodesConfig:
     # agent died before closing it) and reclaimed, so a session is never
     # permanently locked out of re-consolidation.
     job_timeout_hours: int = 4
+    # Episode summarization prompt template. Empty -> the active engine's
+    # built-in default (agentic for claude-cli; a JSON object for llm-cli).
+    # Override to repurpose episodes for a personal-assistant memory (summarize
+    # a day / topic instead of a coding session). Fields: {sid}, {cwd}, {members}.
+    episode_prompt: str = ""
 
 
 def load_config(**overrides: typing.Any) -> EpisodesConfig:

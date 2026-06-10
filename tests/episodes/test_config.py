@@ -18,3 +18,4 @@ def test_defaults() -> None:
     assert cfg.auto_on_precompact is True
     assert cfg.scheduler_enabled is True
     assert cfg.job_timeout_hours == 4
+    assert cfg.episode_prompt == ""  # empty => engine-appropriate built-in default
