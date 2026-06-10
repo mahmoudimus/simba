@@ -2770,13 +2770,37 @@ def _memory_consolidate(args: list[str]) -> int:
 
 def _cmd_rlm(args: list[str]) -> int:
     """RLM autonomous engine commands."""
-    if not args or args[0] not in ("digest", "complete"):
+    if not args or args[0] not in ("digest", "complete", "run-llm"):
         print(
             "Usage: simba rlm digest <transcript_id|--latest>\n"
             "       simba rlm complete <transcript_id> [--stored N]",
             file=sys.stderr,
         )
         return 1
+
+    if args[0] == "run-llm":
+        # Internal worker spawned by the llm-cli engine: completes the prompt
+        # file with `llm -m <model>`, parses a JSON array of memories, stores
+        # each, and (for a digest) marks the rlm_jobs row done.
+        rest = args[1:]
+        prompt_file = _parse_opt_value(rest, "--prompt-file")
+        if not prompt_file:
+            print(
+                "Usage: simba rlm run-llm --prompt-file PATH [--cwd P] "
+                "[--session-source ID] [--mark-rlm-complete]",
+                file=sys.stderr,
+            )
+            return 1
+        cwd = _parse_opt_value(rest, "--cwd") or str(pathlib.Path.cwd())
+        session_source = _parse_opt_value(rest, "--session-source") or ""
+        mark = "--mark-rlm-complete" in rest
+        import simba.rlm.engine
+
+        n = simba.rlm.engine.run_completion_from_file(
+            prompt_file, cwd=cwd, session_source=session_source, mark_rlm=mark
+        )
+        print(f"llm-digest: stored {n}")
+        return 0
 
     if args[0] == "complete":
         crest = args[1:]

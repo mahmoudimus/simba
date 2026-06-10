@@ -402,6 +402,49 @@ def test_rlm_complete_marks_done(monkeypatch, capsys):
     assert "complete" in capsys.readouterr().out.lower()
 
 
+def test_rlm_run_llm_invokes_worker(monkeypatch, capsys):
+    import simba.rlm.engine
+
+    seen = {}
+
+    def fake_worker(prompt_file, *, cwd, session_source, mark_rlm):
+        seen.update(
+            prompt_file=prompt_file,
+            cwd=cwd,
+            session_source=session_source,
+            mark_rlm=mark_rlm,
+        )
+        return 4
+
+    monkeypatch.setattr(simba.rlm.engine, "run_completion_from_file", fake_worker)
+    rc = cli._cmd_rlm(
+        [
+            "run-llm",
+            "--prompt-file",
+            "/tmp/p.txt",
+            "--cwd",
+            "/proj",
+            "--session-source",
+            "T1",
+            "--mark-rlm-complete",
+        ]
+    )
+    assert rc == 0
+    assert seen == {
+        "prompt_file": "/tmp/p.txt",
+        "cwd": "/proj",
+        "session_source": "T1",
+        "mark_rlm": True,
+    }
+    assert "stored 4" in capsys.readouterr().out
+
+
+def test_rlm_run_llm_requires_prompt_file(capsys):
+    rc = cli._cmd_rlm(["run-llm", "--cwd", "/proj"])
+    assert rc == 1
+    assert "prompt-file" in capsys.readouterr().err
+
+
 def test_memory_prune_requires_a_filter(capsys) -> None:
     rc = cli._memory_prune([])
     assert rc == 1

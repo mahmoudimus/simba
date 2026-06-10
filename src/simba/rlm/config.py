@@ -26,7 +26,10 @@ class RlmConfig:
     # Autonomous engine: "claude" = none (agent-driven); "claude-cli" spawns a
     # detached cheap digest on PreCompact + enables episodic consolidation. On by
     # default (experimental); set to "claude" to disable the autonomous spend.
-    engine: str = "claude-cli"  # claude | claude-cli | api | local-gguf
+    # "llm-cli" routes the digest through `llm -m <engine_model>` (simonw's CLI;
+    # e.g. deepseek-v4-flash) as a single JSON-extraction completion instead of an
+    # agentic loop — cheaper, and the basis for personal-assistant memory.
+    engine: str = "claude-cli"  # claude | claude-cli | llm-cli | api | local-gguf
     engine_model: str = "haiku"  # cheap by default; never opus
     engine_base_url: str = ""  # OpenAI/Anthropic-compatible endpoint or proxy
     engine_api_key_env: str = "ANTHROPIC_API_KEY"  # env var holding the key
@@ -37,6 +40,12 @@ class RlmConfig:
     engine_max_turns: int = 12  # cli cost cap
     engine_max_pointers: int = 5  # transcripts digested per run
     engine_min_new_exchanges: int = 20  # rate-limit: min messages before a digest fires
+    # Digest prompt template. Empty -> the active engine's built-in default
+    # (an agentic, coding-scoped prompt for claude-cli; a JSON-extraction prompt
+    # for llm-cli). Override it to repurpose simba as a personal-assistant memory:
+    # e.g. extract facts / preferences / events instead of coding learnings.
+    # Template fields: {transcript} (conversation text, llm-cli only), {cwd}, {tid}.
+    digest_prompt: str = ""
     # Stale-reclaim window for the digest lease: a 'running' digest older than
     # this many seconds is treated as a dead worker and re-acquirable. 0 => no
     # reclaim (preserves the original rlm_jobs behavior: a dead worker locks a

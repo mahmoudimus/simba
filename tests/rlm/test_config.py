@@ -32,6 +32,7 @@ def test_engine_defaults():
     assert cfg.engine_max_turns == 12
     assert cfg.engine_max_pointers == 5
     assert cfg.engine_min_new_exchanges == 20
+    assert cfg.digest_prompt == ""  # empty => engine-appropriate built-in default
 
 
 def test_digest_stale_after_seconds_default():
