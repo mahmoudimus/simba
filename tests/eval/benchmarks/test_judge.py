@@ -91,6 +91,93 @@ def test_score_case_threads_dates_from_id2date() -> None:
     assert "2025-06-01" in llm.prompts[0] and "most recent" in llm.prompts[0].lower()
 
 
+def test_score_case_appends_conflict_directive_when_enabled() -> None:
+    # Mirrors format_memories' conflict note (measured 0.111->0.944 on the
+    # both-sides SubtleMemory slice): when conflict_cfg enables surfacing and
+    # detection fires, the directive lands in the answer prompt.
+    import simba.memory.config as mc
+
+    case = EvalCase(id="q1", query="quiet or loud?", relevant_ids=["c1"], answer="?")
+    # answerer.complete_json serves the pairwise detect; the judge grades.
+    answerer = FakeLlm(
+        answer="surfaced", verdict={"conflict": True, "description": "quiet vs loud"}
+    )
+    judge_llm = FakeLlm(verdict={"correct": True})
+    cfg = mc.MemoryConfig(
+        conflict_surfacing_enabled=True, conflict_detect_strategy="pairwise"
+    )
+    correct = judge.score_case(
+        case,
+        lambda q: ["c1", "c2"],
+        {"c1": "it is quiet", "c2": "it is loud"},
+        answerer,
+        judge=judge_llm,
+        k=2,
+        conflict_cfg=cfg,
+    )
+    assert correct is True
+    answer_prompts = [p for p in answerer.prompts if "quiet or loud?" in p]
+    assert any("Do not choose one or guess" in p for p in answer_prompts)
+    assert any("quiet vs loud" in p for p in answer_prompts)
+
+
+def test_score_case_conflict_cfg_disabled_is_zero_cost() -> None:
+    # Disabled config (the default) => conflict_note short-circuits: no extra
+    # LLM calls, prompt unchanged. One complete (answer) + one complete_json
+    # (self-grading) only.
+    import simba.memory.config as mc
+
+    case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
+    llm = FakeLlm(answer="7 May", verdict={"correct": True})
+    correct = judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "went 7 May"},
+        llm,
+        k=2,
+        conflict_cfg=mc.MemoryConfig(),
+    )
+    assert correct is True
+    assert len(llm.prompts) == 2
+    assert not any("Do not choose one or guess" in p for p in llm.prompts)
+
+
+def test_run_qa_threads_conflict_cfg_to_score_case() -> None:
+    """run_qa must pass its memory cfg as conflict_cfg so the bench exercises
+    the same gated conflict path production injects via format_memories."""
+    import unittest.mock
+
+    import simba.eval.benchmarks.judge as jmod
+    import simba.memory.config as mc
+
+    seen: list[dict] = []
+
+    def patched_score(case, retriever, id2content, answerer, **kw):
+        seen.append(kw)
+        return True
+
+    with unittest.mock.patch.object(jmod, "score_case", patched_score):
+        ds = Dataset(
+            name="t",
+            corpus=[Memory(id="c1", content="x")],
+            cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+        )
+        cfg = mc.MemoryConfig(
+            llm_rerank_enabled=False,
+            scoring_enabled=False,
+            expansion_enabled=False,
+        )
+        embed = lambda t: [0.0] * 384  # noqa: E731
+        jmod.run_qa(
+            [ds],
+            embed_doc=embed,
+            embed_query=embed,
+            cfg=cfg,
+            llm=FakeLlm(answer="a"),
+        )
+    assert seen[0]["conflict_cfg"] is cfg
+
+
 def test_judge_prompt_includes_gold_predicted_and_asks_json() -> None:
     p = judge.build_judge_prompt("Q?", gold="7 May", predicted="May 7th")
     assert "7 May" in p and "May 7th" in p and "Q?" in p
