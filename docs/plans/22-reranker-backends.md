@@ -105,11 +105,54 @@ Default `cross-encoder` **per the measured win**, BUT the flip's acceptance gate
 multi-session recall) at lower latency. If LME contradicts LoCoMo, default stays `llm`
 and cross-encoder is opt-in. Record the LME numbers here.
 
-> **LME A/B: PENDING (orchestrator).** The code defaults `cross-encoder` per the
-> LoCoMo measurement; the LME A/B acceptance gate has NOT been run in this
-> implementation pass. If the LME A/B contradicts LoCoMo, set the default back to
-> `llm` via `reranker_mode` (config-only, no code change). Numbers to be recorded
-> here once run.
+> **GATE RESULT (2026-06-11) — DEFAULT-ON JUSTIFIED, gate reframed to EVIDENCE-SET RECOVERY.**
+> The acceptance metric is no longer QA score but **evidence completeness**: per question,
+> does retrieval recover *all* required gold spans (`required ⊆ retrieved`)? Two metrics
+> separate the stages: `pool_complete@N` (first-stage candidate-generation ceiling) vs
+> `complete@k` (reranker lift into usable context). Harness `.simba/reranker_evidence_ab.py`
+> (LoCoMo, n=60, through the shipped GGUF reranker).
+>
+> | span | n | pool@20 | none c@5 | **cross-enc c@5** | llm c@5 | p50 |
+> |---|---|---|---|---|---|---|
+> | 1-span | 33 | 0.909 | 0.848 | **0.909** (=ceiling) | 0.909 | 381ms |
+> | 2-span | 19 | 0.368 | 0.105 | **0.316** | 0.368 | 368ms |
+> | 3+span | 8 | 0.125 | 0.0 | 0.0 | 0.125 | 402ms |
+>
+> **Cross-encoder = llm completeness at 50–130× lower latency (~370ms vs 20–47s), lower
+> redundancy, and TRIPLES 2-span complete@5 (0.105→0.316)** — the compositional-retrieval win,
+> not a flat bump. Pareto: better than `none`, == best-known (`llm`), acceptable cost →
+> **`cross-encoder` stays the default.** The `llm` 23s pass is retired (kept as opt-in).
+>
+> **Two deferred findings (NOT blockers):** (1) the bottleneck is now *localized* — multi-span
+> failures are first-stage-bound (`pool_complete@20`: 2-span 0.368, 3+span 0.125), upstream of
+> rerank; next lever is candidate-generation depth, not the reranker. (2) **count is untestable
+> on LoCoMo (n=1)** — the count/latest completeness hypothesis needs **`longmemeval_s`** (real
+> haystack; LME *oracle*'s tiny haystack makes pool@20≈1.0, testing ordering not recovery).
+> That `_s` gate (the benchmark that actually tests the metric's motivating hypothesis) is the
+> next experiment; `_s` data must be fetched first.
+>
+> **UPDATE — LME gate (2026-06-11, n=120, `.simba/reranker_evidence_ab_lme.py`) CONTRADICTS the
+> clean LoCoMo win; "default-on" is over-claimed.** Per-operation complete@5 (none→cross):
+> latest 0.7→0.8 (helps), count 0.2→0.2 (candidate-gen-bound, pool@20=0.5), **temporal 0.65→0.20
+> (hurts hard)**, recall 0.833→0.733 (hurts easy single-hop). End-to-end QA is a WASH: none
+> 0.625, cross 0.650. Mechanism: cross-encoders score POINTWISE relevance → multi-evidence
+> temporal (avg 2.25 gold, both endpoints required) loses the co-required turn. **Revised
+> verdict:** retiring the 23s `llm` pass for cross-encoder is solid (QA-equal, 50–130× faster);
+> but reranking-vs-none is operation-dependent → the right design is **intent-gated reranking**
+> (on for latest/compositional-multihop; OFF for multi-evidence-temporal & easy single-hop), not
+> blanket default-on. **The durable win remains the failure-mode debugger** (candidate_generation
+> | reranking | reasoning), which localized: count→candidate-generation (0.5), latest→success,
+> temporal→reranking, recall→reasoning — telling us the next lever per operation.
+>
+> **SHIPPED — intent-gated reranking (`memory.rerank_intent_gating`, default-on).** `should_rerank
+> (query, cfg)` (in `reranker.py`, AND-ed into the hybrid rerank gate) skips the pointwise
+> reranker for **multi-endpoint temporal** queries (the one severe, cleanly-detectable harm).
+> Validated by post-processing the persisted LME cases (free, no re-run): complete@5 temporal
+> **0.20→0.60** (≈ no-rerank 0.65, gate fired 16/20) while latest stays **0.80** (gate fired 0/20)
+> and count/recall unaffected. Easy single-hop `recall` (0.733) left UNGATED on purpose —
+> detecting it from query text would risk skipping the compositional recall the reranker helps
+> (LoCoMo 2-span), and its dip was QA-neutral. Reranking is now a **router decision, not a global
+> flag.** Next levers (unchanged): candidate-generation depth for count, then `longmemeval_s`.
 
 ## TDD (RED first)
 

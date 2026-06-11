@@ -211,3 +211,32 @@ def test_scorer_sees_content_and_context(monkeypatch) -> None:
     reranker.rerank("q", cands, cfg=cfg)
     assert "the cat sat" in seen[0]
     assert "on a mat" in seen[0]
+
+
+# ── intent-gated reranking (spec 22, LME-gate correction) ─────────────────────
+# Measured: cross-encoder HURTS multi-evidence temporal (LME complete@5 0.65->0.20)
+# and easy single-hop; helps latest/compositional. should_rerank gates the harmful
+# query shapes so reranking becomes a router decision, not a global config.
+
+
+def test_should_rerank_gating_off_is_always_true() -> None:
+    cfg = simba.memory.config.MemoryConfig(rerank_intent_gating=False)
+    assert reranker.should_rerank("how many days between X and Y", cfg) is True
+    assert reranker.should_rerank("anything at all", cfg) is True
+
+
+def test_should_rerank_skips_multi_endpoint_temporal() -> None:
+    cfg = simba.memory.config.MemoryConfig(rerank_intent_gating=True)
+    assert reranker.should_rerank(
+        "How many days between the wedding and the move?", cfg) is False
+    assert reranker.should_rerank(
+        "Which happened first, the trip or the promotion?", cfg) is False
+    assert reranker.should_rerank(
+        "How long after starting the job did I buy the car?", cfg) is False
+
+
+def test_should_rerank_keeps_latest_and_compositional() -> None:
+    cfg = simba.memory.config.MemoryConfig(rerank_intent_gating=True)
+    assert reranker.should_rerank("How often do I do yoga now?", cfg) is True
+    assert reranker.should_rerank(
+        "What did the engineer say about the database schema migration?", cfg) is True
