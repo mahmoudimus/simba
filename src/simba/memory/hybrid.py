@@ -21,6 +21,7 @@ import simba.memory.fts
 import simba.memory.keywords
 import simba.memory.kg_fold
 import simba.memory.llm_rerank
+import simba.memory.reranker
 import simba.memory.scoring
 import simba.memory.usage
 import simba.memory.vector_db
@@ -35,6 +36,21 @@ class _FAKE_NON_DORMANT:  # noqa: N801  # sentinel name fixed by the Phase 6 spe
     """Sentinel for records with no usage row — treated as non-dormant."""
 
     dormant = False
+
+
+def _rerank_active(cfg: typing.Any, llm_client: typing.Any) -> bool:
+    """Whether the rerank stage should fire, given the mode and the client.
+
+    "none" never fires; "llm" needs a client (preserving the prior gate); the
+    local GGUF backends ("cross-encoder"/"local-llm") need no client. An unknown
+    mode is gated off here (reranker.rerank also fail-opens on it).
+    """
+    mode = getattr(cfg, "reranker_mode", "none")
+    if mode == "none":
+        return False
+    if mode == "llm":
+        return llm_client is not None
+    return mode in ("cross-encoder", "local-llm")
 
 
 def _filter_dormant(
@@ -295,12 +311,15 @@ async def hybrid_search(
             fused, cfg=cfg, now=time.time(), usage_map=usage_map
         )
 
-    # Optional LLM rerank of the candidate pool (cross-encoder role) before
-    # truncation. Two modes, both fail-open:
+    # Optional rerank of the candidate pool (cross-encoder role) before
+    # truncation, routed on cfg.reranker_mode (spec 22). Two scheduling modes,
+    # both fail-open:
     #   - cache wired (daemon): NON-BLOCKING — serve the fast order, rerank off
     #     the hot path, cache the result keyed by (query, candidate-set).
     #   - no cache (eval/CLI): synchronous rerank in a worker thread.
-    if getattr(cfg, "llm_rerank_enabled", False) and llm_client is not None:
+    # The "llm" backend needs a client (preserves the existing gate); the local
+    # GGUF backends ("cross-encoder"/"local-llm") need none; "none" is a no-op.
+    if getattr(cfg, "llm_rerank_enabled", False) and _rerank_active(cfg, llm_client):
         max_cands = getattr(cfg, "llm_rerank_candidates", 20)
         if rerank_cache is not None:
             pool_ids = [r.get("id") for r in fused]
@@ -317,6 +336,7 @@ async def hybrid_search(
                         list(fused),
                         llm_client,
                         max_cands,
+                        cfg,
                     )
                 )
                 bg_tasks.add(task)
@@ -325,10 +345,11 @@ async def hybrid_search(
         else:
             with contextlib.suppress(Exception):
                 fused = await asyncio.to_thread(
-                    simba.memory.llm_rerank.rerank,
+                    simba.memory.reranker.rerank,
                     query_text,
                     fused,
-                    client=llm_client,
+                    cfg=cfg,
+                    llm=llm_client,
                     max_candidates=max_cands,
                 )
 
@@ -346,14 +367,16 @@ async def _bg_rerank(
     pool: list[dict[str, typing.Any]],
     client: typing.Any,
     max_candidates: int,
+    cfg: typing.Any,
 ) -> None:
     """Rerank ``pool`` off the hot path and store the id order in ``cache``."""
     with contextlib.suppress(Exception):
         reordered = await asyncio.to_thread(
-            simba.memory.llm_rerank.rerank,
+            simba.memory.reranker.rerank,
             query,
             pool,
-            client=client,
+            cfg=cfg,
+            llm=client,
             max_candidates=max_candidates,
         )
         cache.put(key, [r.get("id") for r in reordered])
