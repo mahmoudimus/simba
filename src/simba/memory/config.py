@@ -103,6 +103,30 @@ class MemoryConfig:
     score_weight_recency: float = 0.5
     score_weight_importance: float = 0.3  # uses the stored confidence as importance
     recency_halflife_days: float = 90.0
+    # Reranker backend selection (spec 22). The reranker is a relevance re-scoring
+    # pass over the fused candidate pool before truncation to max_results (the
+    # cross-encoder's role). Backends (measured LoCoMo n=60 recall@5 / latency):
+    #   "cross-encoder" (default) bge-reranker-v2-m3 GGUF via llama-cpp RANK
+    #       pooling — 1 relevance score per (query, doc) pair. 0.688 @ ~240ms.
+    #   "local-llm"     zerank-2 Qwen3-4B GGUF via llama-cpp; score = the logit of
+    #       the model's "Yes"/true token at the final position. 0.718 @ ~1.3s.
+    #   "llm"           the cloud LLM client (existing llm_rerank.rerank). 0.721
+    #       @ ~23s — the latency trap this spec retires from the default.
+    #   "none"          skip reranking entirely.
+    # Both local backends run GGUF via the EXISTING llama-cpp stack (no torch),
+    # mirroring EmbeddingService loading; the model auto-downloads from the repo/
+    # file fields below. Default "cross-encoder" per the measured win — 95% of the
+    # LLM's recall@5 at ~96x lower latency. Always fail-open.
+    reranker_mode: str = "cross-encoder"
+    # cross-encoder backend (bge-reranker-v2-m3 GGUF, XLM-RoBERTa based).
+    reranker_model_repo: str = "gpustack/bge-reranker-v2-m3-GGUF"
+    reranker_model_file: str = "bge-reranker-v2-m3-Q4_K_M.gguf"
+    # local-llm backend (zerank-2 Qwen3-4B GGUF). true_token_id=9454 ("Yes") is
+    # the relevance logit per zeroentropy/zerank-2's 1_LogitScore module.
+    reranker_local_llm_repo: str = "godkingleto/zerank-2-Q4_K_M-GGUF"
+    reranker_local_llm_file: str = "zerank-2-q4_k_m.gguf"
+    reranker_local_llm_true_token: int = 9454
+    reranker_n_ctx: int = 4096  # context window for the local-llm backend
     # LLM reranker: an LLM relevance pass over the candidate pool before truncating
     # to max_results (the cross-encoder's role). On by default (experimental).
     # In the daemon it is NON-BLOCKING — recall serves the fast order and reranks
