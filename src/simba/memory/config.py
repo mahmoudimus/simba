@@ -127,6 +127,14 @@ class MemoryConfig:
     reranker_local_llm_file: str = "zerank-2-q4_k_m.gguf"
     reranker_local_llm_true_token: int = 9454
     reranker_n_ctx: int = 4096  # context window for the local-llm backend
+    # Intent-gated reranking (spec 22, LME-gate correction). The reranker is a
+    # POINTWISE relevance pass, which HELPS latest/compositional-multihop but HURTS
+    # multi-evidence temporal (it promotes the most-relevant turn and demotes a
+    # co-required one, breaking the evidence set: LME complete@5 0.65->0.20). When
+    # on, skip reranking for query shapes it measurably harms (multi-endpoint
+    # temporal) — making reranking a router decision, not a global flag. Off ->
+    # reranking fires whenever the mode/client gate allows (prior behavior).
+    rerank_intent_gating: bool = True
     # LLM reranker: an LLM relevance pass over the candidate pool before truncating
     # to max_results (the cross-encoder's role). On by default (experimental).
     # In the daemon it is NON-BLOCKING — recall serves the fast order and reranks
