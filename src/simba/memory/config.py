@@ -81,6 +81,19 @@ class MemoryConfig:
     # Broad-query widening (Phase 0.1): aggregation queries pull a wider net.
     max_results_broad: int = 8  # results returned for broad queries
     fts_candidate_pool_broad: int = 40  # RRF candidate pool for broad queries
+    # Intent-aware candidate DEPTH for count queries. Counting an open class is
+    # recall-BREADTH-bound, not pointwise-rerank-bound: it needs every member, and
+    # a pointwise reranker cannot recover what a narrow pool never retrieved
+    # (measured on LongMemEval: count pool_complete@20 = 0.50 — half the gold never
+    # enters a width-20 pool). So for count intent, widen the first-stage pool +
+    # context and skip the (pointwise) reranker. Off -> count uses normal sizing.
+    count_depth_enabled: bool = True
+    count_candidate_pool_n: int = 80  # wide RRF candidate pool (pool_complete@80=1.0)
+    # Returned context size. Measured (LME count, avg 3.52 gold): complete@20=0.40 is
+    # too small — gold lives at ranks 20-40; complete@40=0.96 (vs @80=1.0 at 2x cost).
+    # Answer accuracy tracks it: 0.40(k=8) -> 0.48(k=20) -> 0.56(k=40).
+    count_context_k: int = 40  # results returned (context size) for count queries
+    count_disable_rerank: bool = True  # skip the pointwise reranker for count
     # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
     expansion_enabled: bool = True  # on by default (costs one extra embed per recall)
     # HyDE mode (C3): how the 2nd vector arm's text is derived.

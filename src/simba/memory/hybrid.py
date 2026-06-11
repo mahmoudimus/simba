@@ -18,6 +18,7 @@ import simba.db
 import simba.kg.ppr
 import simba.memory.entity_bridge
 import simba.memory.fts
+import simba.memory.intent
 import simba.memory.keywords
 import simba.memory.kg_fold
 import simba.memory.llm_rerank
@@ -319,10 +320,17 @@ async def hybrid_search(
     #   - no cache (eval/CLI): synchronous rerank in a worker thread.
     # The "llm" backend needs a client (preserves the existing gate); the local
     # GGUF backends ("cross-encoder"/"local-llm") need none; "none" is a no-op.
+    # should_rerank skips the pointwise reranker on shapes it harms (multi-endpoint
+    # temporal). Count queries also skip it (recall-breadth-bound, served by the
+    # widened pool above; the reranker can demote a co-required class member).
+    _skip_count_rerank = getattr(
+        cfg, "count_disable_rerank", False
+    ) and simba.memory.intent.is_count(query_text)
     if (
         getattr(cfg, "llm_rerank_enabled", False)
         and _rerank_active(cfg, llm_client)
         and simba.memory.reranker.should_rerank(query_text, cfg)
+        and not _skip_count_rerank
     ):
         max_cands = getattr(cfg, "llm_rerank_candidates", 20)
         if rerank_cache is not None:

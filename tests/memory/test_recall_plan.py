@@ -65,3 +65,25 @@ def test_expansion_terms_present_when_enabled() -> None:
     assert plan.expansion_terms  # non-empty focused-term string
     terms = plan.expansion_terms
     assert "GITHUB_TOKEN" in terms or "mahmoudimus" in terms
+
+
+# ── intent-aware candidate depth for count (recall-breadth-bound) ─────────────
+def test_count_query_widens_pool_and_context() -> None:
+    cfg = _cfg(intent_aware=True, count_depth_enabled=True,
+               count_candidate_pool_n=80, count_context_k=20)
+    plan = rp.plan_recall("How many korean restaurants have I tried?", cfg)
+    assert plan.mode == "count"
+    assert plan.candidate_pool == 80
+    assert plan.max_results == 20
+
+
+def test_count_depth_disabled_uses_normal_sizing() -> None:
+    cfg = _cfg(intent_aware=True, count_depth_enabled=False)
+    plan = rp.plan_recall("How many korean restaurants have I tried?", cfg)
+    assert plan.mode != "count"
+
+
+def test_count_respects_explicit_max_results() -> None:
+    cfg = _cfg(intent_aware=True, count_depth_enabled=True)
+    plan = rp.plan_recall("How many trips have I taken?", cfg, max_results=3)
+    assert plan.max_results == 3
