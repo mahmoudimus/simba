@@ -19,6 +19,7 @@ import time
 import typing
 
 import simba.eval.recall_adapter
+import simba.memory.conflict
 from simba.eval.runner import _percentile
 
 if typing.TYPE_CHECKING:
@@ -69,8 +70,10 @@ def build_answer_prompt(
             f"concisely.\n\nMemories:\n(no context)\n\nQuestion: {question}\nAnswer:"
         )
     if dates and any(d for d in dates):
-        parsed = [(_parse_date(dates[i]) if i < len(dates) else None)
-                  for i in range(len(contexts))]
+        parsed = [
+            (_parse_date(dates[i]) if i < len(dates) else None)
+            for i in range(len(contexts))
+        ]
         dated = [(i, p) for i, p in enumerate(parsed) if p is not None]
         newest_idx = max(dated, key=lambda t: t[1])[0] if dated else -1
         lines = []
@@ -123,6 +126,7 @@ def score_case(
     cache: typing.Any = None,
     judge_model: str = "",
     id2date: dict[str, str] | None = None,
+    conflict_cfg: typing.Any = None,
 ) -> bool | None:
     """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
 
@@ -133,6 +137,11 @@ def score_case(
     predicted) verdict is served from disk instead of re-calling the judge LLM.
 
     ``id2date`` (id -> created_at) adds the recency annotation the daemon injects.
+
+    ``conflict_cfg`` (a memory config) mirrors the answer-time conflict note the
+    daemon injects via ``format_memories``: ``conflict_note`` is gated inside —
+    disabled config (the default) means zero LLM cost and an unchanged prompt,
+    so the bench only pays for what production would.
     """
     _judge = judge if judge is not None else answerer
     if not judge_model and judge is not None:
@@ -140,7 +149,14 @@ def score_case(
     ids = [i for i in retriever(case.query)[:k] if i in id2content]
     contexts = [id2content[i] for i in ids]
     dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
-    predicted = answerer.complete(build_answer_prompt(case.query, contexts, dates))
+    prompt = build_answer_prompt(case.query, contexts, dates)
+    if conflict_cfg is not None:
+        note = simba.memory.conflict.conflict_note(
+            contexts, case.query, cfg=conflict_cfg, llm_client=answerer
+        )
+        if note:
+            prompt = f"{prompt}\n\n{note}"
+    predicted = answerer.complete(prompt)
     if not predicted or not predicted.strip():
         return None
     if cache is not None:
@@ -383,6 +399,10 @@ def run_qa(
                         judge_llm=judge,
                     )
                 else:
+                    # Conflict surfacing the daemon injects (format_memories) —
+                    # mirrored like the recency annotation above so the benchmark
+                    # measures what ships. Gated inside conflict_note: zero cost
+                    # unless cfg.conflict_surfacing_enabled.
                     correct = score_case(
                         case,
                         retriever,
@@ -393,6 +413,7 @@ def run_qa(
                         cache=cache,
                         judge_model=judge_model,
                         id2date=id2date,
+                        conflict_cfg=cfg,
                     )
                 latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
