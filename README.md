@@ -472,6 +472,18 @@ The oracle→real-haystack drop is only **−0.04 recall@5 / −0.08 QA** — re
 
 Full methodology + numbers: [`docs/plans/11-sota-comparison.md`](docs/plans/11-sota-comparison.md) and [`docs/plans/13-sota-stepc-verdict.md`](docs/plans/13-sota-stepc-verdict.md). The honesty rule throughout: tune on dev, report on test, never tune to the number, and report flat/negative results.
 
+### A road not taken — the write-time fact-index (and why store-raw won)
+
+Counting/aggregation ("how many Korean restaurants have I tried?") is simba's hardest case, so we built and measured an alternative to fixing it: a **write-time atomic-fact index** (the archived `feat/fact-index` branch — default-off, unwired, never landed). Instead of relying on raw memories, a *structuring* LLM extraction would pull every atomic dated fact into a table keyed by canonical entity (`{entity, content, date}`), and answer-time lookup would return the **complete** entity cluster — not a top-k slice — so the answerer sees every member of the class.
+
+It didn't pay off, and the measurements say why:
+
+- **Extraction wasn't the wall.** The store + structuring extraction validated cleanly (~104 atomic dated facts per question).
+- **The lookup was the wrong shape.** Entity-cluster lookup is class-vs-instance mismatched: the extractor tags *specific instances* ("black jeans", "boots") while a count asks about a *class* ("clothing items") that matches no single cluster — 3 of 4 count queries missed.
+- **The deeper reason it can't work in general.** Across a six-probe arc, structured extraction lost to **store-raw + answer-time reasoning** on oracle. A count's notion of *"what counts as one thing"* (visits? named places? cuisines?) is a **query-supplied equivalence relation** — created by the question, often not even present in the source until asked — so it **cannot be pre-materialized at write time**. Only *latest/state* facts have a query-independent identity worth canonicalizing.
+
+**What actually fixed counting was simpler, and it's what shipped.** A failure-mode debugger (`candidate_generation | reranking | reasoning`) localized count misses to *candidate generation*, not ranking: `pool_complete@20 ≈ 0.50` — half the gold never enters a width-20 pool, and a reranker can't recover what retrieval never fetched. Counting is **recall-breadth-bound**, so the fix is to **widen the first-stage pool** for count queries (intent-aware candidate depth, in `memory` config): `pool_complete@20 0.40 → @80 1.00`, count answer accuracy `0.40 → 0.56` — no separate fact table, no extraction, no class-vs-instance trap. **Store-raw + retrieval breadth beat extract-into-a-side-index.** The same debugger also showed the reranker is *pointwise* and harms multi-evidence temporal, which is why reranking is now an intent-gated router decision rather than a global flag (see [`docs/plans/22-reranker-backends.md`](docs/plans/22-reranker-backends.md)).
+
 ## Neuron — Neuro-Symbolic Logic Server
 
 Neuron is an MCP (Model Context Protocol) server that gives Claude Code access to formal verification tools (Z3 theorem prover, Souffle Datalog) and a truth database.
