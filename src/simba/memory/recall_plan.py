@@ -66,6 +66,18 @@ def plan_recall(
         max_res = cfg.max_results
     candidate_pool = cfg.fts_candidate_pool_broad if broad else cfg.fts_candidate_pool
 
+    # Count queries are recall-breadth-bound: widen the pool + context further than
+    # "broad" (a pointwise reranker can't recover gold a narrow pool never fetched).
+    # The explicit max_results escape hatch still wins (max_results is not None).
+    if (
+        getattr(cfg, "count_depth_enabled", False)
+        and max_results is None
+        and simba.memory.intent.is_count(query)
+    ):
+        mode = "count"
+        max_res = cfg.count_context_k
+        candidate_pool = cfg.count_candidate_pool_n
+
     # Multi-arm HyDE (opt-in): a 2nd vector arm over the focused-term string.
     expansion_terms = ""
     if getattr(cfg, "hybrid_enabled", False) and cfg.expansion_enabled:

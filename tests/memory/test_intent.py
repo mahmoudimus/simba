@@ -50,3 +50,16 @@ class TestClassify:
         assert intent.classify("List ALL of them") == "broad"
         # substring of a marker must not trigger ("overviewer" != "overview").
         assert intent.classify("the listener callback") == "precise"
+
+
+# ── count-intent detection (count candidate-depth PR) ─────────────────────────
+def test_is_count_detects_instance_counting() -> None:
+    assert intent.is_count("How many bikes do I own?") is True
+    assert intent.is_count("number of korean restaurants I've tried") is True
+    assert intent.is_count("what is the total number of trips I took") is True
+
+
+def test_is_count_excludes_temporal_frequency_and_plain() -> None:
+    assert intent.is_count("How many days between the trip and the move?") is False
+    assert intent.is_count("how many times a week do I exercise") is False
+    assert intent.is_count("what did the engineer say about the schema") is False
