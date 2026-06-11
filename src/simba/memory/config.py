@@ -62,6 +62,14 @@ class MemoryConfig:
     hygiene_scheduler_enabled: bool = True
     sync_interval: int = 0
     shutdown_timeout: int = 10
+    # Continuous extraction (the "Continuous" gap). When on, the Stop hook reads only
+    # the NEW transcript window each turn (incremental cursor, O(new)) and enqueues it
+    # for the scored extract->score->keep/drop worker. DEFAULT-OFF: this ships the
+    # cursor + enqueue rails only; the worker + Importance rubric are gated behind a
+    # gold-set Evaluator (see simba.eval.extraction_eval). Off -> prior behavior
+    # (extraction stays at PreCompact).
+    continuous_extraction_enabled: bool = False
+    continuous_extraction_max_bytes: int = 2_000_000  # per-turn window cap (bytes)
     # Hybrid recall (L3): a BM25 keyword arm fused with the vector arm via RRF.
     hybrid_enabled: bool = True
     # RRF rank constant; lower = sharper top-rank weighting. Swept 2026-06-06:
