@@ -54,3 +54,30 @@ def classify(query: str) -> str:
     """Return "broad" if the query reads as aggregation/exploration, else "precise"."""
     words = {m.group().lower() for m in _WORD_RE.finditer(query or "")}
     return "broad" if words & _BROAD_MARKERS else "precise"
+
+
+# Counting an open class ("how many korean restaurants") is recall-BREADTH-bound: it
+# needs every member, so it wants a wide candidate pool. Excluded: temporal
+# ("how many days between") and frequency ("how many times a week" = latest/state),
+# which are NOT instance-counting and don't want breadth.
+_COUNT_RE = re.compile(
+    r"\bhow many\b|\bnumber of\b|\bhow much\b|\bcount of\b|\btotal (?:number|count)\b",
+    re.IGNORECASE,
+)
+_COUNT_EXCLUDE_RE = re.compile(
+    r"\bhow many (?:days?|weeks?|months?|years?|hours?|minutes?|times)\b",
+    re.IGNORECASE,
+)
+
+
+def is_count(query: str) -> bool:
+    """Whether ``query`` is an instance-counting question (recall-breadth-bound).
+
+    True for "how many X / number of X / total number of X"; False for temporal
+    span ("how many days between …") and frequency ("how many times a week …"),
+    which are latest/state, not class-counting.
+    """
+    q = query or ""
+    if _COUNT_EXCLUDE_RE.search(q):
+        return False
+    return _COUNT_RE.search(q) is not None
