@@ -6,10 +6,13 @@ runs tailor error capture pipeline on transcript.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import pathlib
 
+import simba.config
 import simba.guardian.check_signal
+import simba.memory.continuous
 import simba.tailor.hook
 
 
@@ -30,6 +33,13 @@ def main(hook_input: dict) -> str:
 
     # 2. Tailor: error capture from transcript
     simba.tailor.hook.process_hook(json.dumps(hook_input))
+
+    # 3. Continuous extraction (default-off): read only the NEW transcript window via
+    # the incremental cursor and enqueue it for the scored worker. Fail-soft.
+    with contextlib.suppress(Exception):
+        simba.memory.continuous.on_stop(
+            hook_input, simba.config.load("memory"), cwd=cwd
+        )
 
     # Stop hooks don't support hookSpecificOutput — only top-level fields.
     # The tailor error capture writes to disk as a side effect.
