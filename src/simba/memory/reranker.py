@@ -22,6 +22,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import pathlib
+import re
 import threading
 import typing
 
@@ -38,6 +39,36 @@ logger = logging.getLogger("simba.memory")
 _CROSS_ENCODER: _CrossEncoderReranker | None = None
 _LOCAL_LLM: _LocalLlmReranker | None = None
 _LOCK = threading.Lock()
+
+# Intent gate (spec 22, LME-gate correction). The reranker is a POINTWISE relevance
+# pass: it helps latest/compositional-multihop recall but HURTS multi-evidence
+# temporal — it can promote the single most-relevant turn and demote a co-required
+# one, breaking the evidence SET (measured: LME complete@5 0.65 -> 0.20). Skip the
+# shapes it measurably harms so reranking is a router decision, not a global flag.
+_TEMPORAL_MULTI_ENDPOINT = re.compile(
+    r"\b(?:days?|weeks?|months?|years?|hours?)\b.*\b(?:between|after|before|since|apart)\b"
+    r"|\bbetween\b[^?]*\band\b"
+    r"|\bhow long\b.*\b(?:after|before|since|between)\b"
+    r"|\bwhich\b[^?]*\b(?:first|earlier|later|come|came|happened)\b[^?]*\bor\b"
+    r"|\b(?:first|last)\b[^?]*\bor\b[^?]*\?",
+    re.IGNORECASE,
+)
+
+
+def should_rerank(query: str, cfg: typing.Any) -> bool:
+    """Whether reranking should fire for ``query`` (intent gate, spec 22).
+
+    When ``cfg.rerank_intent_gating`` is on, skip query shapes the pointwise
+    reranker measurably harms (multi-endpoint temporal — needs ALL endpoints
+    ranked, which pointwise scoring disrupts). Off -> always True (prior
+    behavior). Fail-open: any error -> True (rerank).
+    """
+    if not getattr(cfg, "rerank_intent_gating", False):
+        return True
+    try:
+        return _TEMPORAL_MULTI_ENDPOINT.search(query or "") is None
+    except Exception:
+        return True
 
 # Shared C-level llama.cpp log-suppression callback (kept alive at module scope
 # to prevent GC of the C callback), mirroring EmbeddingService._llama_log_cb.

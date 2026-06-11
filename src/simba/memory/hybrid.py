@@ -319,7 +319,11 @@ async def hybrid_search(
     #   - no cache (eval/CLI): synchronous rerank in a worker thread.
     # The "llm" backend needs a client (preserves the existing gate); the local
     # GGUF backends ("cross-encoder"/"local-llm") need none; "none" is a no-op.
-    if getattr(cfg, "llm_rerank_enabled", False) and _rerank_active(cfg, llm_client):
+    if (
+        getattr(cfg, "llm_rerank_enabled", False)
+        and _rerank_active(cfg, llm_client)
+        and simba.memory.reranker.should_rerank(query_text, cfg)
+    ):
         max_cands = getattr(cfg, "llm_rerank_candidates", 20)
         if rerank_cache is not None:
             pool_ids = [r.get("id") for r in fused]
