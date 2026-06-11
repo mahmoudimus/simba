@@ -9,7 +9,28 @@ import pytest
 import pytest_asyncio
 
 import simba.memory.config
+import simba.memory.reranker
 import simba.memory.server
+
+
+@pytest.fixture(autouse=True)
+def _block_gguf_reranker_loads(monkeypatch):
+    """Forbid real GGUF reranker model downloads/loads in unit tests.
+
+    The default ``reranker_mode="cross-encoder"`` would otherwise load a real
+    GGUF on the rerank hot path. The GGUF accessors are patched to raise, so the
+    reranker fail-opens (candidates unchanged) — restoring the prior "no reorder
+    unless a scorer is wired" behavior. Tests that exercise the reorder logic
+    inject a fake scorer via their own ``monkeypatch.setattr``, which overrides
+    this. The opt-in real-GGUF integration test installs its own (non-raising)
+    accessor before any reload. No model is ever fetched in CI.
+    """
+
+    def _forbidden(cfg):
+        raise RuntimeError("GGUF reranker load blocked in unit tests")
+
+    monkeypatch.setattr(simba.memory.reranker, "_get_cross_encoder", _forbidden)
+    monkeypatch.setattr(simba.memory.reranker, "_get_local_llm", _forbidden)
 
 
 @pytest_asyncio.fixture

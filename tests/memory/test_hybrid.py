@@ -386,7 +386,9 @@ class TestLlmRerankWiring:
             return [_vec("a", 0.9), _vec("b", 0.8), _vec("c", 0.7)]
 
         monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
-        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+        cfg = simba.memory.config.MemoryConfig(
+            llm_rerank_enabled=True, reranker_mode="llm"
+        )
         results = await hybrid.hybrid_search(
             None,
             None,
@@ -428,7 +430,9 @@ class TestAsyncRerankCache:
         cache = rcmod.RerankCache()
         cache.put(cache.signature("q", ["a", "b", "c"]), ["c", "b", "a"])
         client = _CountingRerankClient()
-        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+        cfg = simba.memory.config.MemoryConfig(
+            llm_rerank_enabled=True, reranker_mode="llm"
+        )
 
         results = await hybrid.hybrid_search(
             None,
@@ -457,7 +461,9 @@ class TestAsyncRerankCache:
         monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
         cache = rcmod.RerankCache()
         client = _CountingRerankClient()
-        cfg = simba.memory.config.MemoryConfig(llm_rerank_enabled=True)
+        cfg = simba.memory.config.MemoryConfig(
+            llm_rerank_enabled=True, reranker_mode="llm"
+        )
         bg: set = set()
 
         results = await hybrid.hybrid_search(

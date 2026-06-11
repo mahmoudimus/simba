@@ -101,7 +101,10 @@ known-first-party = ["simba"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -q"
+addopts = "-ra -q -m 'not gguf'"
+markers = [
+    "gguf: opt-in tests that download/load a real GGUF model (skipped by default; run with `-m gguf`)",
+]
 
 [tool.coverage.run]
 source = ["simba"]
