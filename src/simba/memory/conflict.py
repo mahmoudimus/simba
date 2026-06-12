@@ -20,6 +20,7 @@ candidate set is below the minimum, or no llm_client is wired.
 
 from __future__ import annotations
 
+import concurrent.futures
 import dataclasses
 import typing
 
@@ -132,6 +133,7 @@ def detect_conflict_pairwise(
     *,
     llm_client: typing.Any,
     max_pairs: int = 45,
+    parallel: int = 1,
 ) -> ConflictResult | None:
     """Check candidate PAIRS in isolation; return the first flagged conflict.
 
@@ -143,28 +145,45 @@ def detect_conflict_pairwise(
     ``b=memories[j]``). FAIL-OPEN: returns ``None`` on empty input, fewer than two
     memories, a missing client, or any exception — never raises into the recall
     path.
+
+    ``parallel`` > 1 checks pairs in WAVES of that width (a bounded thread pool):
+    the hot path pays ~ceil(pairs/parallel) LLM latencies instead of one per
+    pair. Semantics match sequential exactly — waves run in pair order, the
+    short-circuit happens between waves, and within a wave the LOWEST-index
+    flagged pair wins, so the returned conflict is deterministic and identical
+    to ``parallel=1``.
     """
     if not memories or len(memories) < 2 or llm_client is None:
         return None
     try:
-        checked = 0
         n = len(memories)
-        for i in range(n):
-            for j in range(i + 1, n):
-                if checked >= max_pairs:
-                    return None
-                checked += 1
-                verdict = llm_client.complete_json(
-                    build_pair_detect_prompt(memories[i], memories[j], query)
-                )
-                if not isinstance(verdict, dict) or not verdict.get("conflict"):
-                    continue
-                description = verdict.get("description")
-                if not isinstance(description, str):
-                    description = ""
-                return ConflictResult(
-                    a=memories[i], b=memories[j], description=description.strip()
-                )
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)][:max_pairs]
+        width = max(1, int(parallel))
+
+        def _check(pair: tuple[int, int]) -> ConflictResult | None:
+            i, j = pair
+            verdict = llm_client.complete_json(
+                build_pair_detect_prompt(memories[i], memories[j], query)
+            )
+            if not isinstance(verdict, dict) or not verdict.get("conflict"):
+                return None
+            description = verdict.get("description")
+            if not isinstance(description, str):
+                description = ""
+            return ConflictResult(
+                a=memories[i], b=memories[j], description=description.strip()
+            )
+
+        for start in range(0, len(pairs), width):
+            wave = pairs[start : start + width]
+            if width == 1:
+                results = [_check(wave[0])]
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(wave)) as ex:
+                    results = list(ex.map(_check, wave))
+            for hit in results:  # wave preserves pair order -> lowest index wins
+                if hit is not None:
+                    return hit
     except Exception:
         return None
     return None
@@ -224,7 +243,11 @@ def conflict_note(
     if strategy == "pairwise":
         max_pairs = getattr(cfg, "conflict_detect_max_pairs", 45)
         conflict = detect_conflict_pairwise(
-            memories, query, llm_client=llm_client, max_pairs=max_pairs
+            memories,
+            query,
+            llm_client=llm_client,
+            max_pairs=max_pairs,
+            parallel=getattr(cfg, "conflict_detect_parallel", 1),
         )
     else:
         conflict = detect_conflict(memories, query, llm_client=llm_client)
