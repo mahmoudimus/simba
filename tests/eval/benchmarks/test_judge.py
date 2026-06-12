@@ -587,6 +587,253 @@ def test_answer_prompt_no_current_date_when_absent():
     assert "Current date:" not in p
 
 
+# ── Official LongMemEval per-type judge (anscheck) ─────────────────────────
+# Verbatim port of xiaowu0162/LongMemEval get_anscheck_prompt, keyed on
+# case.intent. Measured: official-vs-generic judge = +3.6pp on simba outputs
+# (p=5e-4); preference slice 0.167 -> 0.300 from the judge prompt alone.
+
+
+def test_official_judge_prompt_default_template_for_core_intents() -> None:
+    for intent in ("single-session-user", "single-session-assistant", "multi-session"):
+        p = judge.build_official_judge_prompt(intent, "Q?", "7 May", "May 7th")
+        assert "subset of the information" in p  # default-template marker
+        assert "off-by-one" not in p  # not the temporal template
+        assert "Rubric:" not in p  # not the preference template
+        assert "Answer yes or no only." in p
+
+
+def test_official_judge_prompt_unknown_intent_falls_back_to_default() -> None:
+    p = judge.build_official_judge_prompt("some-new-intent", "Q?", "g", "p")
+    assert "subset of the information" in p
+    assert "off-by-one" not in p and "Rubric:" not in p
+
+
+def test_official_judge_prompt_temporal_has_off_by_one_tolerance() -> None:
+    p = judge.build_official_judge_prompt("temporal-reasoning", "Q?", "18", "19")
+    assert "do not penalize off-by-one errors" in p
+    assert "predicting 19 days when the answer is 18" in p
+
+
+def test_official_judge_prompt_knowledge_update_tolerates_old_plus_new() -> None:
+    p = judge.build_official_judge_prompt("knowledge-update", "Q?", "new", "old+new")
+    assert "previous information along with an updated answer" in p
+
+
+def test_official_judge_prompt_preference_uses_rubric() -> None:
+    p = judge.build_official_judge_prompt(
+        "single-session-preference", "Q?", "likes hiking", "go hiking"
+    )
+    assert "rubric for desired personalized response" in p
+    assert "Rubric: likes hiking" in p
+    assert "does not need to reflect all the points" in p
+
+
+def test_official_judge_prompt_interpolates_fields() -> None:
+    p = judge.build_official_judge_prompt("multi-session", "QQ?", "GOLD", "PRED")
+    assert "Question: QQ?" in p
+    assert "Correct Answer: GOLD" in p
+    assert "Model Response: PRED" in p
+
+
+class _NoJsonJudge(FakeLlm):
+    """Judge fake that fails the test if the JSON (generic) path is used."""
+
+    def complete_json(self, prompt: str) -> object:
+        raise AssertionError("official judge_style must not call complete_json")
+
+
+def test_score_case_official_grades_by_yes_substring() -> None:
+    case = EvalCase(
+        id="q1",
+        query="When?",
+        relevant_ids=["c1"],
+        answer="7 May",
+        intent="multi-session",
+    )
+    answerer = FakeLlm(answer="7 May")
+    judge_llm = _NoJsonJudge(answer="Yes, the response is correct.")
+    correct = judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        judge_style="official",
+    )
+    assert correct is True
+    # the judge saw the official prompt (plain completion), not the JSON one
+    assert "Answer yes or no only." in judge_llm.prompts[0]
+    assert "json" not in judge_llm.prompts[0].lower()
+
+
+def test_score_case_official_no_reply_grades_false() -> None:
+    case = EvalCase(
+        id="q1", query="When?", relevant_ids=["c1"], answer="7 May", intent="?"
+    )
+    answerer = FakeLlm(answer="never")
+    judge_llm = _NoJsonJudge(answer="No.")
+    correct = judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        judge_style="official",
+    )
+    assert correct is False
+
+
+def test_score_case_official_empty_judge_reply_returns_none() -> None:
+    case = EvalCase(
+        id="q1", query="When?", relevant_ids=["c1"], answer="7 May", intent="?"
+    )
+    answerer = FakeLlm(answer="7 May")
+    judge_llm = _NoJsonJudge(answer="   ")
+    result = judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        judge_style="official",
+    )
+    assert result is None
+
+
+def test_score_case_official_routes_template_by_case_intent() -> None:
+    case = EvalCase(
+        id="q1",
+        query="How many days?",
+        relevant_ids=["c1"],
+        answer="18",
+        intent="temporal-reasoning",
+    )
+    answerer = FakeLlm(answer="19")
+    judge_llm = _NoJsonJudge(answer="yes")
+    judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        answerer,
+        judge=judge_llm,
+        k=5,
+        judge_style="official",
+    )
+    assert "do not penalize off-by-one errors" in judge_llm.prompts[0]
+
+
+class _SpyCache:
+    """Records the judge_model strings used for cache lookups/stores."""
+
+    def __init__(self, hit: bool | None = None) -> None:
+        self.hit = hit
+        self.get_models: list[str] = []
+        self.put_models: list[str] = []
+
+    def get(self, judge_model, question, gold, predicted):
+        self.get_models.append(judge_model)
+        return self.hit
+
+    def put(self, judge_model, question, gold, predicted, correct):
+        self.put_models.append(judge_model)
+
+
+def test_score_case_official_cache_key_isolated_from_generic() -> None:
+    # The JudgeCache key does NOT include the prompt style; the official path
+    # must namespace the judge_model string so cached generic verdicts can't
+    # contaminate official-judge runs (and vice versa).
+    case = EvalCase(
+        id="q1",
+        query="When?",
+        relevant_ids=["c1"],
+        answer="7 May",
+        intent="temporal-reasoning",
+    )
+    spy_official = _SpyCache()
+    judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        FakeLlm(answer="7 May"),
+        judge=_NoJsonJudge(answer="yes"),
+        k=5,
+        cache=spy_official,
+        judge_model="m1",
+        judge_style="official",
+    )
+    spy_generic = _SpyCache()
+    judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        FakeLlm(answer="7 May", verdict={"correct": True}),
+        judge=FakeLlm(verdict={"correct": True}),
+        k=5,
+        cache=spy_generic,
+        judge_model="m1",
+        judge_style="generic",
+    )
+    assert spy_official.get_models == ["m1|anscheck-temporal-reasoning"]
+    assert spy_official.put_models == ["m1|anscheck-temporal-reasoning"]
+    assert spy_generic.get_models == ["m1"]  # generic key unchanged (back-compat)
+    assert spy_generic.put_models == ["m1"]
+
+
+def test_score_case_official_cache_hit_short_circuits_judge() -> None:
+    case = EvalCase(
+        id="q1",
+        query="When?",
+        relevant_ids=["c1"],
+        answer="7 May",
+        intent="multi-session",
+    )
+    judge_llm = _NoJsonJudge(answer="yes")
+    correct = judge.score_case(
+        case,
+        lambda q: ["c1"],
+        {"c1": "x"},
+        FakeLlm(answer="7 May"),
+        judge=judge_llm,
+        k=5,
+        cache=_SpyCache(hit=True),
+        judge_model="m1",
+        judge_style="official",
+    )
+    assert correct is True
+    assert judge_llm.prompts == []  # served from cache, judge never called
+
+
+def test_run_qa_threads_judge_style_to_score_case(monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(
+        "simba.eval.recall_adapter.build_retriever", lambda *a, **k: lambda q: []
+    )
+    monkeypatch.setattr(
+        judge,
+        "score_case",
+        lambda case, *a, **kw: seen.append(kw.get("judge_style")) or True,
+    )
+    ds = Dataset(
+        name="t",
+        corpus=[Memory(id="c1", content="x")],
+        cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+    )
+    embed = lambda t: [0.0]  # noqa: E731
+    judge.run_qa(
+        [ds],
+        embed_doc=embed,
+        embed_query=embed,
+        cfg=None,
+        llm=FakeLlm(),
+        judge_style="official",
+    )
+    judge.run_qa([ds], embed_doc=embed, embed_query=embed, cfg=None, llm=FakeLlm())
+    assert seen == ["official", "generic"]  # explicit value + back-compat default
+
+
 def test_score_case_threads_question_date():
     case = EvalCase(
         id="q1",

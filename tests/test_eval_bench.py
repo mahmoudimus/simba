@@ -239,6 +239,37 @@ def test_bench_qa_passes_eval_cfg_to_run_qa(monkeypatch, tmp_path) -> None:
     assert hasattr(seen["eval_cfg"], "ircot_enabled")
 
 
+def test_bench_config_judge_style_defaults_official() -> None:
+    # Canonical axis: the official LongMemEval per-type judge is the default
+    # (measured +3.6pp vs the generic JSON judge on simba outputs, p=5e-4).
+    assert bench_config.BenchConfig().judge_style == "official"
+
+
+def test_bench_qa_threads_judge_style_to_run_qa(monkeypatch, tmp_path) -> None:
+    import simba.eval.benchmarks.judge as judge
+    import simba.llm.judge_config as jcfg
+
+    _install_common_fakes(monkeypatch, tmp_path, judge_style="generic")
+    seen: dict[str, object] = {}
+
+    def _spy_run_qa(datasets, **kwargs):
+        seen["judge_style"] = kwargs.get("judge_style")
+        return {
+            "n_graded": 1,
+            "n_skipped": 0,
+            "overall": {"accuracy": 0.5},
+            "by_category": {},
+        }
+
+    monkeypatch.setattr(judge, "run_qa", _spy_run_qa)
+    monkeypatch.setattr(judge, "sample_cases", lambda ds, **k: ds)
+    monkeypatch.setattr(jcfg, "get_judge_client", lambda *a, **k: _SENTINEL_CLIENT)
+    rc = cli._eval_bench(["locomo", "--qa"])
+    assert rc == 0
+    # run_qa must receive bench.judge_style (not the function-level default).
+    assert seen["judge_style"] == "generic"
+
+
 def test_bench_embedding_cache_passed_to_sync_embedders(monkeypatch, tmp_path) -> None:
     _install_common_fakes(monkeypatch, tmp_path)
     seen: dict[str, object] = {}
