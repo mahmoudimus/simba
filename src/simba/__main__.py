@@ -2433,9 +2433,7 @@ def _eval_bench(args: list[str]) -> int:
         datasets = hotpotqa.load_hotpotqa(dataset_path)
     elif dataset_name == "subtlememory":
         plimit = (
-            persona_limit
-            if persona_limit >= 0
-            else bcfg.subtlememory_persona_limit
+            persona_limit if persona_limit >= 0 else bcfg.subtlememory_persona_limit
         )
         datasets = subtlememory.load_subtlememory(dataset_path, persona_limit=plimit)
     else:
@@ -2492,6 +2490,7 @@ def _eval_bench(args: list[str]) -> int:
             cache=jc.JudgeCache(_resolve_bench_path(cache_path)),
             eval_cfg=eval_cfg,
             judge_model=judge_client._cfg.model,
+            judge_style=bcfg.judge_style,
         )
 
     record = {
