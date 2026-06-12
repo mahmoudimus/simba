@@ -232,14 +232,17 @@ class MemoryConfig:
     kg_ppr_weight: float = 1.0  # RRF-arm weight of the PPR contribution
     kg_ppr_damping: float = 0.85
     # Answer-time conflict surfacing (src/simba/memory/conflict.py): after recall,
-    # one LLM call asks whether any two retrieved memories CONFLICT for the query;
+    # detection asks whether any two retrieved memories CONFLICT for the query;
     # if so, a directive that NAMES the specific conflict is appended to the
     # injected context so the answerer surfaces it (states what must be confirmed)
-    # instead of silently picking a side. Default-OFF — a *generic* always-on
-    # directive over-hedges non-conflict cases (measured harm), so this lever is
-    # gated on a detected, named conflict. No LLM cost when disabled or below the
-    # minimum candidate count; always fail-open (any error leaves context intact).
-    conflict_surfacing_enabled: bool = False
+    # instead of silently picking a side. Default-ON since 0.7.0: the pairwise
+    # detector + directive took the SubtleMemory contradictory both-sides slice
+    # 0.111 -> 0.944 with a net-positive harm check (docs/plans/14). The lever is
+    # gated on a DETECTED, NAMED conflict (a generic always-on directive measured
+    # harmful) and fail-open (any error leaves context intact). Zero LLM cost
+    # below the minimum candidate count; disable via
+    # `simba config set memory.conflict_surfacing_enabled false`.
+    conflict_surfacing_enabled: bool = True
     conflict_surfacing_min_memories: int = 2  # min candidates before detection runs
     # Detection strategy. "single" (default) = one LLM call over all top-k
     # memories at once ("do any of these conflict?"). "pairwise" = check candidate
@@ -247,8 +250,12 @@ class MemoryConfig:
     # lifts detection recall on subtle/buried conflicts (the all-at-once prompt
     # buries the conflicting pair among k distractors); pairwise costs up to
     # ``conflict_detect_max_pairs`` LLM calls (short-circuits on the first hit).
-    conflict_detect_strategy: str = "single"  # "single" | "pairwise"
+    conflict_detect_strategy: str = "pairwise"  # "single" | "pairwise"
     conflict_detect_max_pairs: int = 45  # cap on pairs checked in "pairwise" mode
+    # Pairwise checks run in waves of this width (bounded threads), so a recall
+    # with k memories pays ~ceil(pairs/width) LLM latencies, not one per pair.
+    # Result is deterministic (lowest-index flagged pair, same as sequential).
+    conflict_detect_parallel: int = 8
     # Write-time conflict engine (B2, src/simba/memory/conflict_store.py): move
     # detection OFF the answer-time path. When enabled, on store a new memory is
     # compared against its nearest neighbors (one focused pairwise LLM call each,
