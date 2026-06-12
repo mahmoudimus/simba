@@ -122,20 +122,21 @@ def test_score_case_appends_conflict_directive_when_enabled() -> None:
 
 
 def test_score_case_conflict_cfg_disabled_is_zero_cost() -> None:
-    # Disabled config (the default) => conflict_note short-circuits: no extra
-    # LLM calls, prompt unchanged. One complete (answer) + one complete_json
-    # (self-grading) only.
+    # Disabled config => conflict_note short-circuits: no extra LLM calls,
+    # prompt unchanged. One complete (answer) + one complete_json
+    # (self-grading) only. Two contexts so the min-memories gate is NOT what
+    # short-circuits — the disabled flag is.
     import simba.memory.config as mc
 
     case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
     llm = FakeLlm(answer="7 May", verdict={"correct": True})
     correct = judge.score_case(
         case,
-        lambda q: ["c1"],
-        {"c1": "went 7 May"},
+        lambda q: ["c1", "c2"],
+        {"c1": "went 7 May", "c2": "noise"},
         llm,
         k=2,
-        conflict_cfg=mc.MemoryConfig(),
+        conflict_cfg=mc.MemoryConfig(conflict_surfacing_enabled=False),
     )
     assert correct is True
     assert len(llm.prompts) == 2

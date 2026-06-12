@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-12
+
+### Changed
+
+- **Answer-time conflict surfacing is now default-ON with the pairwise detector**
+  (`memory.conflict_surfacing_enabled=true`, `memory.conflict_detect_strategy=
+  "pairwise"`). When a recall's memories contain a real contradiction for the
+  query, the injected context gains a directive that NAMES the conflict and
+  instructs the consumer to surface it instead of silently picking a side.
+  Measured (SubtleMemory, paired A/B over identical contexts): contradictory
+  accuracy 0.083 → 0.528 overall, **0.111 → 0.944** when both sides are
+  retrieved, zero cases broken; harm check on non-contradiction slices is
+  net-positive (fires 0.20, 1/8 fired cases harmed). Disable with
+  `simba config set memory.conflict_surfacing_enabled false`. Spec:
+  docs/plans/14.
+
+### Added
+
+- **`memory.conflict_detect_parallel` (default 8):** pairwise checks run in
+  bounded waves, so a recall with k memories costs ~ceil(pairs/8) LLM latencies
+  instead of one per pair. Deterministic: the lowest-index flagged pair wins,
+  identical results to sequential.
+
 ## [0.6.1] — 2026-06-08
 
 ### Added

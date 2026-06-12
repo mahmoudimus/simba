@@ -39,6 +39,7 @@ class FakeCfg:
     conflict_surfacing_enabled: bool = True
     conflict_surfacing_min_memories: int = 2
     conflict_detect_strategy: str = "single"
+    conflict_detect_parallel: int = 1
 
 
 MEMS = [
@@ -267,10 +268,12 @@ def test_conflict_note_routes_to_single_when_strategy_single():
     assert note == ""
 
 
-def test_default_config_strategy_is_single():
+def test_default_config_strategy_is_pairwise():
+    # Superseded "single" on the 0.7.0 ship: pairwise is the measured-good
+    # detector (single's ~0.15 fire rate was the spec-14 detection wall).
     from simba.memory.config import MemoryConfig
 
-    assert MemoryConfig().conflict_detect_strategy == "single"
+    assert MemoryConfig().conflict_detect_strategy == "pairwise"
 
 
 # --- Write-time detection (B2): compare a NEW memory vs its neighbors ---------
@@ -591,3 +594,99 @@ def test_default_config_conflict_recall_recheck_is_false():
     from simba.memory.config import MemoryConfig
 
     assert MemoryConfig().conflict_recall_recheck is False
+
+
+# --- parallel pairwise (waves) -----------------------------------------------
+
+
+class OrderedLlm:
+    """Flags configured pair indices; records call order. Thread-safe enough for
+    the wave executor (appends only)."""
+
+    def __init__(self, flag_at: set[int]):
+        self._flag_at = flag_at
+        self.seen: list[int] = []
+        self._n = 0
+
+    def complete_json(self, prompt: str):
+        import threading
+
+        with getattr(self, "_lock", threading.Lock()):
+            i = self._n
+            self._n += 1
+        self.seen.append(i)
+        if i in self._flag_at:
+            return {"conflict": True, "description": f"pair {i}"}
+        return {"conflict": False}
+
+    @property
+    def calls(self) -> int:
+        return self._n
+
+
+def test_pairwise_parallel_returns_lowest_index_flagged_pair():
+    # Pairs over MEMS in order: (0,1), (0,2), (1,2). Flag (0,1) AND (1,2): with
+    # the whole set in one wave, the result must be the LOWEST-index pair —
+    # deterministic, identical to the sequential answer.
+    llm = OrderedLlm(flag_at={0, 2})
+    res = conflict.detect_conflict_pairwise(MEMS, "q", llm_client=llm, parallel=3)
+    assert res is not None
+    assert res.a == "Alice lives in Paris."
+    assert res.b == "Alice lives in Berlin."
+    assert res.description == "pair 0"
+
+
+def test_pairwise_parallel_short_circuits_between_waves():
+    # 4 memories -> 6 pairs; first pair flagged; parallel=2 -> only the first
+    # wave (2 calls) runs, never the remaining 4 pairs.
+    four = ["m0", "m1", "m2", "m3"]
+    llm = OrderedLlm(flag_at={0})
+    res = conflict.detect_conflict_pairwise(four, "q", llm_client=llm, parallel=2)
+    assert res is not None
+    assert llm.calls == 2  # one wave, not all 6
+    assert res.a == "m0" and res.b == "m1"
+
+
+def test_pairwise_parallel_respects_max_pairs_cap():
+    four = ["m0", "m1", "m2", "m3"]
+    llm = FakeLlm({"conflict": False, "description": ""})
+    res = conflict.detect_conflict_pairwise(
+        four, "q", llm_client=llm, max_pairs=3, parallel=2
+    )
+    assert res is None
+    assert llm.calls == 3  # cap honored across waves
+
+
+def test_pairwise_parallel_one_is_sequential():
+    llm = FakeLlm({"conflict": True, "description": "first"})
+    res = conflict.detect_conflict_pairwise(MEMS, "q", llm_client=llm, parallel=1)
+    assert res is not None
+    assert llm.calls == 1
+
+
+def test_conflict_note_threads_parallel_from_cfg():
+    # conflict_note must pass cfg.conflict_detect_parallel to the detector:
+    # first pair flagged + parallel=2 -> exactly one 2-call wave.
+    llm = OrderedLlm(flag_at={0})
+    cfg = FakeCfg(
+        conflict_surfacing_enabled=True,
+        conflict_surfacing_min_memories=2,
+        conflict_detect_strategy="pairwise",
+        conflict_detect_parallel=2,
+    )
+    note = conflict.conflict_note(
+        ["m0", "m1", "m2", "m3"], "q", cfg=cfg, llm_client=llm
+    )
+    assert "pair 0" in note
+    assert llm.calls == 2
+
+
+def test_shipped_defaults_pairwise_surfacing_on():
+    # 2026-06-11 ship decision: surfacing default-ON with the measured-good
+    # pairwise detector (both-sides 0.111->0.944, net-positive harm check).
+    import simba.memory.config as mc
+
+    cfg = mc.MemoryConfig()
+    assert cfg.conflict_surfacing_enabled is True
+    assert cfg.conflict_detect_strategy == "pairwise"
+    assert cfg.conflict_detect_parallel >= 4  # hot path pays ~1 LLM latency/wave
