@@ -80,6 +80,7 @@ def load_longmemeval_data(
                 relevant_ids=gold,
                 intent=str(q.get("question_type", "")),
                 answer=str(q.get("answer") or ""),
+                question_date=str(q.get("question_date", "")),
             )
         ]
         datasets.append(Dataset(name=qid, corpus=corpus, cases=cases))

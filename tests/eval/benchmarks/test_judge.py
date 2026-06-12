@@ -567,3 +567,34 @@ def test_run_qa_ircot_none_eval_cfg_uses_standard_path(monkeypatch) -> None:
     )
     assert ircot_calls == 0
     assert sorted(std_cases) == ["mh", "sh"]
+
+
+def test_answer_prompt_includes_current_date_when_given():
+    # Official LongMemEval reader protocol: a "Current Date" slot anchors
+    # relative-time resolution (measured: temporal 0.417 -> 0.833).
+    p = judge.build_answer_prompt(
+        "How long ago did I buy the bike?",
+        ["[2023-05-01] user: bought a bike"],
+        dates=["2023-05-01"],
+        question_date="2023/05/30 (Tue) 23:40",
+    )
+    assert "Current date: 2023/05/30 (Tue) 23:40" in p
+    assert p.index("Current date:") < p.index("Question:")
+
+
+def test_answer_prompt_no_current_date_when_absent():
+    p = judge.build_answer_prompt("Q?", ["a"])
+    assert "Current date:" not in p
+
+
+def test_score_case_threads_question_date():
+    case = EvalCase(
+        id="q1",
+        query="When?",
+        relevant_ids=["c1"],
+        answer="7 May",
+        question_date="2023/06/01 (Thu) 12:00",
+    )
+    llm = FakeLlm(answer="7 May", verdict={"correct": True})
+    assert judge.score_case(case, lambda q: ["c1"], {"c1": "x"}, llm, k=2) is True
+    assert "Current date: 2023/06/01 (Thu) 12:00" in llm.prompts[0]

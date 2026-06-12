@@ -91,3 +91,17 @@ def test_is_abstention_detects_abs_suffix() -> None:
     assert is_abstention("q1_abs") is True
     assert is_abstention("q1") is False
     assert is_abstention("abs_q1") is False  # only suffix counts
+
+
+def test_loader_carries_question_date():
+    # The official LongMemEval reader always passes the question's "Current
+    # Date" — the measured +0.111 overall / temporal-doubling lever. The
+    # loader must thread question_date into the EvalCase.
+    sample = [dict(_SAMPLE[0], question_date="2023/05/30 (Tue) 23:40")]
+    ds = lme.load_longmemeval_data(sample)
+    assert ds[0].cases[0].question_date == "2023/05/30 (Tue) 23:40"
+
+
+def test_loader_question_date_defaults_empty():
+    ds = lme.load_longmemeval_data([_SAMPLE[0]])
+    assert ds[0].cases[0].question_date == ""
