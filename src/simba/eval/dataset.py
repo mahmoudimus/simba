@@ -55,6 +55,9 @@ class EvalCase:
     note: str = ""
     split: str = ""  # "dev" | "test" | "" (auto-assigned deterministically)
     answer: str = ""  # gold answer (for the LLM-judge QA layer; "" = no gold)
+    # The question's own date ("Current Date" in the official LongMemEval
+    # reader) — anchors relative-time resolution; "" = benchmark has none.
+    question_date: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> EvalCase:
@@ -66,6 +69,7 @@ class EvalCase:
             note=raw.get("note", ""),
             split=raw.get("split", ""),
             answer=raw.get("answer", ""),
+            question_date=raw.get("question_date", ""),
         )
 
 

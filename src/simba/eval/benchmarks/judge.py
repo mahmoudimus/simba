@@ -52,7 +52,11 @@ def _date_label(s: str) -> str:
 
 
 def build_answer_prompt(
-    question: str, contexts: list[str], dates: list[str] | None = None
+    question: str,
+    contexts: list[str],
+    dates: list[str] | None = None,
+    *,
+    question_date: str = "",
 ) -> str:
     """Prompt the model to answer strictly from the retrieved context.
 
@@ -62,12 +66,20 @@ def build_answer_prompt(
     instruction. This is the recency signal the product ships; omitting it (the
     old bare format) understates temporal accuracy. Falls back to the bare format
     when no dates are available.
+
+    ``question_date`` fills the official LongMemEval reader's "Current Date"
+    slot — the anchor for relative-time resolution ("how long ago...").
+    Measured (n=72 sweep): +0.111 overall, temporal-reasoning 0.417->0.833.
+    Production parity: the host agent always knows today's date, so omitting
+    it UNDERSTATES the shipping behavior.
     """
+    date_line = f"Current date: {question_date}\n" if question_date else ""
     if not contexts:
         return (
             "You are answering a question using ONLY the conversation memories "
             "below. If the answer is not present, say you don't know. Answer "
-            f"concisely.\n\nMemories:\n(no context)\n\nQuestion: {question}\nAnswer:"
+            f"concisely.\n\nMemories:\n(no context)\n\n{date_line}Question: "
+            f"{question}\nAnswer:"
         )
     if dates and any(d for d in dates):
         parsed = [
@@ -93,13 +105,13 @@ def build_answer_prompt(
             "You are answering a question using ONLY the conversation memories "
             "below. Each memory is tagged with the date it was recorded. If the "
             "answer is not present, say you don't know. Answer concisely.\n\n"
-            f"Memories:\n{joined}\n\nQuestion: {question}\nAnswer:"
+            f"Memories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
         )
     joined = "\n".join(f"- {c}" for c in contexts)
     return (
         "You are answering a question using ONLY the conversation memories below. "
         "If the answer is not present, say you don't know. Answer concisely.\n\n"
-        f"Memories:\n{joined}\n\nQuestion: {question}\nAnswer:"
+        f"Memories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
     )
 
 
@@ -149,7 +161,12 @@ def score_case(
     ids = [i for i in retriever(case.query)[:k] if i in id2content]
     contexts = [id2content[i] for i in ids]
     dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
-    prompt = build_answer_prompt(case.query, contexts, dates)
+    prompt = build_answer_prompt(
+        case.query,
+        contexts,
+        dates,
+        question_date=getattr(case, "question_date", ""),
+    )
     if conflict_cfg is not None:
         note = simba.memory.conflict.conflict_note(
             contexts, case.query, cfg=conflict_cfg, llm_client=answerer
@@ -207,7 +224,14 @@ def score_abstention(
     ids = [i for i in retriever(case.query)[:k] if i in id2content]
     contexts = [id2content[i] for i in ids]
     dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
-    predicted = answerer.complete(build_answer_prompt(case.query, contexts, dates))
+    predicted = answerer.complete(
+        build_answer_prompt(
+            case.query,
+            contexts,
+            dates,
+            question_date=getattr(case, "question_date", ""),
+        )
+    )
     if not predicted or not predicted.strip():
         return None
     lowered = predicted.lower()
