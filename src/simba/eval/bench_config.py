@@ -34,6 +34,14 @@ class BenchConfig:
     subtlememory_persona_limit: int = 1
     embedding_cache_path: str = ".simba/eval/embedding_cache.db"
     judge_cache_path: str = ".simba/eval/judge_cache.db"
+    # QA grading protocol: "official" = the LongMemEval per-question-type judge
+    # prompts (verbatim get_anscheck_prompt port, keyed on case.intent, plain
+    # completion + yes-substring verdict — the canonical/comparable axis;
+    # measured +3.6pp vs generic on simba outputs, p=5e-4, preference slice
+    # 0.167->0.300 from the judge alone). "generic" = the legacy JSON
+    # {"correct": bool} judge. Cache verdicts are style-namespaced (see
+    # judge.score_case) so flipping this never reuses the other style's verdicts.
+    judge_style: str = "official"
     default_k: int = 10
     default_n: int = 50
     results_path: str = ".simba/eval/results.jsonl"

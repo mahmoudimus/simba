@@ -127,6 +127,73 @@ def build_judge_prompt(question: str, gold: str, predicted: str) -> str:
     )
 
 
+# Official LongMemEval per-question-type judge prompts — verbatim port of
+# xiaowu0162/LongMemEval ``get_anscheck_prompt`` (the templates hebb-mind used
+# for its 0.79 and what the official benchmark ships). Keyed on case.intent.
+# Measured on simba outputs: official-vs-generic judge = +3.6pp (p=5e-4);
+# preference slice 0.167 -> 0.300 from the judge prompt alone. Grading is a
+# plain completion checked for a "yes" substring (upstream's decision rule),
+# NOT the generic JSON verdict.
+_OFFICIAL_DEFAULT = (
+    "I will give you a question, a correct answer, and a response from a model. "
+    "Please answer yes if the response contains the correct answer. Otherwise, "
+    "answer no. If the response is equivalent to the correct answer or contains "
+    "all the intermediate steps to get the correct answer, you should also "
+    "answer yes. If the response only contains a subset of the information "
+    "required by the answer, answer no. \n\nQuestion: {}\n\nCorrect Answer: {}"
+    "\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+)
+_OFFICIAL_TEMPORAL = (
+    "I will give you a question, a correct answer, and a response from a model. "
+    "Please answer yes if the response contains the correct answer. Otherwise, "
+    "answer no. If the response is equivalent to the correct answer or contains "
+    "all the intermediate steps to get the correct answer, you should also "
+    "answer yes. If the response only contains a subset of the information "
+    "required by the answer, answer no. In addition, do not penalize off-by-one "
+    "errors for the number of days. If the question asks for the number of "
+    "days/weeks/months, etc., and the model makes off-by-one errors (e.g., "
+    "predicting 19 days when the answer is 18), the model's response is still "
+    "correct. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\n"
+    "Is the model response correct? Answer yes or no only."
+)
+_OFFICIAL_KNOWLEDGE_UPDATE = (
+    "I will give you a question, a correct answer, and a response from a model. "
+    "Please answer yes if the response contains the correct answer. Otherwise, "
+    "answer no. If the response contains some previous information along with an "
+    "updated answer, the response should be considered as correct as long as the "
+    "updated answer is the required answer.\n\nQuestion: {}\n\nCorrect Answer: {}"
+    "\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+)
+_OFFICIAL_PREFERENCE = (
+    "I will give you a question, a rubric for desired personalized response, and "
+    "a response from a model. Please answer yes if the response satisfies the "
+    "desired response. Otherwise, answer no. The model does not need to reflect "
+    "all the points in the rubric. The response is correct as long as it recalls "
+    "and utilizes the user's personal information correctly.\n\nQuestion: {}\n\n"
+    "Rubric: {}\n\nModel Response: {}\n\nIs the model response correct? Answer "
+    "yes or no only."
+)
+_OFFICIAL_BY_INTENT = {
+    "single-session-user": _OFFICIAL_DEFAULT,
+    "single-session-assistant": _OFFICIAL_DEFAULT,
+    "multi-session": _OFFICIAL_DEFAULT,
+    "temporal-reasoning": _OFFICIAL_TEMPORAL,
+    "knowledge-update": _OFFICIAL_KNOWLEDGE_UPDATE,
+    "single-session-preference": _OFFICIAL_PREFERENCE,
+}
+
+
+def build_official_judge_prompt(
+    intent: str, question: str, gold: str, predicted: str
+) -> str:
+    """Official LongMemEval judge prompt for a question type (``case.intent``).
+
+    Unknown/empty intents fall back to the default template, mirroring upstream.
+    """
+    template = _OFFICIAL_BY_INTENT.get(intent, _OFFICIAL_DEFAULT)
+    return template.format(question, gold, predicted)
+
+
 def score_case(
     case: EvalCase,
     retriever: Retriever,
@@ -139,6 +206,7 @@ def score_case(
     judge_model: str = "",
     id2date: dict[str, str] | None = None,
     conflict_cfg: typing.Any = None,
+    judge_style: str = "generic",
 ) -> bool | None:
     """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
 
@@ -154,10 +222,24 @@ def score_case(
     daemon injects via ``format_memories``: ``conflict_note`` is gated inside —
     disabled config (the default) means zero LLM cost and an unchanged prompt,
     so the bench only pays for what production would.
+
+    ``judge_style`` selects the grading protocol: "official" grades with the
+    LongMemEval per-type prompt (``build_official_judge_prompt`` keyed on
+    ``case.intent``) via a plain completion and upstream's yes-substring
+    decision rule; "generic" (the function-level default, for back-compat)
+    keeps the JSON {"correct": bool} verdict. The bench config defaults to
+    "official" (measured +3.6pp on simba outputs, p=5e-4).
     """
     _judge = judge if judge is not None else answerer
     if not judge_model and judge is not None:
         judge_model = getattr(getattr(_judge, "_cfg", None), "model", "")
+    # The JudgeCache key is (judge_model, question, gold, predicted) — it does
+    # NOT include the prompt style. Namespace the model string for the official
+    # path so cached generic verdicts can't contaminate official-judge runs
+    # (and per-intent, since the official prompt differs by question type).
+    # The generic key stays bare for back-compat with existing caches.
+    if judge_style == "official":
+        judge_model = f"{judge_model}|anscheck-{case.intent or 'default'}"
     ids = [i for i in retriever(case.query)[:k] if i in id2content]
     contexts = [id2content[i] for i in ids]
     dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
@@ -180,12 +262,23 @@ def score_case(
         hit = cache.get(judge_model, case.query, case.answer, predicted)
         if hit is not None:
             return hit
-    verdict = _judge.complete_json(
-        build_judge_prompt(case.query, case.answer, predicted)
-    )
-    if not isinstance(verdict, dict) or "correct" not in verdict:
-        return None
-    correct = bool(verdict["correct"])
+    if judge_style == "official":
+        reply = _judge.complete(
+            build_official_judge_prompt(
+                case.intent or "", case.query, case.answer, predicted
+            )
+        )
+        if not reply or not reply.strip():
+            return None
+        # Upstream's exact decision rule: any "yes" substring => correct.
+        correct = "yes" in reply.lower()
+    else:
+        verdict = _judge.complete_json(
+            build_judge_prompt(case.query, case.answer, predicted)
+        )
+        if not isinstance(verdict, dict) or "correct" not in verdict:
+            return None
+        correct = bool(verdict["correct"])
     if cache is not None:
         cache.put(judge_model, case.query, case.answer, predicted, correct)
     return correct
@@ -344,11 +437,17 @@ def run_qa(
     cache: typing.Any = None,
     judge_model: str = "",
     eval_cfg: typing.Any = None,
+    judge_style: str = "generic",
 ) -> dict[str, typing.Any]:
     """Run the full retrieve -> answer -> grade loop over datasets, aggregate.
 
     ``llm`` is the answerer; ``judge`` (when given) grades its answers. When
     ``judge`` is None the answerer grades itself (legacy behaviour).
+
+    ``judge_style`` ("official" | "generic") selects the grading protocol per
+    ``score_case``; the bench CLI passes ``bench.judge_style`` (default
+    "official" — the canonical LongMemEval axis). The function-level default
+    stays "generic" for back-compat with direct callers.
 
     When ``include_abstention`` is True, ``_abs`` cases are routed to
     ``score_abstention`` and reported in a separate ``abstention`` block. The
@@ -438,6 +537,7 @@ def run_qa(
                         judge_model=judge_model,
                         id2date=id2date,
                         conflict_cfg=cfg,
+                        judge_style=judge_style,
                     )
                 latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
