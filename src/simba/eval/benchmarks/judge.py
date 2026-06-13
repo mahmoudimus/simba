@@ -51,12 +51,61 @@ def _date_label(s: str) -> str:
     return d.strftime("%Y-%m-%d") if d else s.strip()
 
 
+# Reader prompt headers — the 0.823 LME-S stack levers, ported verbatim from
+# the lme_stacked_final probe scripts. Both are opt-in via the bench config
+# (``bench.reader_style`` / ``bench.preference_synthesis``); the default reader
+# stays the minimal "answer strictly from context" framing so existing
+# baselines are byte-identical. EVAL fidelity, not a daemon path: in production
+# the reader is the host LLM / Claude, so the bench measures the shipped reader
+# protocol, the same rationale as PR #66 (question_date) and #67 (official judge).
+#
+# P2 ("rules"): four general reader rules — a silent chain-of-evidence pass,
+# subject-match guard, cite-only-explicit, and most-recent-value resolution.
+_READER_RULES_HEADER = (
+    "You are answering a question using ONLY the conversation memories below. "
+    "Each memory is tagged with the date it was recorded.\n\n"
+    "Before answering, work through the evidence (do this silently):\n"
+    "1. Scan every memory and extract the facts that bear on the question.\n"
+    "2. Reason over those facts together, combining evidence about the same "
+    "subject across memories.\n"
+    "Then output ONLY the final answer — no notes, no preamble, no markdown.\n\n"
+    "Hard rules:\n"
+    "- Subject must match. If the question asks about one person or thing but "
+    "the memories only contain evidence about a different one, say you don't "
+    "know rather than substituting the wrong subject's facts.\n"
+    "- Cite only what the memories explicitly state. Do not extrapolate, "
+    "summarise themes, or fill gaps with plausible guesses.\n"
+    "- Use the most recent value. When a fact changed over time (a job, a "
+    "possession, a plan updated in a later memory), answer with the LATEST "
+    "state by the date tags, never the superseded one.\n\n"
+    "If the answer is not present, say you don't know. Answer concisely."
+)
+
+# R1 (preference synthesis): instruct the reader to INFER preferences and give a
+# grounded recommendation rather than refuse. Intent-gated to
+# single-session-preference only (measured: applying R1 globally hurt
+# single-session-user 0.833->0.583; gating to preference kept the gain).
+_READER_PREFERENCE_HEADER = (
+    "You are answering a question for the user based on their conversation "
+    "memories below. Each memory is tagged with the date it was recorded. "
+    "If the question asks for a recommendation, suggestion, or advice, INFER "
+    "the user's preferences, interests, and constraints from the memories and "
+    "tailor your answer to them — do NOT refuse just because no explicit "
+    "answer is stated; a recommendation grounded in their stated preferences "
+    "is the expected answer. Briefly mention which of the user's preferences "
+    "you are drawing on. Only say you don't know if the memories contain "
+    "nothing relevant."
+)
+
+
 def build_answer_prompt(
     question: str,
     contexts: list[str],
     dates: list[str] | None = None,
     *,
     question_date: str = "",
+    reader_style: str = "minimal",
+    preference_synthesis: bool = False,
 ) -> str:
     """Prompt the model to answer strictly from the retrieved context.
 
@@ -72,13 +121,30 @@ def build_answer_prompt(
     Measured (n=72 sweep): +0.111 overall, temporal-reasoning 0.417->0.833.
     Production parity: the host agent always knows today's date, so omitting
     it UNDERSTATES the shipping behavior.
+
+    ``reader_style`` selects the reader framing (0.823 LME-S lever): "minimal"
+    (default) is the current strict-from-context framing — byte-identical to the
+    pre-lever prompt for back-compat; "rules" is the P2 reader (silent
+    chain-of-evidence + subject-match + cite-only-explicit + most-recent-value).
+    ``preference_synthesis`` (R1) overrides the header with the preference
+    synthesis framing — the caller (``score_case``) gates this to
+    ``single-session-preference`` intent only.
     """
     date_line = f"Current date: {question_date}\n" if question_date else ""
+    if preference_synthesis:
+        header = _READER_PREFERENCE_HEADER
+    elif reader_style == "rules":
+        header = _READER_RULES_HEADER
+    else:
+        header = ""
     if not contexts:
-        return (
+        base = header or (
             "You are answering a question using ONLY the conversation memories "
             "below. If the answer is not present, say you don't know. Answer "
-            f"concisely.\n\nMemories:\n(no context)\n\n{date_line}Question: "
+            "concisely."
+        )
+        return (
+            f"{base}\n\nMemories:\n(no context)\n\n{date_line}Question: "
             f"{question}\nAnswer:"
         )
     if dates and any(d for d in dates):
@@ -101,18 +167,20 @@ def build_answer_prompt(
         # instruction is a no-op for a capable consumer (the date+newest
         # annotation already does the work). Keeps the benchmark measuring what
         # ships rather than handing the answerer an extra hint.
-        return (
+        base = header or (
             "You are answering a question using ONLY the conversation memories "
             "below. Each memory is tagged with the date it was recorded. If the "
-            "answer is not present, say you don't know. Answer concisely.\n\n"
-            f"Memories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
+            "answer is not present, say you don't know. Answer concisely."
+        )
+        return (
+            f"{base}\n\nMemories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
         )
     joined = "\n".join(f"- {c}" for c in contexts)
-    return (
+    base = header or (
         "You are answering a question using ONLY the conversation memories below. "
-        "If the answer is not present, say you don't know. Answer concisely.\n\n"
-        f"Memories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
+        "If the answer is not present, say you don't know. Answer concisely."
     )
+    return f"{base}\n\nMemories:\n{joined}\n\n{date_line}Question: {question}\nAnswer:"
 
 
 def build_judge_prompt(question: str, gold: str, predicted: str) -> str:
@@ -207,6 +275,9 @@ def score_case(
     id2date: dict[str, str] | None = None,
     conflict_cfg: typing.Any = None,
     judge_style: str = "generic",
+    reader_style: str = "minimal",
+    preference_synthesis: bool = False,
+    temporal_codegen: bool = False,
 ) -> bool | None:
     """Retrieve top-k, generate an answer, grade it. None = couldn't grade.
 
@@ -229,6 +300,20 @@ def score_case(
     decision rule; "generic" (the function-level default, for back-compat)
     keeps the JSON {"correct": bool} verdict. The bench config defaults to
     "official" (measured +3.6pp on simba outputs, p=5e-4).
+
+    The reader levers (the 0.823 LME-S stack, all default to current behavior):
+
+    ``reader_style`` — "minimal" (default) keeps the current reader framing;
+    "rules" uses the P2 chain-of-evidence reader (see ``build_answer_prompt``).
+
+    ``preference_synthesis`` — when True, ``single-session-preference`` cases get
+    the R1 synthesis header (INFER preferences, recommend rather than refuse).
+    Intent-gated here: measured globally it hurt single-session-user, so it only
+    fires on the preference intent.
+
+    ``temporal_codegen`` — when True, ``temporal-reasoning`` cases route through
+    the codegen reader (write Python date-arithmetic, exec in a sandbox,
+    finalize), with a fallback to the direct reader on any failure.
     """
     _judge = judge if judge is not None else answerer
     if not judge_model and judge is not None:
@@ -243,11 +328,47 @@ def score_case(
     ids = [i for i in retriever(case.query)[:k] if i in id2content]
     contexts = [id2content[i] for i in ids]
     dates = [(id2date or {}).get(i, "") for i in ids] if id2date else None
+    # Intent-gated R1: only single-session-preference cases get the synthesis
+    # header (a global R1 hurt single-session-user in the sweep).
+    pref = preference_synthesis and (case.intent or "") == "single-session-preference"
+    qdate = getattr(case, "question_date", "")
+    # Temporal codegen route (0.823 stack): temporal-reasoning cases write+exec
+    # Python for the date arithmetic, with a fallback to the direct reader. Any
+    # failure mode (extraction/exec/empty) falls back, so the route never errors.
+    if temporal_codegen and (case.intent or "") == "temporal-reasoning":
+        import simba.eval.benchmarks.codegen_reader as codegen_reader
+
+        def _direct() -> str:
+            fb_prompt = build_answer_prompt(
+                case.query,
+                contexts,
+                dates,
+                question_date=qdate,
+                reader_style=reader_style,
+                preference_synthesis=pref,
+            )
+            return answerer.complete(fb_prompt) or ""
+
+        predicted, _route = codegen_reader.answer_via_codegen(
+            case.query, contexts, qdate, answerer, fallback=_direct
+        )
+        if not predicted or not predicted.strip():
+            return None
+        return _grade(
+            case,
+            predicted,
+            _judge,
+            cache=cache,
+            judge_model=judge_model,
+            judge_style=judge_style,
+        )
     prompt = build_answer_prompt(
         case.query,
         contexts,
         dates,
-        question_date=getattr(case, "question_date", ""),
+        question_date=qdate,
+        reader_style=reader_style,
+        preference_synthesis=pref,
     )
     if conflict_cfg is not None:
         note = simba.memory.conflict.conflict_note(
@@ -258,12 +379,36 @@ def score_case(
     predicted = answerer.complete(prompt)
     if not predicted or not predicted.strip():
         return None
+    return _grade(
+        case,
+        predicted,
+        _judge,
+        cache=cache,
+        judge_model=judge_model,
+        judge_style=judge_style,
+    )
+
+
+def _grade(
+    case: EvalCase,
+    predicted: str,
+    judge: typing.Any,
+    *,
+    cache: typing.Any = None,
+    judge_model: str = "",
+    judge_style: str = "generic",
+) -> bool | None:
+    """Grade a prediction (cache-aware). None = couldn't grade.
+
+    Shared by ``score_case``'s direct and codegen routes so both pay the same
+    cache lookup + grading protocol (``judge_style``).
+    """
     if cache is not None:
         hit = cache.get(judge_model, case.query, case.answer, predicted)
         if hit is not None:
             return hit
     if judge_style == "official":
-        reply = _judge.complete(
+        reply = judge.complete(
             build_official_judge_prompt(
                 case.intent or "", case.query, case.answer, predicted
             )
@@ -273,7 +418,7 @@ def score_case(
         # Upstream's exact decision rule: any "yes" substring => correct.
         correct = "yes" in reply.lower()
     else:
-        verdict = _judge.complete_json(
+        verdict = judge.complete_json(
             build_judge_prompt(case.query, case.answer, predicted)
         )
         if not isinstance(verdict, dict) or "correct" not in verdict:
@@ -438,6 +583,9 @@ def run_qa(
     judge_model: str = "",
     eval_cfg: typing.Any = None,
     judge_style: str = "generic",
+    reader_style: str = "minimal",
+    preference_synthesis: bool = False,
+    temporal_codegen: bool = False,
 ) -> dict[str, typing.Any]:
     """Run the full retrieve -> answer -> grade loop over datasets, aggregate.
 
@@ -448,6 +596,11 @@ def run_qa(
     ``score_case``; the bench CLI passes ``bench.judge_style`` (default
     "official" — the canonical LongMemEval axis). The function-level default
     stays "generic" for back-compat with direct callers.
+
+    ``reader_style`` / ``preference_synthesis`` / ``temporal_codegen`` are the
+    0.823 LME-S reader levers, threaded to ``score_case``; all default to the
+    current behavior. The bench CLI passes ``bench.reader_style`` /
+    ``bench.preference_synthesis`` / ``bench.temporal_codegen``.
 
     When ``include_abstention`` is True, ``_abs`` cases are routed to
     ``score_abstention`` and reported in a separate ``abstention`` block. The
@@ -538,6 +691,9 @@ def run_qa(
                         id2date=id2date,
                         conflict_cfg=cfg,
                         judge_style=judge_style,
+                        reader_style=reader_style,
+                        preference_synthesis=preference_synthesis,
+                        temporal_codegen=temporal_codegen,
                     )
                 latencies.append((time.perf_counter() - t0) * 1000)
                 if correct is None:
