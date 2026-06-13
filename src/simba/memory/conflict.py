@@ -24,6 +24,8 @@ import concurrent.futures
 import dataclasses
 import typing
 
+import simba.memory.intent
+
 
 @dataclasses.dataclass
 class ConflictResult:
@@ -231,8 +233,23 @@ def conflict_note(
     — ``"single"`` one all-at-once call, ``"pairwise"`` focused pairs in isolation)
     and returns ``surface_directive`` for a real conflict, or ``""`` when none is
     found.
+
+    Query-intent gate (0.7.1 regression fix): when
+    ``cfg.conflict_skip_on_current_value`` is True (default) AND the query is
+    current-value / knowledge-update shaped (:func:`simba.memory.intent.
+    is_knowledge_update` — "what is X now / latest / most recent?"), return ``""``
+    with zero detection cost. Such a query retrieves both the OLD and the NEW
+    value of a fact; the pairwise detector would flag that as a "conflict" and the
+    directive would tell the answerer not to pick a side — wrong when the correct
+    answer is most-recent-wins (LME-S KU regressed 0.958 -> 0.25 under the
+    directive). Recency / most-recent-wins handles these; every other query stays
+    on the strict path unchanged, so the genuine-contradiction win is preserved.
     """
     if not getattr(cfg, "conflict_surfacing_enabled", False):
+        return ""
+    if getattr(cfg, "conflict_skip_on_current_value", True) and (
+        simba.memory.intent.is_knowledge_update(query)
+    ):
         return ""
     if llm_client is None:
         return ""

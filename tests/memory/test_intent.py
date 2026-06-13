@@ -63,3 +63,35 @@ def test_is_count_excludes_temporal_frequency_and_plain() -> None:
     assert intent.is_count("How many days between the trip and the move?") is False
     assert intent.is_count("how many times a week do I exercise") is False
     assert intent.is_count("what did the engineer say about the schema") is False
+
+
+# ── knowledge-update / current-value intent (conflict 0.7.1 query-intent gate) ──
+# These queries ask for the PRESENT value of a fact ("what is my X now?"). They
+# routinely retrieve BOTH the old and the new value, which the pairwise conflict
+# detector flags as a "conflict" and (wrongly) tells the answerer not to pick a
+# side — when the correct behaviour is most-recent-wins. So conflict surfacing
+# must SKIP its directive for these; recency handles them.
+def test_is_knowledge_update_detects_current_value_queries() -> None:
+    assert intent.is_knowledge_update("What is my current job title?") is True
+    assert intent.is_knowledge_update("Where do I live now?") is True
+    assert intent.is_knowledge_update("What is my latest car?") is True
+    assert intent.is_knowledge_update("What is my most recent address?") is True
+    assert intent.is_knowledge_update("Where am I working these days?") is True
+    assert intent.is_knowledge_update("Do I still go to the gym?") is True
+    assert intent.is_knowledge_update("What phone am I using nowadays?") is True
+    assert intent.is_knowledge_update("As of now, what city am I in?") is True
+
+
+def test_is_knowledge_update_excludes_genuine_conflict_and_plain() -> None:
+    # Genuine preference / simultaneous-conflict queries: NO current-value marker,
+    # so they must STAY on the strict surfacing path (return False here).
+    assert intent.is_knowledge_update("Which coffee do I prefer?") is False
+    assert intent.is_knowledge_update("Do I like cats or dogs better?") is False
+    assert (
+        intent.is_knowledge_update("what did the engineer say about the schema")
+        is False
+    )
+    assert intent.is_knowledge_update("Why did /recall return zero memories") is False
+    assert intent.is_knowledge_update("") is False
+    # "current" as a substring of another word must not trigger.
+    assert intent.is_knowledge_update("how does the concurrent queue drain") is False

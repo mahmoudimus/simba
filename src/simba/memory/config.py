@@ -256,6 +256,21 @@ class MemoryConfig:
     # with k memories pays ~ceil(pairs/width) LLM latencies, not one per pair.
     # Result is deterministic (lowest-index flagged pair, same as sequential).
     conflict_detect_parallel: int = 8
+    # Query-intent gate (0.7.1 regression fix). v0.7.0 shipped surfacing default-ON
+    # and WON on genuine contradictions (SubtleMemory both-sides 0.111 -> 0.944) but
+    # REGRESSED knowledge-update QA: on LME-S knowledge-update OFF=0.958 vs the
+    # directive=0.25, because a "what is X now?" query retrieves BOTH the old and
+    # the new value of a fact, the pairwise detector flags that as a conflict, and
+    # the directive tells the answerer not to pick a side — exactly wrong when the
+    # correct answer is most-recent-wins. When True (default), conflict surfacing
+    # SKIPS its directive (and pays zero detection cost) for current-value /
+    # knowledge-update-shaped queries (intent.is_knowledge_update); recency /
+    # most-recent-wins handles them. All other queries stay on the strict pairwise
+    # path unchanged, so the genuine-contradiction win is untouched. Gating by
+    # query INTENT — not by detecting date-disjointness on the memories: the ARM3
+    # date-disjoint carve-out FAILED its SubtleMemory gate (0.722 < 0.9) because
+    # genuine preference conflicts are also date-disjoint.
+    conflict_skip_on_current_value: bool = True
     # Write-time conflict engine (B2, src/simba/memory/conflict_store.py): move
     # detection OFF the answer-time path. When enabled, on store a new memory is
     # compared against its nearest neighbors (one focused pairwise LLM call each,
