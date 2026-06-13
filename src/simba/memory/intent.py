@@ -81,3 +81,36 @@ def is_count(query: str) -> bool:
     if _COUNT_EXCLUDE_RE.search(q):
         return False
     return _COUNT_RE.search(q) is not None
+
+
+# A knowledge-update / current-value query asks for the PRESENT value of a fact
+# ("what is my X now / latest / most recent?"). Such a query retrieves BOTH the
+# old and the new value, which the answer-time conflict detector flags as a
+# "conflict" and then (wrongly) tells the answerer not to pick a side — when the
+# correct behaviour is most-recent-wins. Recognising these by INTENT lets the
+# conflict layer skip its directive (recency resolves them); the strict
+# surfacing path stays on for everything else. Marker-driven, like the count and
+# broad/precise lexicons — whole-word/phrase, case-insensitive, no LLM.
+#
+# Why intent and not date-disjointness: the ARM3 date-disjoint carve-out FAILED
+# its SubtleMemory gate (0.722 < 0.9) — genuine *preference* conflicts ("which
+# do I prefer") are ALSO date-disjoint, so date-disjointness can't discriminate
+# update-vs-conflict. The discriminator is the query asking for the *current*
+# value, not the dates on the memories.
+_CURRENT_VALUE_RE = re.compile(
+    r"\b(?:current|currently|latest|most recent|now|nowadays|presently|"
+    r"these days|right now|at present|still)\b|\bas of (?:now|today)\b",
+    re.IGNORECASE,
+)
+
+
+def is_knowledge_update(query: str) -> bool:
+    """Whether ``query`` asks for the CURRENT value of a fact (most-recent-wins).
+
+    True for current-value markers — "current / currently / latest / most recent
+    / now / nowadays / presently / these days / right now / at present / still /
+    as of now". False otherwise, so genuine simultaneous-conflict / preference
+    questions ("which do I prefer", "cats or dogs") stay on the strict conflict
+    surfacing path. Substrings of a marker do not trigger (whole-word).
+    """
+    return _CURRENT_VALUE_RE.search(query or "") is not None
