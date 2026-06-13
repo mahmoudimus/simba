@@ -48,8 +48,23 @@ looked like a chasm. It was not one thing.
 
 ## 2. Building a program, not a spike
 
-The reason 0.561 → 0.823 was even possible in a weekend is that we stopped re-measuring by
-hand and built the eval as a piece of software with the same standards as the product.
+The eval did not start as a program. It started as a **spike** — the smallest thing that
+would produce a number. Our first external evaluation (the PR that gave simba its first
+LoCoMo/LongMemEval figures) was exactly the rushed kind of harness everyone writes first:
+every rerun **re-embedded the entire corpus** from scratch; the numbers lived only in
+**stdout**, never stored, so two runs couldn't be compared except by scrolling back;
+datasets were **ad-hoc files in `/tmp`**; and — the worst of it — the **answerer graded its
+own answers**, the same model playing student and examiner. It produced a number. It could
+not produce a *trustworthy* number, and it certainly couldn't produce the *same* number
+twice.
+
+That spike was good enough to locate the weakness (multi-hop) and nothing more. The moment
+we wanted to move a number and *believe the move*, every one of those shortcuts became a
+source of doubt: was the delta real, or did re-embedding shuffle something; was the grade
+fair, or was the model flattering itself? So before chasing a single point of accuracy, we
+rebuilt the eval as a piece of software held to the same standard as the product. The
+reason 0.561 → 0.823 was even possible in a weekend is that rebuild — we stopped
+re-measuring by hand.
 
 The pieces, all living under `src/simba/eval/`:
 

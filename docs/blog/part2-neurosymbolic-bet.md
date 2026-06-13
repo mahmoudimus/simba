@@ -38,6 +38,35 @@ one — it's the architecture half the 2026 memory literature converged on.
 
 We built it. Then we measured it. Here is what the data did.
 
+## We didn't try it once — we tried it six ways
+
+It would be dishonest to present this as one clean experiment with one clean negative. We
+*wanted* the bet to win, so we gave it six swings, each a response to the last one's
+failure. The LLM wrote Python to solve the query directly — too brittle, code catered to
+the eval. So we backed off codegen and tried **typed extraction**: pull `(entity,
+attribute, value)` triples with a parts-of-speech-aware prompt. The values were fine; the
+*types* drifted — the same fact landed under three different predicates across turns. So we
+added **slot canonicalization**: normalize each fact into a fixed real-world slot,
+`(canonical_entity, canonical_predicate, frozen_qualifiers)`, so the surface grammar
+couldn't pick the ontology. That fixed drift and broke counting, because canonicalizing to
+*one* identity is exactly wrong for enumeration. So we tried **dual identity** — emit two
+projections per fact, a slot identity for state and an instance identity for counting — and
+then a **focused two-pass** extraction on top of that.
+
+Each fix was reasonable. Each was a response to a real failure in the previous one. And
+somewhere in the middle of that arc we fooled ourselves: a couple of the intermediate
+probes looked like wins, and we said so — until a closer look showed we had been feeding
+the *baseline* a degraded input (rendered frames instead of the rich text the experimental
+arm got), which had quietly cratered the thing we were comparing against. The "win" was a
+measurement artifact. We retracted it. (That scar is why Part 3 is so insistent about
+calibrating the instrument before trusting the delta — we learned that one the hard way,
+on ourselves.)
+
+When the dust settled, the six-probe arc was a **measured negative against plain
+store-raw** on gold-evidence oracle conditions. But the *shape* of how each fix failed was
+identical, and that shape is the real finding. The fact-index experiment below is the
+cleanest single instance of it, so we'll tell that one in full.
+
 ## The fact-index experiment: extraction was great, lookup was wrong
 
 The first thing to de-risk was extraction quality. We had a prior scar: routing QA through
