@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-13
+
+### Fixed
+
+- **Conflict surfacing no longer regresses knowledge-update questions** (#68). v0.7.0
+  shipped answer-time conflict surfacing default-on; a "what is my current X?" query
+  retrieves both the old and new value, which the pairwise detector flagged as a
+  conflict and told the answerer not to pick a side — wrong, since recency resolves it.
+  New `intent.is_knowledge_update` + `memory.conflict_skip_on_current_value` (default
+  True) makes conflict_note skip its directive on current-value queries; genuine
+  contradictions keep the strict surfacing path. Measured on LongMemEval-S
+  knowledge-update: directive 0.25 -> 0.958.
+
+### Added
+
+- **Intent-gated retrieval breadth for multi-session/aggregation queries** (#69).
+  Generalizes the count-depth lever: `intent.is_aggregation` + `memory.
+  aggregation_depth_enabled` (default off), `aggregation_candidate_pool_n=80`,
+  `aggregation_context_k=80`. Measured: multi-session evidence sets reach complete@80
+  0.90 vs complete@20 0.33; enabling lifts the multi-session QA category +0.13.
+- **Official LongMemEval per-type judge** (#67): `bench.judge_style` (default
+  "official") routes grading by question type to the verbatim anscheck templates.
+- **question_date threaded into the bench reader** (#66): the official "Current Date"
+  anchor; +0.111 overall on the LME-S sweep, temporal-reasoning 0.417 -> 0.833.
+
 ## [0.7.0] — 2026-06-12
 
 ### Changed
