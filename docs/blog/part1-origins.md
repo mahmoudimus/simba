@@ -11,17 +11,64 @@ recall@k on LoCoMo and LongMemEval; the QA story comes in Parts 2 and 3.*
 
 ---
 
-## The problem: the agent forgets, and the memory layer is the constraint
+## The problem: the agent starts every session as a stranger
 
-A coding agent is sharp inside a session and amnesiac across them. Close the window and
-the decision you made together yesterday, the gotcha you hit last week, the reason you
-ruled out an approach — all gone. The model is fine. The context window is the bottleneck,
-and the thing that decides what goes back into that window is the memory layer.
+A coding agent is brilliant for an hour and then born again, blank, the next morning.
+Every new session it opens to an empty context window. It doesn't know the architecture
+decision you made together yesterday, or *why* you made it. It re-suggests the library you
+already rejected. It re-derives the build incantation you worked out last week. It steps on
+the same gotcha — the flag that's actually `--replace`, the test that needs the date
+prefix — that cost you an hour the first time. You find yourself re-explaining your own
+project to a collaborator who was *there* for all of it and remembers none of it.
 
-So the memory layer is the constraint. Not the LLM. If the right evidence isn't in front
-of the model when it reasons, no amount of model quality recovers it. That single
-observation shaped everything: we decided early that simba's job was to put the *complete
-relevant evidence* in front of the agent, and nothing more.
+The frustrating part is that the model isn't the problem. Inside a session it reasons fine.
+The problem is that everything it learned with you evaporates at the session boundary,
+because the only memory it has is the context window, and the window resets. The agent is
+not unintelligent. It is *amnesiac*. And amnesia is not a reasoning failure you can fix
+with a smarter model — it's a plumbing failure: the right information from the past simply
+isn't in front of the model when it thinks.
+
+So the question simba started from wasn't "how do we build a better model" or even "how do
+we build a database of memories." It was narrower and more mechanical: **at the moment the
+agent is about to reason, how do we get the relevant piece of the past back into its
+context — without the human having to paste it in, and without the agent having to know to
+ask?**
+
+## The seed idea: don't make the agent query memory — inject it
+
+The conventional answer is a tool. Give the agent a `search_memory()` function and hope it
+remembers to call it. We rejected that on day one, for a simple reason: an amnesiac doesn't
+know what it has forgotten. An agent that has lost the context of last week's decision also
+has no idea that there *is* a memory worth fetching, so it never makes the call. Memory you
+have to remember to use is memory you won't use.
+
+The seed idea — the actual genesis of simba — was the realization that Claude Code (and
+Codex) expose **hooks**: lifecycle points where an external program fires and can write
+text straight into the agent's context. A `UserPromptSubmit` hook runs the instant you hit
+enter, *before* the model sees your prompt, and whatever it prints as `additionalContext`
+becomes part of what the model reads. A `SessionStart` hook fires as the window opens. A
+`PreToolUse` hook fires just before the agent acts.
+
+That changes the shape of the whole problem. Memory doesn't have to be a drawer the agent
+opens. It can be **ambient** — something that *appears* in the agent's context at exactly
+the right lifecycle moment, unbidden, because a hook put it there. You ask "where do we
+deploy?" and before the model answers, the `UserPromptSubmit` hook has already quietly
+injected the three relevant memories about your deploy setup. The agent doesn't search. It
+just… already knows, the way a colleague who read the room already knows.
+
+So simba began not as a vector database but as **a hook that injects**. Fire under the
+agent's lifecycle; pull the relevant slice of the past; write it into the context window at
+the moment of reasoning. Everything else simba is — the vector store, the keyword mirror,
+the recall pipeline, the whole rest of this series — grew up *underneath* that one move, to
+answer the question it immediately raised: *given that we get exactly one shot to inject the
+right context at the right instant, what do we inject, and how do we find it?*
+
+That reframes the engineering problem precisely. The memory layer is the constraint — not
+the LLM. If the right evidence isn't in the window when the agent reasons, no amount of
+model quality recovers it; and the hook only fires once, so what it injects has to be
+*right*. That single observation shaped everything downstream: simba's job is to put the
+*complete relevant evidence* in front of the agent at the moment of reasoning, and nothing
+more.
 
 A few constraints we set for ourselves up front, and held:
 
