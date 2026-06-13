@@ -40,6 +40,7 @@ class FakeCfg:
     conflict_surfacing_min_memories: int = 2
     conflict_detect_strategy: str = "single"
     conflict_detect_parallel: int = 1
+    conflict_skip_on_current_value: bool = True
 
 
 MEMS = [
@@ -274,6 +275,72 @@ def test_default_config_strategy_is_pairwise():
     from simba.memory.config import MemoryConfig
 
     assert MemoryConfig().conflict_detect_strategy == "pairwise"
+
+
+# ── 0.7.1 query-intent gate: skip surfacing on current-value queries ──────────
+# v0.7.0 default-ON surfacing REGRESSED knowledge-update QA (LME-S KU OFF=0.958
+# vs directive=0.25): a "what is X now?" query retrieves both the old and new
+# value of a fact, the pairwise detector flags that as a conflict and the
+# directive tells the answerer not to pick a side — exactly wrong when the
+# correct answer is most-recent-wins. The fix gates by QUERY INTENT (the ARM3
+# date-disjoint carve-out FAILED its SubtleMemory gate: date-disjointness does
+# not discriminate update-vs-conflict — genuine preference conflicts are also
+# date-disjoint). So: current-value query → skip (return "", no detection cost);
+# everything else → unchanged strict pairwise path.
+def test_conflict_note_skips_current_value_query_even_with_conflict():
+    # Conflicting memories ARE present, but the query asks for the present value
+    # → must return "" and never pay the detection LLM cost (recency handles it).
+    llm = FakeLlm({"conflict": True, "a": 0, "b": 1, "description": "two cities"})
+    cfg = FakeCfg(
+        conflict_surfacing_enabled=True,
+        conflict_skip_on_current_value=True,
+        conflict_detect_strategy="pairwise",
+    )
+    note = conflict.conflict_note(
+        MEMS, "Where does Alice live now?", cfg=cfg, llm_client=llm
+    )
+    assert note == ""
+    assert llm.calls == 0  # skipped BEFORE detection → zero LLM cost
+
+
+def test_conflict_note_genuine_conflict_query_still_surfaces():
+    # No current-value marker ("which do I prefer") → strict path is untouched:
+    # the conflict is detected and surfaced exactly as before.
+    llm = FakeLlm({"conflict": True, "a": 0, "b": 1, "description": "two cities"})
+    cfg = FakeCfg(
+        conflict_surfacing_enabled=True,
+        conflict_skip_on_current_value=True,
+        conflict_detect_strategy="single",
+    )
+    note = conflict.conflict_note(
+        MEMS, "Which city do I prefer, Paris or Berlin?", cfg=cfg, llm_client=llm
+    )
+    assert "Alice lives in Paris." in note
+    assert "Alice lives in Berlin." in note
+    assert llm.calls == 1  # genuine path still runs detection
+
+
+def test_conflict_note_skip_can_be_disabled_via_config():
+    # Flag off → current-value query falls through to the strict path (the old
+    # 0.7.0 behaviour), proving the gate is fully config-controlled.
+    llm = FakeLlm({"conflict": True, "a": 0, "b": 1, "description": "two cities"})
+    cfg = FakeCfg(
+        conflict_surfacing_enabled=True,
+        conflict_skip_on_current_value=False,
+        conflict_detect_strategy="single",
+    )
+    note = conflict.conflict_note(
+        MEMS, "Where does Alice live now?", cfg=cfg, llm_client=llm
+    )
+    assert "Alice lives in Paris." in note
+    assert llm.calls == 1
+
+
+def test_default_config_skip_on_current_value_is_on():
+    # This is the regression fix → must default ON.
+    from simba.memory.config import MemoryConfig
+
+    assert MemoryConfig().conflict_skip_on_current_value is True
 
 
 # --- Write-time detection (B2): compare a NEW memory vs its neighbors ---------
