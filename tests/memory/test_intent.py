@@ -95,3 +95,91 @@ def test_is_knowledge_update_excludes_genuine_conflict_and_plain() -> None:
     assert intent.is_knowledge_update("") is False
     # "current" as a substring of another word must not trigger.
     assert intent.is_knowledge_update("how does the concurrent queue drain") is False
+# ── aggregation / multi-session detection (MS breadth PR) ─────────────────────
+# Population drawn from real LongMemEval-S multi-session questions that the count
+# predicate does NOT catch (no "how many X" instance-count shape) yet are still
+# recall-BREADTH-bound: they sum / span events across sessions, so they want a
+# wide candidate pool exactly like counting. Be conservative — these fire a wider,
+# costlier retrieval, so a bounded "X and Y" arithmetic over two named items must
+# NOT trigger it.
+class TestIsAggregation:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # span/total over an open set of events across sessions
+            "How many days did I take social media breaks in total?",
+            "How many hours have I spent playing games in total?",
+            "What is the total amount I spent on luxury items in the past few months?",
+            "How many hours in total did I spend driving to my three road trip "
+            "destinations combined?",
+            # "across" + enumeration of all events
+            "How many times did I ride rollercoasters across all the events I "
+            "attended from July to October?",
+            # "how often" / frequency-over-history phrasings
+            "How often did I go to the gym this month?",
+            # explicit list-all enumeration
+            "list all the conferences I attended this year",
+            "throughout the year, which restaurants did I revisit",
+            # "every time" recurrence
+            "what did I order every time I went to that cafe",
+            # "which ... did I" enumeration shape
+            "which museums did I visit in February",
+        ],
+    )
+    def test_aggregation_queries_fire(self, query: str) -> None:
+        assert intent.is_aggregation(query) is True
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # bounded arithmetic over two/few NAMED items — pointwise, not breadth
+            "What is the total cost of the car cover and detailing spray I purchased?",
+            "What is the total cost of Lola's vet visit and flea medication?",
+            "What is the difference in price between my luxury boots and the "
+            "similar pair found at the budget store?",
+            "What is the average GPA of my undergraduate and graduate studies?",
+            "What is the total amount I spent on gifts for my coworker and brother?",
+            # plain point facts
+            "what port does the daemon listen on",
+            "the embedding dim for nomic-embed",
+            "When did I submit my research paper on sentiment analysis?",
+            "At which university did I present a poster on my thesis research?",
+        ],
+    )
+    def test_non_aggregation_queries_do_not_fire(self, query: str) -> None:
+        assert intent.is_aggregation(query) is False
+
+    def test_arithmetic_count_shape_excluded_here(self) -> None:
+        # The frequency-RATE shape ("how many times a week") and temporal SPAN
+        # ("how many days between …") are latest/state, not breadth — stay quiet.
+        assert intent.is_aggregation(
+            "How many days between the trip and the move?"
+        ) is (False)
+        assert intent.is_aggregation("how many times a week do I exercise") is False
+        assert (
+            intent.is_aggregation("How many days a week do I attend fitness classes?")
+            is False
+        )
+
+    def test_cross_session_how_many_times_still_fires(self) -> None:
+        # Overlap edge: the count predicate DROPS "how many times …" (not instance
+        # counting), but "how many times … across all the events" IS a cross-session
+        # aggregation, so is_aggregation must still fire. The two predicates answer
+        # different questions about the same string.
+        q = "How many times did I ride rollercoasters across all the events I attended?"
+        assert intent.is_count(q) is False  # count drops "how many times"
+        assert intent.is_aggregation(q) is True
+
+    def test_both_predicates_can_fire_on_count_plus_span(self) -> None:
+        # "How many X across all my trips" is genuinely count AND aggregation;
+        # plan_recall resolves the tie by giving count precedence.
+        q = "How many restaurants did I try across all my trips?"
+        assert intent.is_count(q) is True
+        assert intent.is_aggregation(q) is True
+
+    def test_empty_query_is_not_aggregation(self) -> None:
+        assert intent.is_aggregation("") is False
+
+    def test_aggregation_is_case_insensitive(self) -> None:
+        assert intent.is_aggregation("LIST ALL the trips") is True
+        assert intent.is_aggregation("How OFTEN did I travel") is True

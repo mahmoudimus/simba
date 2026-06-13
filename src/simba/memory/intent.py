@@ -104,6 +104,41 @@ _CURRENT_VALUE_RE = re.compile(
 )
 
 
+# Multi-session aggregation that the count predicate does NOT catch: questions that
+# sum or span events spread ACROSS sessions ("how many days … in total", "how often",
+# "across all the events", "list all", "every time"). Measured on LongMemEval-S:
+# these are recall-BREADTH-bound exactly like counting — multi-session evidence sets
+# reach complete@80 = 0.90 vs complete@20 = 0.33, and widening the answer context
+# k=20 -> k=80 lifted the multi-session category 0.557 -> 0.686 (+0.13). Be
+# conservative — firing widens a costlier retrieval — so the markers are precise
+# multi-session/span shapes, and the bounded "total/average/difference of X and Y"
+# arithmetic over two named items (pointwise, not breadth) is deliberately NOT
+# matched (it carries no span/recurrence marker).
+_AGGREGATION_RE = re.compile(
+    r"\bin total\b"  # summation adverbial over an open set of events
+    r"|\bhow often\b"  # frequency over history
+    r"|\bacross (?:all|the|my|every|both)\b"  # spanning multiple sessions/events
+    r"|\bthroughout\b"
+    r"|\bevery time\b"  # per-occurrence recurrence
+    r"|\blist all\b"  # explicit enumeration
+    r"|\ball (?:the|my) \w+s\b"  # "all the events / all my trips" enumeration
+    r"|\b(?:over|in|during) the (?:past|last) (?:year|month|week|day|few|couple)"
+    r"|\bwhich \w+s\b(?=.*\bdid I\b)",  # "which <plural> … did I" enumeration shape
+    re.IGNORECASE,
+)
+# Aggregation exclude — narrower than the count exclude on purpose. Only the
+# frequency-RATE shape ("how many times a week", "how often per day") and the
+# temporal-SPAN shape ("how many days between …") are latest/state, not breadth.
+# Note: "how many times … across all the events / in the past two weeks" is NOT
+# excluded here (it IS a cross-session aggregation) even though the count predicate
+# drops it — the two predicates answer different questions about the same string.
+_AGGREGATION_EXCLUDE_RE = re.compile(
+    r"\b(?:how many|how often)\b.*\b(?:a|per)\s+(?:week|day|month|year|night|hour)\b"
+    r"|\bhow many (?:days?|weeks?|months?|years?|hours?|minutes?)\b.*\bbetween\b",
+    re.IGNORECASE,
+)
+
+
 def is_knowledge_update(query: str) -> bool:
     """Whether ``query`` asks for the CURRENT value of a fact (most-recent-wins).
 
@@ -114,3 +149,20 @@ def is_knowledge_update(query: str) -> bool:
     surfacing path. Substrings of a marker do not trigger (whole-word).
     """
     return _CURRENT_VALUE_RE.search(query or "") is not None
+
+
+def is_aggregation(query: str) -> bool:
+    """Whether ``query`` is a multi-session / aggregation question (breadth-bound).
+
+    True for span/total/frequency questions that gather evidence across sessions
+    ("… in total", "how often", "across all the events", "list all", "every time",
+    "which <plural> … did I"); False for bounded arithmetic over two named items
+    ("total cost of X and Y"), for the frequency-rate shape ("how many times a
+    week"), and for temporal spans ("how many days between …"). Conservative by
+    design — it gates a wider, costlier retrieval, and ``is_count`` takes
+    precedence in :func:`plan_recall` when a query matches both.
+    """
+    q = query or ""
+    if _AGGREGATION_EXCLUDE_RE.search(q):
+        return False
+    return _AGGREGATION_RE.search(q) is not None

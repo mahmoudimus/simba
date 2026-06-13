@@ -20,7 +20,7 @@ class RecallPlan:
     min_similarity: float
     max_results: int
     candidate_pool: int
-    mode: str  # "explicit" | "broad" | "precise"
+    mode: str  # "explicit" | "broad" | "precise" | "count" | "aggregation"
     expansion_terms: str  # focused-term string for the 2nd HyDE arm; "" if none
     hyde_text: str = ""  # the string to embed for the 2nd arm: the LLM answer
     # when hyde_mode=="llm" and non-empty, else expansion_terms (keyword fallback)
@@ -77,6 +77,22 @@ def plan_recall(
         mode = "count"
         max_res = cfg.count_context_k
         candidate_pool = cfg.count_candidate_pool_n
+
+    # Multi-session / aggregation queries are breadth-bound the same way (measured:
+    # multi-session complete@80 = 0.90 vs complete@20 = 0.33; widening context
+    # k=20 -> k=80 lifted that category +0.13). Mirror the count branch with a wider
+    # pool + context, but let count win when a query matches both (count's narrower
+    # context + rerank-skip is the more specific plan) — guarded by ``mode !=
+    # "count"``. The explicit max_results escape hatch still wins.
+    if (
+        getattr(cfg, "aggregation_depth_enabled", False)
+        and max_results is None
+        and mode != "count"
+        and simba.memory.intent.is_aggregation(query)
+    ):
+        mode = "aggregation"
+        max_res = cfg.aggregation_context_k
+        candidate_pool = cfg.aggregation_candidate_pool_n
 
     # Multi-arm HyDE (opt-in): a 2nd vector arm over the focused-term string.
     expansion_terms = ""
