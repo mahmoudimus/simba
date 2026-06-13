@@ -42,6 +42,24 @@ class BenchConfig:
     # {"correct": bool} judge. Cache verdicts are style-namespaced (see
     # judge.score_case) so flipping this never reuses the other style's verdicts.
     judge_style: str = "official"
+    # Reader levers — the 0.823 LME-S stack, all opt-in (defaults preserve the
+    # current bench reader so existing baselines are byte-identical). EVAL
+    # fidelity, not a daemon path: in production the reader is the host LLM /
+    # Claude, so these make `simba eval bench longmemeval --qa` measure the
+    # shipped reader protocol (same rationale as PR #66 question_date, #67
+    # official judge). reader_style: "minimal" = current build_answer_prompt;
+    # "rules" = the P2 reader (silent chain-of-evidence + subject-match +
+    # cite-only-explicit + most-recent-value).
+    reader_style: str = "minimal"
+    # When True, single-session-preference questions get the R1 synthesis header
+    # (INFER preferences, recommend rather than refuse). Intent-gated in
+    # score_case: a global R1 hurt single-session-user (0.833->0.583), so it
+    # only fires on the preference intent.
+    preference_synthesis: bool = False
+    # When True, temporal-reasoning questions route through the codegen reader
+    # (write Python date-arithmetic, exec in a sandboxed subprocess, finalize),
+    # falling back to the direct reader on any failure.
+    temporal_codegen: bool = False
     default_k: int = 10
     default_n: int = 50
     results_path: str = ".simba/eval/results.jsonl"
