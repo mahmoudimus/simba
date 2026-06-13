@@ -834,6 +834,55 @@ def test_run_qa_threads_judge_style_to_score_case(monkeypatch) -> None:
     assert seen == ["official", "generic"]  # explicit value + back-compat default
 
 
+def test_run_qa_threads_reader_levers_to_score_case(monkeypatch) -> None:
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "simba.eval.recall_adapter.build_retriever", lambda *a, **k: lambda q: []
+    )
+    monkeypatch.setattr(
+        judge, "score_case", lambda case, *a, **kw: seen.append(kw) or True
+    )
+    ds = Dataset(
+        name="t",
+        corpus=[Memory(id="c1", content="x")],
+        cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+    )
+    embed = lambda t: [0.0]  # noqa: E731
+    judge.run_qa(
+        [ds],
+        embed_doc=embed,
+        embed_query=embed,
+        cfg=None,
+        llm=FakeLlm(),
+        reader_style="rules",
+        preference_synthesis=True,
+        temporal_codegen=True,
+    )
+    assert seen[0]["reader_style"] == "rules"
+    assert seen[0]["preference_synthesis"] is True
+    assert seen[0]["temporal_codegen"] is True
+
+
+def test_run_qa_reader_levers_default_to_current_behavior(monkeypatch) -> None:
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "simba.eval.recall_adapter.build_retriever", lambda *a, **k: lambda q: []
+    )
+    monkeypatch.setattr(
+        judge, "score_case", lambda case, *a, **kw: seen.append(kw) or True
+    )
+    ds = Dataset(
+        name="t",
+        corpus=[Memory(id="c1", content="x")],
+        cases=[EvalCase(id="q1", query="q", relevant_ids=["c1"], answer="a")],
+    )
+    embed = lambda t: [0.0]  # noqa: E731
+    judge.run_qa([ds], embed_doc=embed, embed_query=embed, cfg=None, llm=FakeLlm())
+    assert seen[0]["reader_style"] == "minimal"
+    assert seen[0]["preference_synthesis"] is False
+    assert seen[0]["temporal_codegen"] is False
+
+
 def test_score_case_threads_question_date():
     case = EvalCase(
         id="q1",
@@ -845,3 +894,199 @@ def test_score_case_threads_question_date():
     llm = FakeLlm(answer="7 May", verdict={"correct": True})
     assert judge.score_case(case, lambda q: ["c1"], {"c1": "x"}, llm, k=2) is True
     assert "Current date: 2023/06/01 (Thu) 12:00" in llm.prompts[0]
+
+
+# ── reader_style: P2 chain-of-evidence reader (0.823 stack) ────────────────
+
+
+def test_build_answer_prompt_minimal_is_default_unchanged() -> None:
+    # The default reader_style must be byte-identical to the no-style call.
+    args = ("When?", ["[2025-01-01] a", "[2025-06-01] b"], ["2025-01-01", "2025-06-01"])
+    assert judge.build_answer_prompt(
+        *args, reader_style="minimal"
+    ) == judge.build_answer_prompt(*args)
+
+
+def test_build_answer_prompt_rules_emits_p2_header() -> None:
+    p = judge.build_answer_prompt(
+        "When?",
+        ["[2025-01-01] a", "[2025-06-01] b"],
+        ["2025-01-01", "2025-06-01"],
+        reader_style="rules",
+    )
+    # P2 header markers (verbatim from the probe).
+    assert "work through the evidence (do this silently)" in p
+    assert "Subject must match." in p
+    assert "Cite only what the memories explicitly state." in p
+    assert "Use the most recent value." in p
+    # still date-labelled + newest-flagged, and carries the question.
+    assert "[2025-06-01]" in p and "(most recent)" in p
+    assert "Question: When?" in p
+
+
+def test_build_answer_prompt_rules_includes_current_date() -> None:
+    p = judge.build_answer_prompt(
+        "Q?",
+        ["[2025-01-01] a"],
+        ["2025-01-01"],
+        question_date="2025/06/01 (Sun)",
+        reader_style="rules",
+    )
+    assert "Current date: 2025/06/01 (Sun)" in p
+    assert p.index("Current date:") < p.index("Question:")
+
+
+def test_build_answer_prompt_preference_emits_r1_header() -> None:
+    p = judge.build_answer_prompt(
+        "What should I cook?",
+        ["[2025-01-01] likes spicy food"],
+        ["2025-01-01"],
+        preference_synthesis=True,
+    )
+    # R1 synthesis header markers (verbatim from the probe).
+    assert "INFER" in p
+    assert "do NOT refuse just because no explicit" in p
+    assert "recommendation grounded in their stated preferences" in p
+    assert "What should I cook?" in p
+
+
+def test_score_case_reader_style_threads_to_prompt() -> None:
+    case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
+    llm = FakeLlm(answer="7 May", verdict={"correct": True})
+    judge.score_case(
+        case, lambda q: ["c1"], {"c1": "x"}, llm, k=2, reader_style="rules"
+    )
+    assert "work through the evidence (do this silently)" in llm.prompts[0]
+
+
+def test_score_case_reader_style_default_is_minimal() -> None:
+    case = EvalCase(id="q1", query="When?", relevant_ids=["c1"], answer="7 May")
+    llm = FakeLlm(answer="7 May", verdict={"correct": True})
+    judge.score_case(case, lambda q: ["c1"], {"c1": "x"}, llm, k=2)
+    assert "work through the evidence" not in llm.prompts[0]
+
+
+# ── preference_synthesis: R1 header, intent-gated ──────────────────────────
+
+
+def test_score_case_preference_synthesis_only_fires_on_preference_intent() -> None:
+    # preference intent -> R1 synthesis header lands in the prompt.
+    pref = EvalCase(
+        id="p1",
+        query="What should I cook?",
+        relevant_ids=["c1"],
+        answer="?",
+        intent="single-session-preference",
+    )
+    llm = FakeLlm(answer="spicy curry", verdict={"correct": True})
+    judge.score_case(
+        pref,
+        lambda q: ["c1"],
+        {"c1": "likes spicy"},
+        llm,
+        k=2,
+        preference_synthesis=True,
+    )
+    assert "do NOT refuse just because no explicit" in llm.prompts[0]
+
+
+def test_score_case_preference_synthesis_does_not_fire_on_other_intents() -> None:
+    # Non-preference intent (measured: R1 globally hurts SSU) -> no R1 header,
+    # even with the flag on.
+    ssu = EvalCase(
+        id="s1",
+        query="When did I move?",
+        relevant_ids=["c1"],
+        answer="May",
+        intent="single-session-user",
+    )
+    llm = FakeLlm(answer="May", verdict={"correct": True})
+    judge.score_case(
+        ssu, lambda q: ["c1"], {"c1": "x"}, llm, k=2, preference_synthesis=True
+    )
+    assert "do NOT refuse just because no explicit" not in llm.prompts[0]
+
+
+def test_score_case_preference_synthesis_off_by_default() -> None:
+    pref = EvalCase(
+        id="p1",
+        query="What should I cook?",
+        relevant_ids=["c1"],
+        answer="?",
+        intent="single-session-preference",
+    )
+    llm = FakeLlm(answer="curry", verdict={"correct": True})
+    judge.score_case(pref, lambda q: ["c1"], {"c1": "x"}, llm, k=2)
+    assert "do NOT refuse just because no explicit" not in llm.prompts[0]
+
+
+# ── temporal_codegen routing in score_case ─────────────────────────────────
+
+
+def test_score_case_temporal_codegen_routes_temporal_intent(monkeypatch) -> None:
+    import simba.eval.benchmarks.codegen_reader as cgr
+
+    called: list[str] = []
+
+    def fake_codegen(question, contexts, qdate, answerer, *, fallback=None):
+        called.append(question)
+        return "29 days", "codegen"
+
+    monkeypatch.setattr(cgr, "answer_via_codegen", fake_codegen)
+    case = EvalCase(
+        id="t1",
+        query="How many days ago?",
+        relevant_ids=["c1"],
+        answer="29 days",
+        intent="temporal-reasoning",
+    )
+    llm = FakeLlm(answer="ignored", verdict={"correct": True})
+    correct = judge.score_case(
+        case, lambda q: ["c1"], {"c1": "x"}, llm, k=2, temporal_codegen=True
+    )
+    assert correct is True
+    assert called == ["How many days ago?"]  # codegen route taken
+
+
+def test_score_case_temporal_codegen_only_for_temporal_intent(monkeypatch) -> None:
+    import simba.eval.benchmarks.codegen_reader as cgr
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        cgr,
+        "answer_via_codegen",
+        lambda *a, **k: called.append("x") or ("", "codegen"),
+    )
+    case = EvalCase(
+        id="m1",
+        query="When?",
+        relevant_ids=["c1"],
+        answer="May",
+        intent="multi-session",
+    )
+    llm = FakeLlm(answer="May", verdict={"correct": True})
+    judge.score_case(
+        case, lambda q: ["c1"], {"c1": "x"}, llm, k=2, temporal_codegen=True
+    )
+    assert called == []  # non-temporal stays on the direct path
+
+
+def test_score_case_temporal_codegen_off_by_default(monkeypatch) -> None:
+    import simba.eval.benchmarks.codegen_reader as cgr
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        cgr,
+        "answer_via_codegen",
+        lambda *a, **k: called.append("x") or ("", "codegen"),
+    )
+    case = EvalCase(
+        id="t1",
+        query="How many days ago?",
+        relevant_ids=["c1"],
+        answer="29",
+        intent="temporal-reasoning",
+    )
+    llm = FakeLlm(answer="29", verdict={"correct": True})
+    judge.score_case(case, lambda q: ["c1"], {"c1": "x"}, llm, k=2)
+    assert called == []  # codegen off by default

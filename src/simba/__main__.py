@@ -2491,6 +2491,9 @@ def _eval_bench(args: list[str]) -> int:
             eval_cfg=eval_cfg,
             judge_model=judge_client._cfg.model,
             judge_style=bcfg.judge_style,
+            reader_style=bcfg.reader_style,
+            preference_synthesis=bcfg.preference_synthesis,
+            temporal_codegen=bcfg.temporal_codegen,
         )
 
     record = {

@@ -270,6 +270,46 @@ def test_bench_qa_threads_judge_style_to_run_qa(monkeypatch, tmp_path) -> None:
     assert seen["judge_style"] == "generic"
 
 
+def test_bench_config_reader_levers_default_to_current_behavior() -> None:
+    # The 0.823 stack is opt-in: defaults must preserve current bench behavior.
+    cfg = bench_config.BenchConfig()
+    assert cfg.reader_style == "minimal"
+    assert cfg.preference_synthesis is False
+    assert cfg.temporal_codegen is False
+
+
+def test_bench_qa_threads_reader_levers_to_run_qa(monkeypatch, tmp_path) -> None:
+    import simba.eval.benchmarks.judge as judge
+    import simba.llm.judge_config as jcfg
+
+    _install_common_fakes(
+        monkeypatch,
+        tmp_path,
+        reader_style="rules",
+        preference_synthesis=True,
+        temporal_codegen=True,
+    )
+    seen: dict[str, object] = {}
+
+    def _spy_run_qa(datasets, **kwargs):
+        seen.update(kwargs)
+        return {
+            "n_graded": 1,
+            "n_skipped": 0,
+            "overall": {"accuracy": 0.5},
+            "by_category": {},
+        }
+
+    monkeypatch.setattr(judge, "run_qa", _spy_run_qa)
+    monkeypatch.setattr(judge, "sample_cases", lambda ds, **k: ds)
+    monkeypatch.setattr(jcfg, "get_judge_client", lambda *a, **k: _SENTINEL_CLIENT)
+    rc = cli._eval_bench(["locomo", "--qa"])
+    assert rc == 0
+    assert seen["reader_style"] == "rules"
+    assert seen["preference_synthesis"] is True
+    assert seen["temporal_codegen"] is True
+
+
 def test_bench_embedding_cache_passed_to_sync_embedders(monkeypatch, tmp_path) -> None:
     _install_common_fakes(monkeypatch, tmp_path)
     seen: dict[str, object] = {}
