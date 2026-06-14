@@ -369,7 +369,14 @@ async def hybrid_search(
     if getattr(cfg, "dormant_filter_enabled", True) and cwd is not None:
         fused = await asyncio.to_thread(_filter_dormant, fused, cwd)
 
-    return fused[:max_results]
+    # Score-adaptive truncation: a token budget (when set) overrides fixed-k so
+    # co-required evidence isn't dropped at a hard count cap. Off by default.
+    return simba.memory.scoring.truncate_to_budget(
+        fused,
+        max_results=max_results,
+        token_budget=getattr(cfg, "recall_token_budget", 0),
+        chars_per_token=getattr(cfg, "recall_chars_per_token", 4),
+    )
 
 
 async def _bg_rerank(

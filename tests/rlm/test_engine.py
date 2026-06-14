@@ -222,6 +222,56 @@ def test_run_completion_worker_counts_only_successful_stores():
     assert n == 1
 
 
+_PROMPT_SRC = (
+    "Transcript: the user paid $2,750 for the laptop and is leading the cloud "
+    "migration project at the company."
+)
+
+
+class _GroundedAndHallucinatedClient:
+    def complete(self, prompt):
+        return (
+            '[{"type":"DECISION","content":"user is leading the cloud migration '
+            'project"},'
+            '{"type":"GOTCHA","content":"user paid $9999 for the laptop"}]'
+        )
+
+
+def test_extraction_validation_drops_hallucinated_claim():
+    import types
+
+    cfg = types.SimpleNamespace(
+        extraction_validation_enabled=True,
+        extraction_validation_min_support=0.5,
+    )
+    stored = []
+    n = engine.run_completion_worker(
+        _PROMPT_SRC,
+        cwd="/p",
+        client=_GroundedAndHallucinatedClient(),
+        store_fn=lambda mem, **k: stored.append(mem["content"]) or True,
+        cfg=cfg,
+    )
+    # the $9999 claim is ungrounded (number absent from source) -> dropped
+    assert n == 1
+    assert stored == ["user is leading the cloud migration project"]
+
+
+def test_extraction_validation_off_by_default_stores_both():
+    import types
+
+    cfg = types.SimpleNamespace(extraction_validation_enabled=False)
+    stored = []
+    n = engine.run_completion_worker(
+        _PROMPT_SRC,
+        cwd="/p",
+        client=_GroundedAndHallucinatedClient(),
+        store_fn=lambda mem, **k: stored.append(mem["content"]) or True,
+        cfg=cfg,
+    )
+    assert n == 2 and len(stored) == 2
+
+
 def test_llm_digest_spawns_detached_worker(monkeypatch):
     monkeypatch.setattr(engine, "_load_transcript_text", lambda tid: "TRANSCRIPT-BODY")
     captured = {}

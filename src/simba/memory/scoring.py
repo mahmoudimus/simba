@@ -42,6 +42,59 @@ def _normalize(values: list[float]) -> list[float]:
     return [(v - lo) / span for v in values]
 
 
+def apply_rejection_gate(
+    memories: list[dict[str, typing.Any]],
+    *,
+    enabled: bool,
+    threshold: float,
+    score_key: str = "similarity",
+) -> list[dict[str, typing.Any]]:
+    """Low-confidence abstention gate: suppress the WHOLE recall when the top
+    candidate's ``score_key`` is below ``threshold`` (MemX-style).
+
+    Distinct from the per-result ``min_similarity`` floor — that drops individual
+    weak hits; this judges the BEST candidate and, if even it is too weak, returns
+    nothing (abstain) rather than surfacing spurious context. Off unless ``enabled``;
+    fail-open (an empty list passes through unchanged). Pure + order-preserving.
+    """
+    if not enabled or not memories:
+        return memories
+    top = memories[0].get(score_key, 0.0) or 0.0
+    return [] if top < threshold else memories
+
+
+def truncate_to_budget(
+    records: list[dict[str, typing.Any]],
+    *,
+    max_results: int,
+    token_budget: int,
+    chars_per_token: int = 4,
+) -> list[dict[str, typing.Any]]:
+    """Score-adaptive truncation (SmartSearch, arXiv 2603.15599).
+
+    Off (``token_budget <= 0``) this is the legacy fixed-k cut to ``max_results``.
+    On, it ignores the count and returns the longest score-ranked prefix
+    that fits ``token_budget`` (estimated as ``len(content+context)/chars_per_token``).
+    The top record is always included (never return empty for a non-empty input), so a
+    single over-budget hit still surfaces. This targets the completeness gate: when
+    there is token room, more co-required evidence survives than a fixed-k would keep;
+    when results are long, fewer are returned so the budget isn't overflowed. Pure +
+    order-preserving (assumes ``records`` already ranked).
+    """
+    if token_budget <= 0:
+        return records[:max_results]
+    out: list[dict[str, typing.Any]] = []
+    used = 0
+    for r in records:
+        text = (r.get("content") or "") + (r.get("context") or "")
+        cost = max(1, len(text) // chars_per_token)
+        if out and used + cost > token_budget:
+            break
+        out.append(r)
+        used += cost
+    return out
+
+
 def _recency(created_at: str, now: float, halflife_days: float) -> float:
     """Exponential-decay recency in [0, 1]; unparseable/halflife<=0 ⇒ 0.0."""
     epoch = _parse_epoch(created_at)

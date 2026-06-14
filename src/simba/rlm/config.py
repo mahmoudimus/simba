@@ -51,3 +51,10 @@ class RlmConfig:
     # reclaim (preserves the original rlm_jobs behavior: a dead worker locks a
     # transcript from re-digesting). Flip up to recover from crashed digests.
     digest_stale_after_seconds: int = 0
+    # Write-time extraction validation gate (Eywa-style, arXiv 2605.30771). When on,
+    # each extracted claim is checked for grounding in its source transcript before
+    # being stored: hard-value (no hallucinated number/date) + support overlap. An
+    # ungrounded claim is dropped, not stored. Off by default; fail-open. (Polarity
+    # is left to short-span callers — unreliable over a whole transcript.)
+    extraction_validation_enabled: bool = False
+    extraction_validation_min_support: float = 0.5
