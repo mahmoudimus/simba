@@ -57,6 +57,18 @@ class MemoryConfig:
     # 0 = off (use max_results). The top hit is always included.
     recall_token_budget: int = 0
     recall_chars_per_token: int = 4
+    # Entropy-gated exact-term boost. Trigram FTS collides high-information tokens
+    # (50815 -> 508/081/815 overlaps other codes), so an exact error code / symbol /
+    # path can rank #14 behind trigram-collision noise. When on, rare/identifier query
+    # tokens (general-English rarity via wordfreq + identifier shape) boost memories
+    # that contain them verbatim. No-op on prose (no such token).
+    # DEFAULT ON (2026-06-14): measured on real data — d810 "INTERR 50815" #15 -> #1
+    # (deterministic), and LME-S A/B (n=60) showed NO recall@k regression (recall@5/@10
+    # flat, recall@1 +0.017, fired harmlessly on 8/60 prose Qs). Harm-free + targeted
+    # win -> graduates per the SoTA-lever policy. Set false to disable.
+    recall_exact_boost_enabled: bool = True
+    # A query token with Zipf frequency >= this is common English and is skipped.
+    recall_exact_zipf_common: float = 3.0
     # Dimensional tagging (DimMem, arXiv 2605.15759). When on, each stored memory gets
     # a parseable time/keyword blob appended to its `context` (deterministic extract;
     # never embedded), so aggregation can filter/count by field later instead of

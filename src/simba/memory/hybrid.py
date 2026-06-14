@@ -17,6 +17,7 @@ import typing
 import simba.db
 import simba.kg.ppr
 import simba.memory.entity_bridge
+import simba.memory.entropy_terms
 import simba.memory.fts
 import simba.memory.intent
 import simba.memory.keywords
@@ -368,6 +369,18 @@ async def hybrid_search(
     # Drop dormant memories (forgotten by the decay pass) before truncation.
     if getattr(cfg, "dormant_filter_enabled", True) and cwd is not None:
         fused = await asyncio.to_thread(_filter_dormant, fused, cwd)
+
+    # Entropy-gated exact-term boost (off by default): trigram FTS collides high-info
+    # tokens (50815 -> 508/081/815). Pull the rare/identifier tokens from the query and
+    # rarity-weight-boost memories containing them verbatim, so an exact code/symbol
+    # beats the trigram-collision noise. No-op when the query has no such token (prose).
+    if getattr(cfg, "recall_exact_boost_enabled", False):
+        terms = simba.memory.entropy_terms.high_entropy_terms(
+            query_text,
+            zipf_common=getattr(cfg, "recall_exact_zipf_common", 3.0),
+        )
+        if terms:
+            fused = simba.memory.entropy_terms.exact_boost(fused, terms)
 
     # Score-adaptive truncation: a token budget (when set) overrides fixed-k so
     # co-required evidence isn't dropped at a hard count cap. Off by default.
