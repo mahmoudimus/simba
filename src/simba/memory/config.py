@@ -43,6 +43,25 @@ class MemoryConfig:
         "Represent this sentence for searching relevant passages: "
     )
     min_similarity: float = 0.35
+    # Low-confidence rejection (abstention) gate. When enabled, if the TOP recall
+    # candidate's similarity is below `recall_reject_threshold`, the whole recall is
+    # suppressed (return nothing) instead of surfacing weak/spurious context.
+    # Distinct from `min_similarity` (a per-result floor): this judges the BEST
+    # candidate and abstains. Off by default. Borrowed from MemX (arXiv 2603.16171).
+    recall_reject_enabled: bool = False
+    recall_reject_threshold: float = 0.0
+    # Score-adaptive truncation (SmartSearch, arXiv 2603.15599). When > 0, recall
+    # returns the longest score-ranked prefix that fits this many estimated tokens
+    # (~chars/recall_chars_per_token) instead of a fixed `max_results` count — so
+    # co-required evidence isn't cut at a hard count cap (the completeness gate).
+    # 0 = off (use max_results). The top hit is always included.
+    recall_token_budget: int = 0
+    recall_chars_per_token: int = 4
+    # Dimensional tagging (DimMem, arXiv 2605.15759). When on, each stored memory gets
+    # a parseable time/keyword blob appended to its `context` (deterministic extract;
+    # never embedded), so aggregation can filter/count by field later instead of
+    # re-individuating raw text at answer time. Off by default (see dimensions.py).
+    dimensions_enabled: bool = False
     max_results: int = 3
     duplicate_threshold: float = 0.92
     # Supersession (Phase 3): on store, replace an older same-type memory whose

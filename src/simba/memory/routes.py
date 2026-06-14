@@ -19,9 +19,11 @@ import starlette.middleware.base
 import starlette.requests
 import starlette.responses
 
+import simba.memory.dimensions
 import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.recall_plan
+import simba.memory.scoring
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -222,13 +224,23 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+    # Dimensional tagging (off by default): append a parseable time/keyword blob to
+    # context so aggregation can filter by field later. Embedding is computed above
+    # from the ORIGINAL text, so the blob never pollutes the vector.
+    stored_context = body.context
+    if getattr(config, "dimensions_enabled", False):
+        dims = simba.memory.dimensions.extract_dimensions(
+            body.content + (f" {body.context}" if body.context else "")
+        )
+        stored_context = (body.context or "") + simba.memory.dimensions.to_blob(dims)
+
     await table.add(
         [
             {
                 "id": memory_id,
                 "type": body.type,
                 "content": body.content,
-                "context": body.context,
+                "context": stored_context,
                 "tags": json.dumps(body.tags),
                 "confidence": body.confidence,
                 "sessionSource": body.session_source,
@@ -259,7 +271,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
                     "id": memory_id,
                     "type": body.type,
                     "content": body.content,
-                    "context": body.context,
+                    "context": stored_context,
                     "confidence": body.confidence,
                     "createdAt": now,
                     "projectPath": body.project_path,
@@ -389,6 +401,14 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             memories = await asyncio.to_thread(
                 simba.memory.hybrid._filter_dormant, memories, recall_cwd
             )
+
+    # Low-confidence abstention gate (off by default): suppress the whole recall
+    # when even the top candidate is too weak to trust.
+    memories = simba.memory.scoring.apply_rejection_gate(
+        memories,
+        enabled=getattr(config, "recall_reject_enabled", False),
+        threshold=getattr(config, "recall_reject_threshold", 0.0),
+    )
 
     results = [
         {

@@ -288,9 +288,24 @@ def run_completion_worker(
         client = _build_llm_client(cfg)
     store = store_fn or _store_memory
 
+    val_enabled = getattr(cfg, "extraction_validation_enabled", False) if cfg else False
+    val_min_support = getattr(cfg, "extraction_validation_min_support", 0.5) if cfg \
+        else 0.5
+
     reply = client.complete(prompt) or ""
     n = 0
     for mem in _parse_memories(reply):
+        if val_enabled:
+            # Source = the prompt's embedded transcript. Polarity parity is
+            # unreliable over a long source, so gate on hard-value + support only;
+            # an ungrounded claim (hallucinated number / unsupported) is dropped.
+            import simba.memory.extraction_validation as _ev
+
+            if not _ev.validate_extraction(
+                mem["content"], prompt,
+                min_support=val_min_support, check_polarity=False,
+            ).ok:
+                continue
         if store(mem, cwd=cwd, session_source=session_source):
             n += 1
     if mark_rlm and session_source:
