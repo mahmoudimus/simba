@@ -126,11 +126,13 @@ class MemoryConfig:
     # LongMemEval-S: multi-session/aggregation questions are recall-BREADTH-bound
     # exactly like counting (multi-session evidence sets complete@80 = 0.90 vs
     # complete@20 = 0.33). Widening the answer context k=20 -> k=80 lifted the
-    # multi-session category 0.557 -> 0.686 (+0.13) and overall 0.7495 -> 0.7702.
-    # DEFAULT OFF — measured but conservative; this fires a wider, costlier
-    # retrieval, and the intent gate (is_aggregation) only catches precise
-    # multi-session/span phrasing. Flip to True to widen the net for those queries.
-    aggregation_depth_enabled: bool = False
+    # multi-session category 0.557 -> 0.686 (+0.13) and overall 0.7495 -> 0.7702 —
+    # the lever in the 0.823 stack config (k_by_type multi-session:80).
+    # DEFAULT ON (2026-06-14): policy — a lever measured to reach SoTA/par graduates
+    # to default-on so the shipped product runs at its measured ceiling. Cost: fires
+    # a wider, costlier retrieval on multi-session/aggregation queries (gated by
+    # is_aggregation). Set false to revert to the conservative narrow net.
+    aggregation_depth_enabled: bool = True
     aggregation_candidate_pool_n: int = 80  # wide RRF candidate pool (complete@80=0.90)
     # Returned context size. k=80 (not count's 40): the gate showed multi-session
     # 3+-span evidence needs the wider window — complete@80 = 0.90 is the

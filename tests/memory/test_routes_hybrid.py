@@ -195,8 +195,13 @@ class TestRecallBroadWidening:
         ac, _, app = hybrid_client
         captured: dict = {}
         self._capture(monkeypatch, captured)
+        # A broad/exploration query that is NOT aggregation (so it tests the broad
+        # tier in isolation — "list all" would now upgrade to aggregation breadth,
+        # which is default-on as of the 2026-06-14 SoTA-lever policy).
         resp = await ac.post(
-            "/recall", json={"query": "list all the decisions", "projectPath": "p1"}
+            "/recall",
+            json={"query": "what is the history of the config schema",
+                  "projectPath": "p1"},
         )
         assert resp.status_code == 200
         assert captured["max_results"] == app.state.config.max_results_broad

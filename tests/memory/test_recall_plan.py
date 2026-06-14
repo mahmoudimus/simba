@@ -140,8 +140,10 @@ def test_count_takes_precedence_over_aggregation() -> None:
     assert plan.max_results == 40  # count_context_k, not aggregation_context_k
 
 
-def test_aggregation_default_config_is_off() -> None:
-    # Default-off: a fresh config must NOT route aggregation queries to breadth.
+def test_aggregation_default_config_is_on() -> None:
+    # Default-ON (2026-06-14 policy: a measured-SoTA lever graduates to default-on):
+    # a fresh config routes an aggregation query to the wider breadth plan.
     cfg = _cfg(intent_aware=True)
     plan = rp.plan_recall("how often did I go to the gym in total this month", cfg)
-    assert plan.mode != "aggregation"
+    assert plan.mode == "aggregation"
+    assert plan.max_results == cfg.aggregation_context_k
