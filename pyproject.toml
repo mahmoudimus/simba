@@ -45,6 +45,7 @@ simba = [
     "codex_skills/**/*.md",
     "codex_skills/**/*.yaml",
     "eval/datasets/*.json",
+    "pi/extension/*.ts",
 ]
 
 [dependency-groups]
