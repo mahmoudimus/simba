@@ -10,9 +10,7 @@ import simba.config
 @simba.config.configurable("pi")
 @dataclasses.dataclass
 class PiConfig:
-    # Whether `simba install` also wires the pi extension.
-    enabled: bool = True
-    # Where the bundled bridge extension is written and registered.
-    extension_path: str = "~/.pi/agent/extensions/simba.ts"
-    # pi's settings.json (extensions[] registration target).
-    settings_path: str = "~/.pi/agent/settings.json"
+    # pi's agent home; the bridge extension is written to
+    # <agent_home>/extensions/simba.ts and registered in <agent_home>/settings.json.
+    # The PI_CODING_AGENT_DIR env var (pi's own convention) overrides this when set.
+    agent_home: str = "~/.pi/agent"
