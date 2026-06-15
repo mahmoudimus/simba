@@ -28,6 +28,10 @@ import simba.redirect.check
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
 _TOOL_RULE_COUNT_CACHE = pathlib.Path("/tmp/claude-toolrule-count-cache.json")
+# Separate dedup cache for the pitfall gate so it fires once per reasoning turn
+# without colliding with the general-recall hash cache (shared cache would let one
+# consumer suppress the other on the same thinking block).
+_PITFALL_DEDUP_CACHE = pathlib.Path("/tmp/claude-pitfall-dedup-cache.json")
 
 _ENABLED_TOOLS = frozenset(
     ["Read", "Grep", "Glob", "Task", "WebSearch", "WebFetch", "Bash"]
@@ -77,12 +81,12 @@ def _extract_thinking(transcript_path: pathlib.Path) -> str:
     return ""
 
 
-def _check_dedup(text: str) -> bool:
-    """Return True if this text was already processed recently."""
+def _check_dedup(text: str, cache_path: pathlib.Path = _HASH_CACHE) -> bool:
+    """Return True if this text was already processed recently (per ``cache_path``)."""
     text_hash = hashlib.md5(text.encode()).hexdigest()
 
     try:
-        cache = json.loads(_HASH_CACHE.read_text())
+        cache = json.loads(cache_path.read_text())
         if (
             cache.get("lastHash") == text_hash
             and (time.time() - cache.get("timestamp", 0)) < _hooks_cfg().dedup_ttl
@@ -94,11 +98,11 @@ def _check_dedup(text: str) -> bool:
     return False
 
 
-def _save_hash(text: str) -> None:
-    """Save hash to cache file."""
+def _save_hash(text: str, cache_path: pathlib.Path = _HASH_CACHE) -> None:
+    """Save hash to cache file (per ``cache_path``)."""
     text_hash = hashlib.md5(text.encode()).hexdigest()
     with contextlib.suppress(OSError):
-        _HASH_CACHE.write_text(
+        cache_path.write_text(
             json.dumps({"lastHash": text_hash, "timestamp": time.time()})
         )
 
@@ -318,6 +322,38 @@ def _check_truth_constraints(
     return simba.hooks._kg_client.query_kg(command, cwd=cwd_str) or None
 
 
+def _check_pitfall(thinking: str, cwd_str: str | None) -> str | None:
+    """Pitfall/doctrine enforcement gate: fire a STOP-and-confirm directive when the
+    pending move (``thinking``) strongly matches a stored doctrine/scar/trap.
+
+    Recalls only the doctrine TYPES (``hooks.pitfall_gate_types``) for the project,
+    then ``simba.memory.pitfall`` judges the TOP candidate against the strict
+    directive floor (``hooks.pitfall_gate_min_similarity``) and frames a fired match.
+    Fail-open: disabled, no thinking, or any failure returns ``None`` — never raises.
+    """
+    cfg = _hooks_cfg()
+    if not getattr(cfg, "pitfall_gate_enabled", False):
+        return None
+    if not thinking:
+        return None
+
+    import simba.memory.pitfall
+
+    types = [t.strip().upper() for t in cfg.pitfall_gate_types.split(",") if t.strip()]
+    if not types:
+        return None
+    memories = simba.hooks._memory_client.recall_memories(
+        thinking,
+        project_path=cwd_str if cwd_str else None,
+        max_results=cfg.pitfall_gate_max_results,
+        filters={"types": types},
+    )
+    directive = simba.memory.pitfall.pitfall_directive(
+        memories, min_similarity=cfg.pitfall_gate_min_similarity
+    )
+    return directive or None
+
+
 def main(hook_input: dict) -> str:
     """Run the PreToolUse hook pipeline. Returns JSON output string."""
     tool_name = hook_input.get("tool_name", "")
@@ -356,12 +392,26 @@ def main(hook_input: dict) -> str:
         if truth_warning:
             parts.append(truth_warning)
 
-    # --- Memory recall (only for specific tools with thinking) ---
-    if tool_name in _ENABLED_TOOLS and transcript_path_str:
+    # --- Thinking-based recall + pitfall gate ---
+    # The pitfall gate fires for ANY tool (incl. Edit/Write/Bash — the mutating moves
+    # most worth gating), not just the general-recall tool set; general recall stays
+    # scoped to _ENABLED_TOOLS. Both read the same last thinking block, so extract it
+    # once when either path is live.
+    pitfall_on = getattr(_hooks_cfg(), "pitfall_gate_enabled", False)
+    if transcript_path_str and (tool_name in _ENABLED_TOOLS or pitfall_on):
         transcript_path = pathlib.Path(transcript_path_str)
         thinking = _extract_thinking(transcript_path)
 
-        if thinking and not _check_dedup(thinking):
+        # Pitfall/doctrine enforcement gate (own dedup so it fires once per turn and
+        # does not collide with general recall's hash cache).
+        if pitfall_on and thinking and not _check_dedup(thinking, _PITFALL_DEDUP_CACHE):
+            directive = _check_pitfall(thinking, cwd_str)
+            _save_hash(thinking, _PITFALL_DEDUP_CACHE)
+            if directive:
+                parts.append(directive)
+
+        # General thinking-block recall (unchanged; only for the enabled tool set).
+        if tool_name in _ENABLED_TOOLS and thinking and not _check_dedup(thinking):
             project_path = cwd_str if cwd_str else None
             # Defer the cosine floor to the daemon's intent-aware selection.
             memories = simba.hooks._memory_client.recall_memories(
