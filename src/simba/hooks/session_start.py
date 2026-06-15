@@ -154,25 +154,29 @@ def run(hook_input: dict) -> CanonicalResult:
                 timeout=1.0,
             )
 
-    # 2. Tailor session context (time, git, marks)
-    tailor_ctx = simba.tailor.session_start.gather_context(cwd=cwd)
-    if tailor_ctx:
-        parts.append(tailor_ctx)
+    # 2/3. Project-scoped context — only when the payload carried a cwd.
+    #      gather_context / get_db_path / get_stats all fall back to Path.cwd()
+    #      on None, which inside the daemon is the wrong project.
+    if cwd is not None:
+        # 2. Tailor session context (time, git, marks)
+        tailor_ctx = simba.tailor.session_start.gather_context(cwd=cwd)
+        if tailor_ctx:
+            parts.append(tailor_ctx)
 
-    # 3. Project memory status
-    try:
-        if simba.db.get_db_path(cwd).exists():
-            stats = simba.search.project_memory.get_stats(cwd)
-            sessions = stats.get("sessions", 0)
-            knowledge = stats.get("knowledge", 0)
-            facts = stats.get("facts", 0)
-            if sessions or knowledge or facts:
-                parts.append(
-                    f"[Project Memory] {sessions} sessions, "
-                    f"{knowledge} knowledge areas, {facts} facts"
-                )
-    except Exception:
-        pass
+        # 3. Project memory status
+        try:
+            if simba.db.get_db_path(cwd).exists():
+                stats = simba.search.project_memory.get_stats(cwd)
+                sessions = stats.get("sessions", 0)
+                knowledge = stats.get("knowledge", 0)
+                facts = stats.get("facts", 0)
+                if sessions or knowledge or facts:
+                    parts.append(
+                        f"[Project Memory] {sessions} sessions, "
+                        f"{knowledge} knowledge areas, {facts} facts"
+                    )
+        except Exception:
+            pass
 
     # 4. Check for pending transcript extraction
     if hook_input.get("source") == "compact" or session_id:
