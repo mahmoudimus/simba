@@ -85,3 +85,28 @@ class HooksConfig:
     # (PreToolUse updatedInput) for simple leading-program commands.
     redirect_enabled: bool = True
     redirect_mode: str = "deny"  # deny | rewrite
+
+    # Pitfall/doctrine enforcement gate (src/simba/memory/pitfall.py). The
+    # ENFORCEMENT half of the acme "lobotomy" cure: when the agent's pending move
+    # (its last thinking block) strongly matches a stored doctrine/scar/trap, fire
+    # it as a STOP-and-confirm DIRECTIVE — "you're about to take the workaround you
+    # told me not to" — instead of leaving it as passive recalled context. Recalls
+    # only the doctrine TYPES, judges the TOP candidate against a STRICT floor (a
+    # directive interrupts, so it must be a strong, specific match), and fires once
+    # per reasoning turn (own dedup cache). Fail-open; fires for any tool (incl.
+    # Edit/Write/Bash), not just the general-recall tool set.
+    # DEFAULT-OFF: measured retrieval-side (probe 2026-06-15 on the live acme store
+    # — 3/3 labeled moments fire their scar at sim>=0.82, 0/6 benign moves fire,
+    # floor 0.78 sits in the gap) but graduation needs the BEHAVIORAL A/B
+    # (recurrence prevention with the agent in the loop), which a retrieval probe
+    # can't establish. Enable via `simba config set hooks.pitfall_gate_enabled true`.
+    pitfall_gate_enabled: bool = False
+    # Directive floor — stricter than recall's min_similarity. Calibrated on the
+    # live acme store: labeled fires >= 0.82, benign tops <= 0.73; 0.78 is the
+    # mid-gap operating point (0/6 false positives, 3/3 fire).
+    pitfall_gate_min_similarity: float = 0.78
+    # Doctrine/scar/trap types recalled for the gate. Measured correction to the
+    # original FAILURE+PREFERENCE guess: GOTCHA carries the operand-presence root
+    # cause (mem_49970a37) central to 2 of the 3 labeled moments, so it is required.
+    pitfall_gate_types: str = "FAILURE,PREFERENCE,GOTCHA"
+    pitfall_gate_max_results: int = 5  # candidate pool recalled (only the top fires)
