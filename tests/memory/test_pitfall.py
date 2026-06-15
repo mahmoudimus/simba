@@ -97,7 +97,7 @@ class TestSurfaceDirective:
 
     def test_gotcha_framed_as_known_trap(self) -> None:
         d = surface_pitfall_directive(
-            {"type": "GOTCHA", "content": "INTERR 50815 drops the right operand."}
+            {"type": "GOTCHA", "content": "deleting a block before its successor."}
         )
         assert "trap" in d.lower() or "known" in d.lower()
 
