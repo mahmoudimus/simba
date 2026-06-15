@@ -20,6 +20,12 @@ def test_hook_endpoint_prompt_submit_returns_canonical_fields():
     body = resp.json()
     assert "additional_context" in body
     assert "suppress_output" in body
+    assert "transform" in body
+
+
+def test_hook_endpoint_empty_body_ok():
+    resp = _client().post("/hook/prompt_submit", json={})
+    assert resp.status_code == 200
 
 
 def test_hook_endpoint_unknown_event_404():
