@@ -12,6 +12,9 @@ Usage:
     simba codex-recall     Query semantic memory (/recall) for a text query
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
+    simba pi-install       Install bundled bridge extension for pi (~/.pi/agent)
+    simba pi-install --remove
+                           Remove the pi bridge extension
     simba server [opts]    Start the memory daemon
     simba memory store     Store a memory (--type, --content, --context, --confidence)
     simba memory recall    Recall memories for a query text
