@@ -49,24 +49,31 @@ _DEFAULT_FRAMING = "Relevant prior scar"
 def build_violation_prompt(move: str, doctrine: str) -> str:
     """Prompt the model to judge whether ``move`` VIOLATES ``doctrine``.
 
-    Abstention-biased by construction (measured 2026-06-15: the permissive prompt
-    confabulated violations on topically-related scars — ~3/5 of real-move fires were
-    the LLM rationalizing a contradiction on read/search moves). So: DEFAULT to
-    violates=false; exploratory moves are never violations; no guessing about what the
-    agent will do next. Replies JSON only: ``{"violates": bool, "why": "<short>"}``.
+    Abstention-biased by construction (measured 2026-06-15): the permissive prompt
+    confabulated violations on topically-related scars (~3/5 of real-move fires were the
+    LLM rationalizing a contradiction on read/search moves), and even the strict prompt
+    fired on an INFORMATIONAL quirk-note ("X appends Y even if…") when the move ran the
+    correct command. So: DEFAULT to violates=false; exploratory moves are never
+    violations; an informational/behavioral note is not a prohibition; no guessing.
+    Replies JSON only: ``{"violates": bool, "why": "<short>"}``.
     """
     return (
         "You are a STRICT guardrail for a coding agent about to take an ACTION. You "
         "are shown the agent's CURRENT MOVE (its latest reasoning) and a STORED "
         "DOCTRINE/SCAR from its past work. Flag a violation ONLY IF the move would "
-        "UNAMBIGUOUSLY do the very thing the doctrine warns against, directly "
-        "contradict it, or repeat the exact failure it records.\n"
+        "UNAMBIGUOUSLY do the very thing the doctrine PROHIBITS, directly contradict a "
+        "rule it states, or repeat the exact failure it records.\n"
         "DEFAULT TO violates=false. It is NOT a violation if ANY of these hold: the "
         "move merely shares the doctrine's topic; the move is consistent with or "
         "follows the doctrine; the move is EXPLORATORY (reading, searching, "
         "summarizing, planning, extracting) rather than a concrete state-changing "
-        "action; or deciding would require GUESSING what the agent does next. When "
-        "in doubt, violates=false.\n"
+        "action; the doctrine ONLY DESCRIBES how a tool/command BEHAVES (a quirk, an "
+        "'even if', a 'be aware that') and prescribes nothing — running that "
+        "command is not a violation of a mere description; or deciding would require "
+        "GUESSING what the agent does next. (BUT a doctrine that PRESCRIBES a required "
+        "step or procedure — 'check X first', 'always do Y', 'do NOT suppress/skip "
+        "Z' — IS a rule: skipping it or doing the opposite IS a violation.) When in "
+        "doubt, violates=false.\n"
         "Reply JSON only: "
         '{"violates": true, "why": "<short reason>"} or {"violates": false}.\n\n'
         f"CURRENT MOVE:\n{move}\n\nDOCTRINE/SCAR:\n{doctrine}\n\nJSON:"
