@@ -993,6 +993,55 @@ def _cmd_hook_canonical(args: list[str]) -> int:
     return 0
 
 
+def _pi_agent_home() -> pathlib.Path:
+    """Return pi's agent home (PI_CODING_AGENT_DIR or ~/.pi/agent)."""
+    env = os.environ.get("PI_CODING_AGENT_DIR")
+    if env:
+        return pathlib.Path(env).expanduser()
+    return pathlib.Path.home() / ".pi" / "agent"
+
+
+def _cmd_pi_install(args: list[str]) -> int:
+    """Install or remove the bundled pi bridge extension."""
+    import importlib.resources
+
+    remove = "--remove" in args
+    home = _pi_agent_home()
+    ext_dir = home / "extensions"
+    ext_path = ext_dir / "simba.ts"
+    settings_path = home / "settings.json"
+
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+    extensions = settings.setdefault("extensions", [])
+
+    if remove:
+        if ext_path.exists():
+            ext_path.unlink()
+        if str(ext_path) in extensions:
+            extensions.remove(str(ext_path))
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        print(f"pi extension removed from {settings_path}")
+        return 0
+
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    src = importlib.resources.files("simba") / "pi" / "extension" / "simba.ts"
+    ext_path.write_text(src.read_text())
+    if str(ext_path) not in extensions:
+        extensions.append(str(ext_path))
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    print(f"pi extension installed: {ext_path}")
+    print(f"  registered in {settings_path}")
+    print("  daemon URL: $SIMBA_DAEMON_URL or http://localhost:8741")
+    return 0
+
+
 def _cmd_hook(args: list[str]) -> int:
     """Dispatch a hook event. Called by Claude Code, not users."""
     if not args:
@@ -3041,6 +3090,8 @@ def main() -> None:
         sys.exit(_cmd_hook(rest))
     elif cmd == "hook-canonical":
         sys.exit(_cmd_hook_canonical(rest))
+    elif cmd == "pi-install":
+        sys.exit(_cmd_pi_install(rest))
     elif cmd == "memory":
         sys.exit(_cmd_memory(rest))
     elif cmd == "server":
