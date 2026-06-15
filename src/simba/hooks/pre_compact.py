@@ -218,13 +218,17 @@ def run(hook_input: dict) -> CanonicalResult:
     print(f"[pre-compact] Exported transcript ({msg_count} messages)", file=sys.stderr)
     print(f"[pre-compact] Transcript: {dest_md}", file=sys.stderr)
 
-    # 5. Autonomous RLM digest (opt-in via rlm.engine; detached, never blocks)
-    with contextlib.suppress(Exception):
-        _maybe_dispatch_rlm_digest(session_id, cwd_str, msg_count)
+    # 5/6. Opt-in helpers — only when the payload carried a cwd. Both fall back
+    #      to str(Path.cwd()) on an empty cwd, which inside the daemon would
+    #      digest/consolidate against the wrong project.
+    if cwd_str:
+        # 5. Autonomous RLM digest (opt-in via rlm.engine; detached, never blocks)
+        with contextlib.suppress(Exception):
+            _maybe_dispatch_rlm_digest(session_id, cwd_str, msg_count)
 
-    # 6. Episodic consolidation (opt-in via episodes.auto_on_precompact; detached)
-    with contextlib.suppress(Exception):
-        _maybe_consolidate_episodes(cwd_str)
+        # 6. Episodic consolidation (opt-in via episodes.auto_on_precompact; detached)
+        with contextlib.suppress(Exception):
+            _maybe_consolidate_episodes(cwd_str)
 
     return CanonicalResult(suppress_output=True)
 
