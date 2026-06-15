@@ -35,3 +35,4 @@ docs/*
 # and durable operational runbooks.
 !docs/plans/
 !docs/eval-remote-gpu.md
+!docs/blog/
