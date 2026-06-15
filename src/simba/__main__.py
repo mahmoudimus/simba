@@ -994,11 +994,18 @@ def _cmd_hook_canonical(args: list[str]) -> int:
 
 
 def _pi_agent_home() -> pathlib.Path:
-    """Return pi's agent home (PI_CODING_AGENT_DIR or ~/.pi/agent)."""
+    """Return pi's agent home.
+
+    PI_CODING_AGENT_DIR if set, else the configured pi.agent_home.
+    """
     env = os.environ.get("PI_CODING_AGENT_DIR")
     if env:
         return pathlib.Path(env).expanduser()
-    return pathlib.Path.home() / ".pi" / "agent"
+    import simba.config
+    import simba.pi  # registers the "pi" section
+
+    _ = simba.pi
+    return pathlib.Path(simba.config.load("pi").agent_home).expanduser()
 
 
 def _cmd_pi_install(args: list[str]) -> int:
