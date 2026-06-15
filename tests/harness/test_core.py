@@ -9,6 +9,7 @@ def test_canonical_result_defaults():
     r = core.CanonicalResult()
     assert r.additional_context == ""
     assert r.suppress_output is False
+    assert r.memory_count == 0
     assert r.block_reason is None
 
 

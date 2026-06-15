@@ -19,6 +19,8 @@ def test_hook_endpoint_prompt_submit_returns_canonical_fields():
     body = resp.json()
     assert "additional_context" in body
     assert "suppress_output" in body
+    assert "memory_count" in body
+    assert isinstance(body["memory_count"], int)
     assert "transform" in body
 
 

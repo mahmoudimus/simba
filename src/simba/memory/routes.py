@@ -773,6 +773,7 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
     return {
         "additional_context": result.additional_context,
         "suppress_output": result.suppress_output,
+        "memory_count": result.memory_count,
         "block_reason": result.block_reason,
         "transform": result.transform,  # None today; v2 tool gating
     }

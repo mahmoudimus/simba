@@ -937,6 +937,7 @@ def _hook_via_daemon(
             return simba.harness.core.CanonicalResult(
                 additional_context=b.get("additional_context", ""),
                 suppress_output=b.get("suppress_output", False),
+                memory_count=b.get("memory_count", 0),
                 block_reason=b.get("block_reason"),
             )
     except (httpx.HTTPError, ValueError):
@@ -989,6 +990,7 @@ def _cmd_hook_canonical(args: list[str]) -> int:
             {
                 "additional_context": result.additional_context,
                 "suppress_output": result.suppress_output,
+                "memory_count": result.memory_count,
                 "block_reason": result.block_reason,
             }
         )
