@@ -243,16 +243,79 @@ Simba hooks into the Claude Code **and** Codex lifecycle events to provide persi
 | **Stop** | Check for rule compliance signal, capture errors from final transcript |
 | **PermissionRequest** *(Codex only)* | Deny Bash/`apply_patch`/MCP calls that match a high-confidence TOOL_RULE memory |
 
+## Capabilities — what's on by default
+
+Every capability is a `simba config` lever (`simba config set <section>.<key>`). **✅ = on by default** (active in the shipped daemon); **⬜ = off by default**. Nothing is off arbitrarily — each off lever is *measured-negative*, *no-op until wired*, or *shipped-but-awaiting its own A/B* (noted inline). Graduation rule: a daemon lever **measured** (real, attributed, re-runnable A/B) to reach SoTA-or-at-par flips to on in the same change; eval/answerer (reader/judge) levers live in bench config and never ship as daemon defaults.
+
+### Recall pipeline (`memory.*`) — applied in order on every recall
+
+| | Capability | Key | What it does |
+|---|---|---|---|
+| ✅ | Hybrid recall | `hybrid_enabled` | Vector arm + BM25 keyword arm fused via RRF (`rrf_k=20`). |
+| ✅ | Intent-aware floor | `intent_aware` | Picks the cosine floor from query shape (precise 0.35 / broad 0.28). |
+| ✅ | HyDE expansion | `expansion_enabled` | 2nd vector arm over the focused-term string (`hyde_mode=keyword`). |
+| ✅ | Count-depth | `count_depth_enabled` | Counting queries widen to pool 80 / context 40, rerank skipped. |
+| ✅ | Aggregation-depth | `aggregation_depth_enabled` | Multi-session/aggregation queries widen to 80/80. |
+| ✅ | Entropy exact-boost | `recall_exact_boost_enabled` | Rare/identifier query tokens boost verbatim matches (fixes trigram collisions on error codes/symbols/paths). |
+| ✅ | Composite rescore | `scoring_enabled` | Blends RRF relevance + recency + importance + strength after fusion. |
+| ✅ | Cross-encoder reranker | `reranker_mode` = `cross-encoder` | bge-reranker-v2-m3 GGUF pass; `rerank_intent_gating` skips shapes it harms. |
+| ✅ | LLM reranker | `llm_rerank_enabled` | Async, off-hot-path relevance pass, cached by (query, set). |
+| ⬜ | Abstention gate | `recall_reject_enabled` | Suppress recall when the top candidate is weak. *Measured net-harmful.* |
+| ⬜ | Score-adaptive truncation | `recall_token_budget` (0) | Token-budgeted prefix vs fixed count. *Measured redundant for accuracy.* |
+| ⬜ | Entity-bridge multi-hop | `entity_bridge_enabled` | Fold shared-entity neighbors as a 3rd arm. *No-op until an index is wired.* |
+| ⬜ | Retrieval-time GraphRAG | `kg_ppr_enabled` | Fold PPR-ranked KG neighbors. *No-op until a KG is wired; marginal ceiling.* |
+
+### Write & storage hygiene (`memory.*`)
+
+| | Capability | Key | What it does |
+|---|---|---|---|
+| ✅ | Supersession | `supersede_enabled` | On store, replace an older same-type near-duplicate (0.85–0.92). |
+| ✅ | Decay + reinforcement + feedback | `decay_enabled` | Strength decays over time; access reinforces; outcome feedback nudges. |
+| ✅ | Dormant filter | `dormant_filter_enabled` | Exclude decayed-out memories from recall. |
+| ✅ | TOOL_RULE hygiene | `hygiene_scheduler_enabled` | Expire stale tool-rule memories (`tool_rule_max_age_days=30`). |
+| ⬜ | Dimensional tagging | `dimensions_enabled` | Append a parseable time/keyword blob for field-filtered aggregation (DimMem). *Gated on date extraction.* |
+| ⬜ | Continuous extraction | `continuous_extraction_enabled` | Per-turn incremental extraction. *Ships rails only; worker behind an evaluator.* |
+| ⬜ | Arousal-modulated decay | `arousal_decay_enabled` | Importance-scaled decay rate. *No-op (×1.0) until measured.* |
+
+### Conflict & enforcement
+
+| | Capability | Key | What it does |
+|---|---|---|---|
+| ✅ | Conflict surfacing | `memory.conflict_surfacing_enabled` | Detect a real contradiction among recalled memories → emit a name-it directive (pairwise). |
+| ⬜ | Write-time conflict engine | `memory.conflict_detect_on_write` | Detect conflicts at store-time, persist, read at recall. *Exposed for measurement.* |
+| ⬜ | Recall re-check | `memory.conflict_recall_recheck` | Query-aware precision filter over stored candidate conflicts. |
+| ⬜ | Pitfall/doctrine gate | `hooks.pitfall_gate_enabled` | Fire a FAILURE/PREFERENCE/GOTCHA scar as a STOP directive when a pending move matches it. *Awaiting its behavioral A/B.* |
+
+### Lifecycle, hooks & subsystems
+
+| | Capability | Key | What it does |
+|---|---|---|---|
+| ✅ | Tool-rule warnings | `hooks.rule_check_enabled` | PreToolUse: warn when a tool call matches a learned failure. |
+| ✅ | Tool-call redirect | `hooks.redirect_enabled` (`redirect_mode=deny`) | Steer bare commands to better tooling (`python`→`uv run`, …). |
+| ✅ | Auto-learn from failures | `hooks.auto_learn_from_failures` | PostToolUse: record tool failures as rules (probe/reader/exit-code guards on). |
+| ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
+| ✅ | Guardian | *(always-on hook)* | Re-inject `SIMBA:core` rule blocks every prompt / after compaction. |
+| ✅ | Reflection | `reflection.enabled` | Background pattern/reflection extraction (scheduler on, project-scoped). |
+| ✅ | Episodic consolidation | `episodes.enabled` | Consolidate episodes (auto on PreCompact). |
+| ✅ | Sync extraction | `sync.llm_extract_enabled` | Background LLM extraction in the sync scheduler. |
+| ✅ | KG entity resolution | `kg.entity_resolution_enabled` | Resolve/merge entities in the knowledge graph. |
+| ✅ | Neuron reasoning | `neuron.enabled` | Datalog/Z3 ops: derive / verify / revise / distill / induce. |
+| ✅ | RLM pointers | `rlm.inject_pointers` | Inject lossless-transcript pointers on recall (`engine_model=haiku`). |
+| ⬜ | RLM extraction validation | `rlm.extraction_validation_enabled` | Write-time grounding gate (Eywa). |
+| ⬜ | Neuron resolution ops / judge log | `neuron.resolution_ops_enabled`, `neuron.judge_log_enabled` | Extra neuron ops + judge logging. |
+
+**Eval/answerer levers** are off by default and live in **bench config**, not the daemon: `eval.ircot_enabled`, `eval.llm_rerank_enabled_eval`, `eval.scoring_enabled_eval`, `eval.expansion_enabled_eval`, `eval.corpus_doctor.enabled`.
+
 ## Memory Daemon
 
 FastAPI server backed by LanceDB for vector storage. Supports two embedding backends.
 
 ### In-process mode (default)
 
-Loads a GGUF model via llama-cpp-python. No external services needed. The model (~81 MB) auto-downloads from Hugging Face on first startup.
+Loads a GGUF model via llama-cpp-python. No external services needed. The model (bge-large-en-v1.5 q8_0, ~330 MB) auto-downloads from Hugging Face on first startup.
 
 ```bash
-simba server                                    # Default — auto-downloads nomic-embed-text
+simba server                                    # Default — auto-downloads bge-large-en-v1.5
 simba server --model-path /path/to/model.gguf   # Use a local GGUF file
 simba server --n-gpu-layers 0                   # CPU-only mode
 simba server --port 9000 --db-path /path/to/db  # Custom port and database
@@ -283,7 +346,7 @@ Query: "
 simba memory reembed
 ```
 
-A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `scripts/embedder_bakeoff.py` scores candidates on the eval datasets. On the current (small, saturating) datasets nomic-Q8 and Qwen3-0.6B are **a wash vs nomic-Q4** (Q8 even regressed the temporal set), so the default stays nomic-Q4 — a real embedder decision needs the hardened/real-corpus eval.
+A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `scripts/embedder_bakeoff.py` scores candidates on the eval datasets. The default is **bge-large-en-v1.5** (the 2026-06-06 bake-off beat nomic-embed-text on both LoCoMo r@5 0.595→0.614 and LongMemEval r@5 0.780→0.814, lifting multi-hop + open-domain with no single-hop regression); later candidates (nomic-Q8, Qwen3-0.6B) were a wash, so bge-large stays — a further embedder change needs the hardened/real-corpus eval.
 
 ### Endpoints
 
@@ -983,23 +1046,24 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 |-------|---------|-------------|
 | `port` | 8741 | Daemon listen port |
 | `db_path` | `""` (cwd/.simba/memory) | Database directory |
-| `embedding_dims` | 768 | Embedding vector dimensions |
-| `model_repo` | nomic-ai/nomic-embed-text-v1.5-GGUF | HuggingFace repo |
-| `model_file` | nomic-embed-text-v1.5.Q4_K_M.gguf | GGUF file name |
+| `embedding_dims` | 1024 | Embedding vector dimensions |
+| `embedding_model` | bge-large-en-v1.5 | Default embedder (bake-off 2026-06-06 beat nomic on LoCoMo + LongMemEval) |
+| `model_repo` | CompendiumLabs/bge-large-en-v1.5-gguf | HuggingFace repo |
+| `model_file` | bge-large-en-v1.5-q8_0.gguf | GGUF file name |
 | `model_path` | `""` (auto-download) | Local path to GGUF file |
 | `n_gpu_layers` | -1 | GPU layers (-1=all, 0=CPU only) |
 | `embed_url` | `""` (in-process) | External embedding server URL |
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall (precise queries) |
 | `max_results` | 3 | Maximum memories returned per query (precise queries) |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
-| `supersede_enabled` | false | Replace a near-duplicate same-type memory on store |
+| `supersede_enabled` | true | Replace a near-duplicate same-type memory on store |
 | `supersede_threshold` | 0.85 | Supersede band floor (below `duplicate_threshold`) |
 | `max_content_length` | 200 | Maximum memory content length (chars) |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
 | `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |
 | `hybrid_enabled` | true | Fuse BM25 keyword arm with the vector arm (RRF) |
-| `rrf_k` | 60 | Reciprocal Rank Fusion rank constant |
+| `rrf_k` | 20 | Reciprocal Rank Fusion rank constant (swept 2026-06-06: 20 beat 60 on LoCoMo) |
 | `fts_candidate_pool` | 20 | Candidates pulled per arm before fusion |
 | `fts_tokenize` | trigram | FTS5 tokenizer (trigram \| porter \| unicode61) |
 | `vector_weight` | 1.0 | RRF weight for the vector arm |
@@ -1009,7 +1073,7 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `max_results_broad` | 8 | Maximum memories returned for broad queries |
 | `fts_candidate_pool_broad` | 40 | Candidate pool for broad queries |
 | `fts_max_terms` | 12 | Cap on high-signal terms fed to the keyword arm |
-| `expansion_enabled` | false | 2nd HyDE vector arm over the focused-term string |
+| `expansion_enabled` | true | 2nd HyDE vector arm over the focused-term string |
 
 ### Neuron
 
