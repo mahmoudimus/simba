@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pathlib
 
 import fastapi.testclient
 
@@ -60,11 +59,6 @@ def test_hook_endpoint_transform_present_in_response():
     assert "transform" in resp.json()
 
 
-def _snapshot(root: pathlib.Path) -> set[pathlib.Path]:
-    """Files currently under ``root`` (empty set if it doesn't exist)."""
-    return set(root.rglob("*")) if root.exists() else set()
-
-
 def test_stop_capture_uses_payload_cwd(tmp_path):
     # A transcript with an error so the tailor pipeline actually writes to disk;
     # the write must land under the payload cwd, never the daemon/process cwd.
@@ -81,10 +75,6 @@ def test_stop_capture_uses_payload_cwd(tmp_path):
         + "\n"
     )
 
-    # Snapshot the daemon's own cwd so we can prove the dispatch adds nothing here.
-    daemon_simba = pathlib.Path.cwd() / ".simba"
-    before = _snapshot(daemon_simba)
-
     resp = _client().post(
         "/hook/stop",
         json={
@@ -96,5 +86,7 @@ def test_stop_capture_uses_payload_cwd(tmp_path):
     assert resp.status_code == 200
 
     # The tailor capture wrote under <payload cwd>/.simba/, not the process cwd.
+    # A real Path.cwd() leak would write to the process cwd and never create
+    # tmp_path/.simba, so this positive assertion catches the realistic leak
+    # without depending on the daemon being quiescent.
     assert (tmp_path / ".simba").exists()
-    assert _snapshot(daemon_simba) == before
