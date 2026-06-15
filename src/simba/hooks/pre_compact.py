@@ -13,12 +13,9 @@ import pathlib
 import shutil
 import sys
 import time
-from typing import TYPE_CHECKING
 
 import simba.hooks._memory_client
-
-if TYPE_CHECKING:
-    from simba.harness.core import CanonicalResult
+from simba.harness.core import CanonicalResult
 
 
 def _parse_transcript_to_markdown(lines: list[str]) -> tuple[str, int]:
@@ -162,8 +159,6 @@ def _maybe_consolidate_episodes(cwd: str) -> None:
 
 def run(hook_input: dict) -> CanonicalResult:
     """Run the PreCompact hook pipeline. Returns a CanonicalResult."""
-    from simba.harness.core import CanonicalResult
-
     session_id = hook_input.get("session_id") or hook_input.get("sessionId") or ""
     transcript_path_str = (
         hook_input.get("transcript_path") or hook_input.get("transcriptPath") or ""
