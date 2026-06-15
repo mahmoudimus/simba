@@ -6,7 +6,7 @@
 
 **Architecture:** Each lifecycle hook's logic moves behind a `run(payload) -> CanonicalResult` function. A harness-agnostic `dispatch()` runs it; one Claude/Codex adapter renders the canonical result to today's exact stdout envelope (byte-identical). The same `dispatch()` is exposed two ways — inline via the `simba hook` / `simba hook-canonical` CLI, and over HTTP via a new daemon `POST /hook/{event}` endpoint. A thin bundled `simba.ts` pi extension subscribes to pi's EventBus, calls the daemon (falling back to the CLI), and applies the canonical result to pi's event-result shapes. No recall/ranking/guardian logic lives in TypeScript.
 
-**Tech Stack:** Python 3.12, FastAPI (daemon), httpx, pytest (`uv run --no-sync pytest`), ruff; TypeScript (pi extension, `@mariozechner/pi-coding-agent` ≥0.51.3 / pi 0.78.0), Node ≥22 (global `fetch`).
+**Tech Stack:** Python 3.12, FastAPI (daemon), httpx, pytest (`uv run --no-sync pytest`), ruff; TypeScript (pi extension, `@earendil-works/pi-coding-agent` ≥0.51.3 / pi 0.78.0), Node ≥22 (global `fetch`).
 
 **Spec:** `docs/plans/23-pi-harness-support.md`
 
@@ -852,7 +852,7 @@ import type {
   ExtensionContext,
   BeforeAgentStartEvent,
   AgentEndEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
 
