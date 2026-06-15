@@ -8,7 +8,7 @@
 [![Runtimes: Claude Code + Codex + pi](https://img.shields.io/badge/runtimes-Claude%20Code%20%2B%20Codex%20%2B%20pi-8a2be2.svg)](#codex-support)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A unified memory + reasoning plugin for **Claude Code**, **Codex**, and **[pi](https://github.com/mariozechner/pi)** — the local-first coding agent. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills across all three runtimes.
+A unified memory + reasoning plugin for **Claude Code**, **Codex**, and **[pi](https://github.com/earendil-works/pi)** — the local-first coding agent. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills across all three runtimes.
 
 ## Quick Start
 
@@ -154,7 +154,7 @@ Ask Codex to use:
 
 ## pi Support
 
-Simba runs under [**pi**](https://github.com/mariozechner/pi) (`@mariozechner/pi-coding-agent`) via a thin bundled bridge extension — the same memory loop, no logic duplicated in TypeScript.
+Simba runs under [**pi**](https://github.com/earendil-works/pi) (`@mariozechner/pi-coding-agent`) via a thin bundled bridge extension — the same memory loop, no logic duplicated in TypeScript.
 
 A small `simba.ts` extension subscribes to pi's lifecycle events and forwards each
 to simba over the daemon's `POST /hook/{event}` endpoint (falling back to the
