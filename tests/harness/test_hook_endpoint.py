@@ -33,6 +33,33 @@ def test_hook_endpoint_unknown_event_404():
     assert resp.status_code == 404
 
 
+def test_hook_endpoint_null_body_fails_open():
+    # The CLI path catches a decode error and continues with {}; the daemon must
+    # match (fail-open, not 422).
+    resp = _client().post("/hook/prompt_submit", json=None)
+    assert resp.status_code == 200
+
+
+def test_hook_endpoint_array_body_fails_open():
+    resp = _client().post("/hook/prompt_submit", json=[])
+    assert resp.status_code == 200
+
+
+def test_hook_endpoint_malformed_body_fails_open():
+    resp = _client().post(
+        "/hook/prompt_submit",
+        content="not json",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 200
+
+
+def test_hook_endpoint_transform_present_in_response():
+    resp = _client().post("/hook/prompt_submit", json={"prompt": "", "cwd": "/tmp"})
+    assert resp.status_code == 200
+    assert "transform" in resp.json()
+
+
 def _snapshot(root: pathlib.Path) -> set[pathlib.Path]:
     """Files currently under ``root`` (empty set if it doesn't exist)."""
     return set(root.rglob("*")) if root.exists() else set()
