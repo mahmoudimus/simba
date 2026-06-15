@@ -5,10 +5,10 @@
 [![CI](https://github.com/mahmoudimus/simba/actions/workflows/ci.yml/badge.svg)](https://github.com/mahmoudimus/simba/actions/workflows/ci.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Runtimes: Claude Code + Codex](https://img.shields.io/badge/runtimes-Claude%20Code%20%2B%20Codex-8a2be2.svg)](#codex-support)
+[![Runtimes: Claude Code + Codex + pi](https://img.shields.io/badge/runtimes-Claude%20Code%20%2B%20Codex%20%2B%20pi-8a2be2.svg)](#codex-support)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A unified memory + reasoning plugin for **Claude Code _and_ Codex**. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills for **both** runtimes.
+A unified memory + reasoning plugin for **Claude Code**, **Codex**, and **[pi](https://github.com/mariozechner/pi)**. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills across runtimes.
 
 ## Quick Start
 
@@ -90,9 +90,11 @@ publishes a GitHub Release with the matching CHANGELOG section.
 ### Register hooks
 
 ```bash
-simba install             # Register hooks + skills in current project
+simba install             # Register hooks + skills in current project (Claude Code)
 simba install --global    # Register hooks + skills globally (~/.claude/)
 simba install --remove    # Remove hooks and skills
+simba codex-install       # Set up Codex hooks + skills (see Codex Support)
+simba pi-install          # Install the pi bridge extension (see pi Support)
 ```
 
 ## Codex Support
@@ -149,6 +151,37 @@ Default install path:
 Ask Codex to use:
 - `simba-onboard` for project instruction onboarding
 - `simba-codex-lifecycle` to enforce `codex-status` / `codex-extract` / `codex-finalize`
+
+## pi Support
+
+Simba runs under [**pi**](https://github.com/mariozechner/pi) (`@mariozechner/pi-coding-agent`) via a thin bundled bridge extension — the same memory loop, no logic duplicated in TypeScript.
+
+A small `simba.ts` extension subscribes to pi's lifecycle events and forwards each
+to simba over the daemon's `POST /hook/{event}` endpoint (falling back to the
+`simba hook-canonical <event>` CLI when the daemon is down). All recall, ranking,
+and rule logic stays in Python; the extension is pure marshalling.
+
+| pi event | simba canonical | What fires |
+|----------|-----------------|------------|
+| `session_start` | `session_start` | Daemon health + onboarding context |
+| `before_agent_start` | `prompt_submit` | Recall relevant memories, inject as a message |
+| `agent_end` | `stop` | Capture error patterns / rule signal from the response |
+| `session_before_compact` | `pre_compact` | Export the transcript for learning extraction |
+
+This is the **MVP**: the memory loop (recall-on-prompt, capture-on-stop, daemon
+health, transcript export). Tool-gating (`PreToolUse`-style deny/rewrite) and
+skill registration under pi are future work.
+
+```bash
+simba pi-install            # Write the bridge extension + register it in pi's settings.json
+simba pi-install --remove   # Remove the extension and its registration
+```
+
+`pi-install` writes the extension to `<pi-agent-home>/extensions/simba.ts` and
+registers it in `<pi-agent-home>/settings.json`. The agent home defaults to
+`~/.pi/agent` (`simba config set pi.agent_home <path>`); pi's own
+`PI_CODING_AGENT_DIR` env var overrides it when set. The extension reads the
+daemon URL from `$SIMBA_DAEMON_URL` (default `http://localhost:8741`).
 
 ## Workflow
 
@@ -830,6 +863,8 @@ simba codex-extract           Print extraction prompt for latest transcript
 simba codex-recall <query>    Query semantic memory via /recall
 simba codex-finalize          Run end-of-task signal/error checks
 simba codex-automation        Print a suggested Codex automation directive
+simba pi-install              Install the pi bridge extension (~/.pi/agent)
+simba pi-install --remove     Remove the pi bridge extension
 simba server [opts]           Start memory daemon
 simba neuron run              Run neuron MCP server (truth/verify)
 simba orchestration install   Register orchestration MCP server
@@ -857,7 +892,9 @@ simba sync extract       Extract learnings from transcripts only
 simba sync status        Show sync pipeline status
 simba sync schedule      Run sync on a periodic interval
 simba stats              Token economics and project statistics
-simba hook <event>       Run a hook (called by Claude Code, not users)
+simba hook <event>       Run a hook (called by Claude Code / Codex, not users)
+simba hook-canonical <event>
+                         Run a canonical hook, print CanonicalResult JSON (used by pi)
 ```
 
 ## Development
