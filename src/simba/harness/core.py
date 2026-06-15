@@ -1,0 +1,41 @@
+"""Harness-agnostic hook core: canonical result + dispatch.
+
+Each lifecycle hook's logic lives in ``simba.hooks.<event>.run(payload)`` and
+returns a CanonicalResult.  ``dispatch`` is the single entrypoint used by both
+transports — the inline CLI and the daemon ``POST /hook/{event}`` endpoint.
+
+All filesystem paths inside a hook's ``run`` are derived from ``payload`` (e.g.
+``payload["cwd"]``), never from the process cwd, so dispatch is safe to run
+inside the daemon process whose own cwd differs from the agent's.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import importlib
+
+# canonical event name -> module exposing run(payload) -> CanonicalResult
+_EVENT_MODULES = {
+    "session_start": "simba.hooks.session_start",
+    "prompt_submit": "simba.hooks.user_prompt_submit",
+    "stop": "simba.hooks.stop",
+    "pre_compact": "simba.hooks.pre_compact",
+    # v2: "pre_tool", "post_tool"
+}
+
+
+@dataclasses.dataclass
+class CanonicalResult:
+    """Harness-agnostic hook result."""
+
+    additional_context: str = ""
+    suppress_output: bool = False
+    # v2 fields (defined for forward-compat; unused in MVP):
+    block_reason: str | None = None
+    transform: dict | None = None
+
+
+def dispatch(event: str, payload: dict) -> CanonicalResult:
+    """Run the canonical hook for ``event``. Raises KeyError if unknown."""
+    module = importlib.import_module(_EVENT_MODULES[event])
+    return module.run(payload)
