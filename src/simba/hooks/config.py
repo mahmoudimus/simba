@@ -88,25 +88,49 @@ class HooksConfig:
 
     # Pitfall/doctrine enforcement gate (src/simba/memory/pitfall.py). The
     # ENFORCEMENT half of the memory-surfacing cure: when the agent's pending move
-    # (its last thinking block) strongly matches a stored doctrine/scar/trap, fire
-    # it as a STOP-and-confirm DIRECTIVE — "you're about to take the workaround you
-    # told me not to" — instead of leaving it as passive recalled context. Recalls
-    # only the doctrine TYPES, judges the TOP candidate against a STRICT floor (a
-    # directive interrupts, so it must be a strong, specific match), and fires once
-    # per reasoning turn (own dedup cache). Fail-open; fires for any tool (incl.
-    # Edit/Write/Bash), not just the general-recall tool set.
-    # DEFAULT-OFF: measured retrieval-side (probe 2026-06-15 on a real project memory
-    # store — 3/3 labeled recurrence moments fire their scar at sim>=0.82, 0/6 benign
-    # moves fire, floor 0.78 sits in the gap) but graduation needs the BEHAVIORAL A/B
-    # (recurrence prevention with the agent in the loop), which a retrieval probe
-    # can't establish. Enable via `simba config set hooks.pitfall_gate_enabled true`.
+    # (its last thinking block, before a MUTATING tool) would VIOLATE a stored
+    # doctrine/scar/trap, fire it as a STOP-and-confirm DIRECTIVE — "you're about to
+    # take the workaround you told me not to" — instead of leaving it as passive
+    # recalled context. Fires once per reasoning turn (own dedup); fail-open.
+    # MEASUREMENT (real acme moves, 2026-06-15): the naive top-candidate-similarity
+    # gate fired on 29-46% of moves (topical match != violation). Adding the LLM
+    # violation check dropped that to 17%; an abstention-biased prompt + the
+    # mutating-tool gate took false fires to 0/31 on real moves while KEEPING 3/3
+    # labeled violations — i.e. no-over-fire is now well measured.
+    # STILL DEFAULT-OFF: (1) recall on real in-the-wild pitfalls is unproven (the
+    # sampled moves contained none — only the 3 hand-crafted moments exercise the
+    # true-positive side), and (2) violation mode costs an LLM call on the PreToolUse
+    # hot path. Dogfood-ready; graduation needs the false-NEGATIVE measurement + a
+    # hot-path-cost decision. Enable: `simba config set hooks.pitfall_gate_enabled 1`.
     pitfall_gate_enabled: bool = False
-    # Directive floor — stricter than recall's min_similarity. Calibrated on a real
-    # project memory store: labeled fires >= 0.82, benign tops <= 0.73; 0.78 is the
-    # mid-gap operating point (0/6 false positives, 3/3 fire).
+    # Detection strategy. "violation" (default) asks the LLM, for each topically-close
+    # candidate, whether the pending move would VIOLATE the doctrine (do what it warns
+    # against / contradict it / repeat the failure) vs merely share its topic — firing
+    # only on a violation. "similarity" is the legacy top-candidate-over-floor gate,
+    # kept for ablation: a sweep over real acme moves (2026-06-15) measured it firing on
+    # 29-46% of moves — in a dense domain almost every move is topically close to SOME
+    # doctrine, and topical closeness is not violation. Violation mode fixes that.
+    pitfall_gate_mode: str = "violation"  # "violation" | "similarity"
+    # When mode="violation" but no llm_client is wired, fall back to: "failure_only"
+    # (the conservative FAILURE-type similarity gate at pitfall_gate_min_similarity —
+    # FAILURE is the one pitfall-shaped type) or "off" (fire nothing).
+    pitfall_gate_fallback: str = "failure_only"  # "failure_only" | "off"
+    # Candidate floor for violation mode: similarity needed to be worth an LLM check
+    # (permissive — the LLM supplies precision). Lower than the fire floor below.
+    pitfall_gate_topical_floor: float = 0.70
+    pitfall_gate_max_checks: int = 3  # max candidates LLM-checked per move (cost bound)
+    # Tools the gate fires before. The gate is about "you're about to TAKE a workaround/
+    # action" — measured (2026-06-15) its false fires were all on read/search/extract
+    # moves, so it only runs before state-changing tools, not exploration (Read/Grep/
+    # Glob/WebSearch). Comma-separated tool names.
+    pitfall_gate_tools: str = "Edit,Write,Bash"
+    # Fire floor for "similarity" mode and the "failure_only" fallback — stricter than
+    # recall's min_similarity (a directive interrupts, so it must be a strong match).
     pitfall_gate_min_similarity: float = 0.78
     # Doctrine/scar/trap types recalled for the gate. Measured correction to the
     # original FAILURE+PREFERENCE guess: GOTCHA carries a high-information trap memory
     # central to 2 of the 3 labeled recurrence moments, so it is required.
     pitfall_gate_types: str = "FAILURE,PREFERENCE,GOTCHA"
-    pitfall_gate_max_results: int = 5  # candidate pool recalled (only the top fires)
+    pitfall_gate_max_results: int = (
+        5  # candidate pool recalled (top candidates checked)
+    )
