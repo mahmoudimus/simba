@@ -13,8 +13,12 @@ import pathlib
 import shutil
 import sys
 import time
+from typing import TYPE_CHECKING
 
 import simba.hooks._memory_client
+
+if TYPE_CHECKING:
+    from simba.harness.core import CanonicalResult
 
 
 def _parse_transcript_to_markdown(lines: list[str]) -> tuple[str, int]:
@@ -156,8 +160,10 @@ def _maybe_consolidate_episodes(cwd: str) -> None:
     )
 
 
-def main(hook_input: dict) -> str:
-    """Run the PreCompact hook pipeline. Returns JSON output string."""
+def run(hook_input: dict) -> CanonicalResult:
+    """Run the PreCompact hook pipeline. Returns a CanonicalResult."""
+    from simba.harness.core import CanonicalResult
+
     session_id = hook_input.get("session_id") or hook_input.get("sessionId") or ""
     transcript_path_str = (
         hook_input.get("transcript_path") or hook_input.get("transcriptPath") or ""
@@ -165,16 +171,16 @@ def main(hook_input: dict) -> str:
     cwd_str = hook_input.get("cwd", "")
 
     if not session_id or not transcript_path_str:
-        return json.dumps({"suppressOutput": True})
+        return CanonicalResult(suppress_output=True)
 
     transcript_path = pathlib.Path(transcript_path_str)
     if not transcript_path.exists():
-        return json.dumps({"suppressOutput": True})
+        return CanonicalResult(suppress_output=True)
 
     try:
         transcript_lines = transcript_path.read_text().strip().split("\n")
     except OSError:
-        return json.dumps({"suppressOutput": True})
+        return CanonicalResult(suppress_output=True)
 
     # Export directory
     transcripts_dir = pathlib.Path.home() / ".claude" / "transcripts"
@@ -225,4 +231,11 @@ def main(hook_input: dict) -> str:
     with contextlib.suppress(Exception):
         _maybe_consolidate_episodes(cwd_str)
 
-    return json.dumps({"suppressOutput": True})
+    return CanonicalResult(suppress_output=True)
+
+
+def main(hook_input: dict) -> str:
+    """Run the PreCompact hook and render the Claude/Codex envelope."""
+    import simba.harness.adapters.claude as claude
+
+    return claude.render("PreCompact", run(hook_input))
