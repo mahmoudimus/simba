@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 
+import simba.harness.adapters.claude as claude
 import simba.hooks.pre_compact
 import simba.hooks.session_start
 import simba.hooks.stop
 import simba.hooks.user_prompt_submit
+from simba.harness.core import CanonicalResult
 
 
 def test_user_prompt_submit_empty_prompt_envelope():
@@ -29,3 +31,28 @@ def test_pre_compact_missing_fields_suppresses_output():
 def test_session_start_returns_session_start_envelope():
     out = simba.hooks.session_start.main({"cwd": "/tmp"})
     assert json.loads(out)["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+
+
+def test_render_user_prompt_submit_with_context():
+    out = claude.render("UserPromptSubmit", CanonicalResult(additional_context="hi"))
+    parsed = json.loads(out)
+    assert parsed["hookSpecificOutput"]["additionalContext"] == "hi"
+
+
+def test_render_stop_with_context_uses_stop_reason():
+    out = claude.render("Stop", CanonicalResult(additional_context="WARN"))
+    assert json.loads(out) == {"stopReason": "WARN"}
+
+
+def test_render_stop_empty_is_empty_object():
+    assert json.loads(claude.render("Stop", CanonicalResult())) == {}
+
+
+def test_render_pre_compact_suppress():
+    out = claude.render("PreCompact", CanonicalResult(suppress_output=True))
+    assert json.loads(out) == {"suppressOutput": True}
+
+
+def test_native_to_canonical_map():
+    assert claude.NATIVE_TO_CANONICAL["UserPromptSubmit"] == "prompt_submit"
+    assert claude.NATIVE_TO_CANONICAL["PreCompact"] == "pre_compact"
