@@ -1,11 +1,11 @@
 """PreToolUse pitfall/doctrine enforcement gate — surface a stored scar as a
 STOP-and-confirm DIRECTIVE when the agent's pending move matches it.
 
-The two-half d810 "lobotomy" cure: the retrieval half (entropy-boost, shipped) makes
+The two-half memory-surfacing cure: the retrieval half (entropy-boost, shipped) makes
 the right scar RANK well; this enforcement half fires it as a *directive* at the
 decision point — the *"you're about to take the workaround you told me not to"* gate.
-The gap it closes was measured: the agent CITED its diagnose-first doctrine yet still
-proposed the revert+xfail workaround — the scar surfaced as a passive fact, not a gate.
+The gap it closes was measured: the agent CITED its own doctrine yet still proposed
+the workaround it warns against — the scar surfaced as a passive fact, not a gate.
 
 Pure + fail-open, like ``conflict.py``/``intent.py``. The recall + TYPE filtering
 (FAILURE / PREFERENCE / GOTCHA — the doctrine/scar/trap types) happens in the daemon
@@ -15,9 +15,9 @@ because a directive interrupts the agent — it must fire only on a strong, spec
 match.
 
 Why only the top-ranked candidate: the no-false-positive guarantee is measured on the
-top candidate. On the live d810 store (probe, 2026-06-15) the 3 labeled moments fire
-their top candidate at similarity >= 0.82 while 6 benign moves top out at <= 0.73 — a
-clean gap; floor 0.78 sits in it (0/6 benign FP, 3/3 fire). A deep scan past the top
+top candidate. On a real project memory store (probe, 2026-06-15) the 3 labeled moments
+fire their top candidate at similarity >= 0.82 while 6 benign moves top out at <= 0.73 —
+a clean gap; floor 0.78 sits in it (0/6 benign FP, 3/3 fire). A deep scan past the top
 candidate would re-admit the benign matches that the top-only check excludes.
 """
 
