@@ -322,14 +322,32 @@ def _check_truth_constraints(
     return simba.hooks._kg_client.query_kg(command, cwd=cwd_str) or None
 
 
+def _pitfall_llm_client(cfg):
+    """Return an available LLM client for violation-mode, or None (→ fallback).
+
+    None whenever the gate isn't in violation mode, the llm subsystem is missing, or
+    the client reports unavailable — the orchestrator then takes the configured
+    fallback. Never raises (fail-open)."""
+    if getattr(cfg, "pitfall_gate_mode", "violation") != "violation":
+        return None
+    try:
+        import simba.llm.client
+
+        client = simba.llm.client.get_client()
+        return client if client.available() else None
+    except Exception:
+        return None
+
+
 def _check_pitfall(thinking: str, cwd_str: str | None) -> str | None:
     """Pitfall/doctrine enforcement gate: fire a STOP-and-confirm directive when the
-    pending move (``thinking``) strongly matches a stored doctrine/scar/trap.
+    pending move (``thinking``) VIOLATES a stored doctrine/scar/trap.
 
     Recalls only the doctrine TYPES (``hooks.pitfall_gate_types``) for the project,
-    then ``simba.memory.pitfall`` judges the TOP candidate against the strict
-    directive floor (``hooks.pitfall_gate_min_similarity``) and frames a fired match.
-    Fail-open: disabled, no thinking, or any failure returns ``None`` — never raises.
+    then ``simba.memory.pitfall.pitfall_note`` decides: in violation mode it LLM-checks
+    whether the move violates a topically-close doctrine (vs merely sharing its topic);
+    with no LLM it falls back per ``hooks.pitfall_gate_fallback``. Fail-open: disabled,
+    no thinking, or any failure returns ``None`` — never raises.
     """
     cfg = _hooks_cfg()
     if not getattr(cfg, "pitfall_gate_enabled", False):
@@ -348,8 +366,8 @@ def _check_pitfall(thinking: str, cwd_str: str | None) -> str | None:
         max_results=cfg.pitfall_gate_max_results,
         filters={"types": types},
     )
-    directive = simba.memory.pitfall.pitfall_directive(
-        memories, min_similarity=cfg.pitfall_gate_min_similarity
+    directive = simba.memory.pitfall.pitfall_note(
+        memories, thinking, cfg=cfg, llm_client=_pitfall_llm_client(cfg)
     )
     return directive or None
 
@@ -393,18 +411,31 @@ def main(hook_input: dict) -> str:
             parts.append(truth_warning)
 
     # --- Thinking-based recall + pitfall gate ---
-    # The pitfall gate fires for ANY tool (incl. Edit/Write/Bash — the mutating moves
-    # most worth gating), not just the general-recall tool set; general recall stays
-    # scoped to _ENABLED_TOOLS. Both read the same last thinking block, so extract it
-    # once when either path is live.
-    pitfall_on = getattr(_hooks_cfg(), "pitfall_gate_enabled", False)
-    if transcript_path_str and (tool_name in _ENABLED_TOOLS or pitfall_on):
+    # General recall stays scoped to _ENABLED_TOOLS. The pitfall gate fires only before
+    # MUTATING tools (hooks.pitfall_gate_tools, default Edit/Write/Bash) — it is about
+    # "you're about to TAKE an action", and its measured false fires were all on read/
+    # search/extract moves. Both paths read the same last thinking block, so extract it
+    # once when either is live.
+    _hcfg = _hooks_cfg()
+    pitfall_tools = {
+        t.strip()
+        for t in getattr(_hcfg, "pitfall_gate_tools", "Edit,Write,Bash").split(",")
+        if t.strip()
+    }
+    run_pitfall = (
+        getattr(_hcfg, "pitfall_gate_enabled", False) and tool_name in pitfall_tools
+    )
+    if transcript_path_str and (tool_name in _ENABLED_TOOLS or run_pitfall):
         transcript_path = pathlib.Path(transcript_path_str)
         thinking = _extract_thinking(transcript_path)
 
         # Pitfall/doctrine enforcement gate (own dedup so it fires once per turn and
         # does not collide with general recall's hash cache).
-        if pitfall_on and thinking and not _check_dedup(thinking, _PITFALL_DEDUP_CACHE):
+        if (
+            run_pitfall
+            and thinking
+            and not _check_dedup(thinking, _PITFALL_DEDUP_CACHE)
+        ):
             directive = _check_pitfall(thinking, cwd_str)
             _save_hash(thinking, _PITFALL_DEDUP_CACHE)
             if directive:
