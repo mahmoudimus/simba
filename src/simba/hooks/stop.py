@@ -9,15 +9,20 @@ from __future__ import annotations
 import contextlib
 import json
 import pathlib
+from typing import TYPE_CHECKING
 
 import simba.config
 import simba.guardian.check_signal
 import simba.memory.continuous
 import simba.tailor.hook
 
+if TYPE_CHECKING:
+    from simba.harness.core import CanonicalResult
 
-def main(hook_input: dict) -> str:
-    """Run the Stop hook pipeline. Returns JSON output string."""
+
+def run(hook_input: dict) -> CanonicalResult:
+    """Run the Stop hook pipeline. Returns a CanonicalResult."""
+    from simba.harness.core import CanonicalResult
 
     cwd_str = hook_input.get("cwd")
     cwd = pathlib.Path(cwd_str) if cwd_str else None
@@ -32,6 +37,7 @@ def main(hook_input: dict) -> str:
             parts.append(signal_result)
 
     # 2. Tailor: error capture from transcript
+    #    Side effect: writes reflections under <cwd>/.simba/ (cwd from payload).
     simba.tailor.hook.process_hook(json.dumps(hook_input))
 
     # 3. Continuous extraction (default-off): read only the NEW transcript window via
@@ -43,9 +49,11 @@ def main(hook_input: dict) -> str:
 
     # Stop hooks don't support hookSpecificOutput — only top-level fields.
     # The tailor error capture writes to disk as a side effect.
-    # Return a minimal valid object.
-    output: dict = {}
-    combined = "\n\n".join(parts)
-    if combined:
-        output["stopReason"] = combined
-    return json.dumps(output)
+    return CanonicalResult(additional_context="\n\n".join(parts))
+
+
+def main(hook_input: dict) -> str:
+    """Run the Stop hook and render the Claude/Codex envelope."""
+    import simba.harness.adapters.claude as claude
+
+    return claude.render("Stop", run(hook_input))
