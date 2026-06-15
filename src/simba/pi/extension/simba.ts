@@ -11,7 +11,7 @@ import type {
   ExtensionContext,
   BeforeAgentStartEvent,
   AgentEndEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
 
