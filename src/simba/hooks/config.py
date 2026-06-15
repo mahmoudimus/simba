@@ -20,6 +20,9 @@ class HooksConfig:
     daemon_port: int = 8741
     default_max_results: int = 3
     default_timeout: float = 2.0
+    # Route canonicalized hooks through the daemon when it's up (warm path);
+    # fall back to running them inline. Output is byte-identical either way.
+    dispatch_via_daemon: bool = True
 
     # User-prompt-submit recall
     prompt_min_length: int = 10  # skip recall for prompts shorter than this
