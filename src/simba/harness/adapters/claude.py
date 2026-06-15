@@ -27,6 +27,10 @@ NATIVE_TO_CANONICAL = {
 
 def render(event: str, result: CanonicalResult) -> str:
     """Render ``result`` for Claude/Codex ``event`` as a JSON string."""
+    # A block decision short-circuits event-specific rendering. v2 (tool gating)
+    # may refine this to a per-event deny shape; for now the generic block envelope.
+    if result.block_reason:
+        return simba.hooks._io.block(result.block_reason)
     if event in ("SessionStart", "UserPromptSubmit"):
         return simba.hooks._io.context(event, result.additional_context)
     if event == "PreCompact":
