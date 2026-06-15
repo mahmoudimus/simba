@@ -19,6 +19,7 @@ import starlette.middleware.base
 import starlette.requests
 import starlette.responses
 
+import simba.harness.core
 import simba.memory.dimensions
 import simba.memory.fts
 import simba.memory.hybrid
@@ -740,3 +741,23 @@ async def delete_memory(memory_id: str, request: fastapi.Request) -> dict:
             logger.debug("[delete] fts mirror delete failed", exc_info=True)
 
     return {"status": "deleted", "id": memory_id}
+
+
+@router.post("/hook/{event}")
+def run_hook(event: str, payload: dict) -> dict:
+    """Run a canonical hook and return its CanonicalResult as JSON.
+
+    Sync handler: dispatch() may make a blocking loopback to /recall, so FastAPI
+    offloads it to a threadpool instead of blocking the event loop.
+    """
+    try:
+        result = simba.harness.core.dispatch(event, payload)
+    except KeyError:
+        raise fastapi.HTTPException(
+            status_code=404, detail=f"unknown hook event: {event}"
+        ) from None
+    return {
+        "additional_context": result.additional_context,
+        "suppress_output": result.suppress_output,
+        "block_reason": result.block_reason,
+    }
