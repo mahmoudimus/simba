@@ -114,7 +114,7 @@ def run(hook_input: dict) -> CanonicalResult:
             tags += " | \u2713 rules"
         combined += f"\n[simba: {tags}]"
         print(f"[simba: {tags}]", file=sys.stderr)
-    return CanonicalResult(additional_context=combined)
+    return CanonicalResult(additional_context=combined, memory_count=len(memories))
 
 
 def main(hook_input: dict) -> str:

@@ -30,6 +30,10 @@ class CanonicalResult:
 
     additional_context: str = ""
     suppress_output: bool = False
+    # Count of memories recalled/injected this turn (0 when none). Surfaced to
+    # callers (e.g. the pi bridge prints "[simba: N memories injected]") so recall
+    # is visible, not magic.
+    memory_count: int = 0
     # v2 fields (defined for forward-compat; unused in MVP):
     block_reason: str | None = None
     transform: dict | None = None

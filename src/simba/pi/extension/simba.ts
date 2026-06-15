@@ -15,9 +15,15 @@ import type {
 
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
 
+/** Surface what simba did to stderr — visible even in `pi -p`. No magic. */
+function note(msg: string): void {
+  process.stderr.write(`[simba: ${msg}]\n`);
+}
+
 interface Canonical {
   additional_context?: string;
   suppress_output?: boolean;
+  memory_count?: number;
   block_reason?: string | null;
 }
 
@@ -74,16 +80,20 @@ async function callSimba(event: string, payload: Record<string, unknown>): Promi
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_e, ctx: ExtensionContext) => {
     const r = await callSimba("session_start", { cwd: ctx.cwd });
+    note(r.additional_context ? "session ready — memory active" : "daemon unavailable");
     if (r.additional_context && ctx.hasUI) ctx.ui.notify(r.additional_context, "info");
   });
 
   pi.on("before_agent_start", async (e: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     const r = await callSimba("prompt_submit", { prompt: e.prompt, cwd: ctx.cwd });
     if (r.additional_context) {
+      const n = r.memory_count ?? 0;
+      note(n > 0 ? `${n} memories injected` : "project rules injected");
       return {
         message: { customType: "simba-memory", content: r.additional_context, display: true },
       };
     }
+    note("nothing to inject");
   });
 
   pi.on("agent_end", async (e: AgentEndEvent, ctx: ExtensionContext) => {
@@ -92,6 +102,7 @@ export default function (pi: ExtensionAPI) {
       cwd: ctx.cwd,
       transcript_path: ctx.sessionManager.getSessionFile() ?? "",
     });
+    note("session captured");
   });
 
   pi.on("session_before_compact", async (_e, ctx: ExtensionContext) => {
@@ -100,5 +111,6 @@ export default function (pi: ExtensionAPI) {
       transcript_path: ctx.sessionManager.getSessionFile() ?? "",
       session_id: ctx.sessionManager.getSessionId(),
     });
+    note("transcript exported");
   });
 }
