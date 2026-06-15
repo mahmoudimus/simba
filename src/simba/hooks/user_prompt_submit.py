@@ -9,14 +9,11 @@ from __future__ import annotations
 import contextlib
 import pathlib
 import sys
-from typing import TYPE_CHECKING
 
 import simba.guardian.extract_core
 import simba.hooks._memory_client
 import simba.search.rag_context
-
-if TYPE_CHECKING:
-    from simba.harness.core import CanonicalResult
+from simba.harness.core import CanonicalResult
 
 
 def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
@@ -62,8 +59,6 @@ def _cfg():
 
 def run(hook_input: dict) -> CanonicalResult:
     """Run the UserPromptSubmit hook pipeline. Returns a CanonicalResult."""
-    from simba.harness.core import CanonicalResult
-
     prompt = hook_input.get("prompt", "")
     cwd_str = hook_input.get("cwd")
     # Path derives from payload only \u2014 dispatch may run in the daemon process

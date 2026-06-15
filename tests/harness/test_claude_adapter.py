@@ -53,6 +53,11 @@ def test_render_pre_compact_suppress():
     assert json.loads(out) == {"suppressOutput": True}
 
 
+def test_render_block_reason_short_circuits():
+    out = claude.render("PreToolUse", CanonicalResult(block_reason="nope"))
+    assert json.loads(out) == {"decision": "block", "reason": "nope"}
+
+
 def test_native_to_canonical_map():
     assert claude.NATIVE_TO_CANONICAL["UserPromptSubmit"] == "prompt_submit"
     assert claude.NATIVE_TO_CANONICAL["PreCompact"] == "pre_compact"
