@@ -17,7 +17,24 @@ def test_dispatch_unknown_event_raises():
         core.dispatch("not_an_event", {})
 
 
-def test_dispatch_prompt_submit_returns_canonical(monkeypatch):
+def test_dispatch_prompt_submit_returns_canonical():
     # No daemon needed: recall failure returns empty, run() still produces a result.
     r = core.dispatch("prompt_submit", {"prompt": "", "cwd": "/tmp"})
+    assert isinstance(r, core.CanonicalResult)
+    assert r.suppress_output is False
+    assert r.block_reason is None
+
+
+def test_dispatch_session_start_returns_canonical():
+    r = core.dispatch("session_start", {"cwd": "/tmp"})
+    assert isinstance(r, core.CanonicalResult)
+
+
+def test_dispatch_stop_returns_canonical():
+    r = core.dispatch("stop", {"cwd": "/tmp"})
+    assert isinstance(r, core.CanonicalResult)
+
+
+def test_dispatch_pre_compact_returns_canonical():
+    r = core.dispatch("pre_compact", {})
     assert isinstance(r, core.CanonicalResult)
