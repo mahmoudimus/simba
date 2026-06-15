@@ -6,8 +6,7 @@ import simba.pi  # registers the "pi" section
 
 def test_pi_config_defaults():
     cfg = simba.config.load("pi")
-    assert cfg.enabled is True
-    assert cfg.extension_path.endswith("simba.ts")
+    assert cfg.agent_home.endswith(".pi/agent")
 
 
 def test_pi_section_is_registered():
