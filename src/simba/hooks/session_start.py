@@ -9,7 +9,6 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import time
-from typing import TYPE_CHECKING
 
 import httpx
 
@@ -18,9 +17,7 @@ import simba.db
 import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
-
-if TYPE_CHECKING:
-    from simba.harness.core import CanonicalResult
+from simba.harness.core import CanonicalResult
 
 
 def _hooks_cfg():
@@ -126,8 +123,6 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
 
 def run(hook_input: dict) -> CanonicalResult:
     """Run the SessionStart hook pipeline. Returns a CanonicalResult."""
-    from simba.harness.core import CanonicalResult
-
     cwd_str = hook_input.get("cwd")
     # Path derives from payload only — never the process cwd (dispatch may run
     # in the daemon). gather_context / get_db_path accept None and handle it.

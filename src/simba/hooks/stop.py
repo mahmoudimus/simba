@@ -9,21 +9,16 @@ from __future__ import annotations
 import contextlib
 import json
 import pathlib
-from typing import TYPE_CHECKING
 
 import simba.config
 import simba.guardian.check_signal
 import simba.memory.continuous
 import simba.tailor.hook
-
-if TYPE_CHECKING:
-    from simba.harness.core import CanonicalResult
+from simba.harness.core import CanonicalResult
 
 
 def run(hook_input: dict) -> CanonicalResult:
     """Run the Stop hook pipeline. Returns a CanonicalResult."""
-    from simba.harness.core import CanonicalResult
-
     cwd_str = hook_input.get("cwd")
     cwd = pathlib.Path(cwd_str) if cwd_str else None
 
