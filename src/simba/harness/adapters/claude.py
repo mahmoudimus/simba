@@ -1,0 +1,40 @@
+"""Render a CanonicalResult to the Claude Code / Codex stdout envelope.
+
+Claude and Codex share envelope shapes for the four MVP events, so one adapter
+serves both.  Output is byte-identical to the pre-refactor hooks.<event>.main().
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+
+import simba.hooks._io
+
+if TYPE_CHECKING:
+    from simba.harness.core import CanonicalResult
+
+# Claude/Codex native event name -> canonical event
+NATIVE_TO_CANONICAL = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "prompt_submit",
+    "Stop": "stop",
+    "PreCompact": "pre_compact",
+    # v2: "PreToolUse": "pre_tool", "PostToolUse": "post_tool",
+    #     "PermissionRequest": "permission_request",
+}
+
+
+def render(event: str, result: CanonicalResult) -> str:
+    """Render ``result`` for Claude/Codex ``event`` as a JSON string."""
+    if event in ("SessionStart", "UserPromptSubmit"):
+        return simba.hooks._io.context(event, result.additional_context)
+    if event == "PreCompact":
+        if result.suppress_output:
+            return json.dumps({"suppressOutput": True})
+        return simba.hooks._io.context("PreCompact", result.additional_context)
+    if event == "Stop":
+        if result.additional_context:
+            return json.dumps({"stopReason": result.additional_context})
+        return json.dumps({})
+    return simba.hooks._io.context(event, result.additional_context)
