@@ -68,8 +68,12 @@ def run(hook_input: dict) -> CanonicalResult:
     cfg = _cfg()
     parts: list[str] = []
 
-    # 1. Guardian: extract CORE blocks from CLAUDE.md
-    core_blocks = simba.guardian.extract_core.main(cwd=cwd)
+    # 1. Guardian: extract CORE blocks from CLAUDE.md.
+    #    Only when the payload carried a cwd — extract_core.main(cwd=None) falls
+    #    back to Path.cwd(), which inside the daemon is the wrong project.
+    core_blocks = ""
+    if cwd is not None:
+        core_blocks = simba.guardian.extract_core.main(cwd=cwd)
     if core_blocks:
         parts.append(core_blocks)
 

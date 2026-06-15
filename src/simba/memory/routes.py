@@ -14,6 +14,7 @@ import typing
 import uuid
 
 import fastapi
+import fastapi.concurrency
 import pydantic
 import starlette.middleware.base
 import starlette.requests
@@ -153,16 +154,6 @@ class RecallRequest(pydantic.BaseModel):
     max_results: int | None = pydantic.Field(default=None, alias="maxResults")
     project_path: str | None = pydantic.Field(default=None, alias="projectPath")
     filters: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
-
-
-class HookPayload(pydantic.BaseModel):
-    """Opaque per-harness hook payload.
-
-    Shape varies by event (cwd, prompt, response, transcript_path, …).
-    """
-
-    model_config = pydantic.ConfigDict(extra="allow")
-    cwd: str = ""
 
 
 @router.post("/store")
@@ -734,14 +725,27 @@ async def delete_memory(memory_id: str, request: fastapi.Request) -> dict:
 
 
 @router.post("/hook/{event}")
-def run_hook(event: str, body: HookPayload) -> dict:
+async def run_hook(event: str, request: fastapi.Request) -> dict:
     """Run a canonical hook and return its CanonicalResult as JSON.
 
-    Sync handler: dispatch() may make a blocking loopback to /recall, so FastAPI
-    offloads it to a threadpool instead of blocking the event loop.
+    Fail-open like the CLI: a null/array/malformed body degrades to ``{}`` (the
+    CLI path catches ``json.JSONDecodeError`` and continues), never a 422. The
+    handler is async only to await the body; dispatch() itself is blocking (it
+    may loopback to /recall), so it runs in a threadpool off the event loop.
     """
+    raw = await request.body()
+    payload: dict = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except (json.JSONDecodeError, ValueError):
+            payload = {}
     try:
-        result = simba.harness.core.dispatch(event, body.model_dump())
+        result = await fastapi.concurrency.run_in_threadpool(
+            simba.harness.core.dispatch, event, payload
+        )
     except KeyError:
         raise fastapi.HTTPException(
             status_code=404, detail=f"unknown hook event: {event}"
