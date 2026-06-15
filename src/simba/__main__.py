@@ -1001,6 +1001,25 @@ def _cmd_hook(args: list[str]) -> int:
         return 1
 
     event = args[0]
+
+    import simba.harness.adapters.claude as claude
+
+    # Canonicalized (MVP) events: daemon-first, inline fallback, render to envelope.
+    canonical = claude.NATIVE_TO_CANONICAL.get(event)
+    if canonical is not None:
+        payload: dict = {}
+        try:
+            raw = sys.stdin.read()
+            if raw:
+                payload = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        result = _dispatch_canonical(canonical, payload)
+        print(claude.render(event, result))
+        return 0
+
+    # Legacy path for not-yet-canonicalized events
+    # (PreToolUse/PostToolUse/PermissionRequest).
     module_name = _HOOK_EVENTS.get(event)
     if module_name is None:
         print(f"Unknown hook event: {event}", file=sys.stderr)
