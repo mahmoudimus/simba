@@ -155,6 +155,16 @@ class RecallRequest(pydantic.BaseModel):
     filters: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
 
 
+class HookPayload(pydantic.BaseModel):
+    """Opaque per-harness hook payload.
+
+    Shape varies by event (cwd, prompt, response, transcript_path, …).
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+    cwd: str = ""
+
+
 @router.post("/store")
 async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
 
@@ -724,14 +734,14 @@ async def delete_memory(memory_id: str, request: fastapi.Request) -> dict:
 
 
 @router.post("/hook/{event}")
-def run_hook(event: str, payload: dict) -> dict:
+def run_hook(event: str, body: HookPayload) -> dict:
     """Run a canonical hook and return its CanonicalResult as JSON.
 
     Sync handler: dispatch() may make a blocking loopback to /recall, so FastAPI
     offloads it to a threadpool instead of blocking the event loop.
     """
     try:
-        result = simba.harness.core.dispatch(event, payload)
+        result = simba.harness.core.dispatch(event, body.model_dump())
     except KeyError:
         raise fastapi.HTTPException(
             status_code=404, detail=f"unknown hook event: {event}"
@@ -740,4 +750,5 @@ def run_hook(event: str, payload: dict) -> dict:
         "additional_context": result.additional_context,
         "suppress_output": result.suppress_output,
         "block_reason": result.block_reason,
+        "transform": result.transform,  # None today; v2 tool gating
     }
