@@ -36,6 +36,8 @@ Usage:
     simba episodes <cmd>   Episodic consolidation control (complete)
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
+    simba hook-canonical <event>
+                           Run a canonical hook, print CanonicalResult JSON
 """
 
 from __future__ import annotations
@@ -46,7 +48,10 @@ import os
 import pathlib
 import re
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import simba.harness.core
 
 _HOOK_EVENTS = {
     "SessionStart": "simba.hooks.session_start",
@@ -905,6 +910,85 @@ def _cmd_codex_automation(args: list[str]) -> int:
         'simba codex-extract command in the result." '
         'rrule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" '
         f'cwds="{cwd}" status="ACTIVE"}}'
+    )
+    return 0
+
+
+def _hook_via_daemon(
+    event: str, payload: dict
+) -> simba.harness.core.CanonicalResult | None:
+    """Try the daemon's /hook/{event}; return None on any failure.
+
+    Callers fall back to running the hook inline when this returns None.
+    """
+    import httpx
+
+    import simba.harness.core
+    import simba.hooks._memory_client
+
+    url = f"{simba.hooks._memory_client.daemon_url()}/hook/{event}"
+    try:
+        resp = httpx.post(url, json=payload, timeout=3.0)
+        if resp.status_code == 200:
+            b = resp.json()
+            return simba.harness.core.CanonicalResult(
+                additional_context=b.get("additional_context", ""),
+                suppress_output=b.get("suppress_output", False),
+                block_reason=b.get("block_reason"),
+            )
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
+
+
+def _dispatch_canonical(
+    event: str, payload: dict
+) -> simba.harness.core.CanonicalResult:
+    """Daemon-first, inline fallback. Honors hooks.dispatch_via_daemon.
+
+    Injects the process cwd into ``payload`` when it's absent so the inline and
+    daemon paths are equivalent: this CLI runs in the agent's project directory,
+    so its cwd is the correct one and the daemon never falls back to its own.
+    """
+    import simba.config
+    import simba.harness.core
+    import simba.hooks.config
+
+    _ = simba.hooks.config  # ensure the "hooks" section is registered
+    payload.setdefault("cwd", os.getcwd())
+    if simba.config.load("hooks").dispatch_via_daemon:
+        result = _hook_via_daemon(event, payload)
+        if result is not None:
+            return result
+    return simba.harness.core.dispatch(event, payload)
+
+
+def _cmd_hook_canonical(args: list[str]) -> int:
+    """Run a canonical hook and print its CanonicalResult as JSON."""
+    if not args:
+        print("Usage: simba hook-canonical <canonical_event>", file=sys.stderr)
+        return 1
+    event = args[0]
+    payload: dict = {}
+    try:
+        raw = sys.stdin.read()
+        if raw:
+            payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    try:
+        result = _dispatch_canonical(event, payload)
+    except KeyError:
+        print(f"Unknown canonical event: {event}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {
+                "additional_context": result.additional_context,
+                "suppress_output": result.suppress_output,
+                "block_reason": result.block_reason,
+            }
+        )
     )
     return 0
 
@@ -2896,6 +2980,8 @@ def main() -> None:
         sys.exit(_cmd_codex_automation(rest))
     elif cmd == "hook":
         sys.exit(_cmd_hook(rest))
+    elif cmd == "hook-canonical":
+        sys.exit(_cmd_hook_canonical(rest))
     elif cmd == "memory":
         sys.exit(_cmd_memory(rest))
     elif cmd == "server":
