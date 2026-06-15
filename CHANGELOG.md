@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-15
+
+### Added
+
+- **pi coding-agent runtime support** (#74). Adds **pi**
+  (`@earendil-works/pi-coding-agent`) as a third runtime alongside Claude Code and
+  Codex. A harness-agnostic hook core (`simba.harness.dispatch` → `CanonicalResult`)
+  is exposed two ways — inline via the CLI (`simba hook` / new `simba hook-canonical`)
+  and over HTTP via a new daemon `POST /hook/{event}` endpoint — and a thin bundled
+  `simba.ts` extension bridges pi's lifecycle events (`session_start`,
+  `before_agent_start`, `agent_end`, `session_before_compact`) to it. Install with
+  `simba pi-install`; path driven by `pi.agent_home`. Claude/Codex hook output stays
+  byte-identical (characterization-pinned); `hooks.dispatch_via_daemon` (default on)
+  routes hooks through the warm daemon with inline fallback. MVP = the memory loop
+  (recall-on-prompt, capture-on-stop, daemon health, transcript export); tool gating
+  is deferred to a later release.
+- **No-magic recall visibility**: the pi bridge prints `[simba: N memories injected]`
+  (plus session-ready / captured / exported notes) to stderr — visible even in
+  `pi -p`. `CanonicalResult.memory_count` carries the recalled count through the
+  `/hook` endpoint and `simba hook-canonical`.
+
 ## [0.7.1] — 2026-06-13
 
 ### Fixed
