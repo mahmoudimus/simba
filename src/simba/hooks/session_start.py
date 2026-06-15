@@ -9,15 +9,18 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import time
+from typing import TYPE_CHECKING
 
 import httpx
 
 import simba.config
 import simba.db
-import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.project_memory
 import simba.tailor.session_start
+
+if TYPE_CHECKING:
+    from simba.harness.core import CanonicalResult
 
 
 def _hooks_cfg():
@@ -121,11 +124,14 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
     )
 
 
-def main(hook_input: dict) -> str:
-    """Run the SessionStart hook pipeline. Returns JSON output string."""
+def run(hook_input: dict) -> CanonicalResult:
+    """Run the SessionStart hook pipeline. Returns a CanonicalResult."""
+    from simba.harness.core import CanonicalResult
 
     cwd_str = hook_input.get("cwd")
-    cwd = pathlib.Path(cwd_str) if cwd_str else pathlib.Path.cwd()
+    # Path derives from payload only — never the process cwd (dispatch may run
+    # in the daemon). gather_context / get_db_path accept None and handle it.
+    cwd = pathlib.Path(cwd_str) if cwd_str else None
     session_id = hook_input.get("session_id", "")
 
     parts: list[str] = []
@@ -180,4 +186,11 @@ def main(hook_input: dict) -> str:
             parts.append(extraction)
 
     combined = "\n\n".join(parts)
-    return simba.hooks._io.context("SessionStart", combined)
+    return CanonicalResult(additional_context=combined)
+
+
+def main(hook_input: dict) -> str:
+    """Run the SessionStart hook and render the Claude/Codex envelope."""
+    import simba.harness.adapters.claude as claude
+
+    return claude.render("SessionStart", run(hook_input))

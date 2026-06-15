@@ -9,11 +9,14 @@ from __future__ import annotations
 import contextlib
 import pathlib
 import sys
+from typing import TYPE_CHECKING
 
 import simba.guardian.extract_core
-import simba.hooks._io
 import simba.hooks._memory_client
 import simba.search.rag_context
+
+if TYPE_CHECKING:
+    from simba.harness.core import CanonicalResult
 
 
 def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
@@ -57,12 +60,15 @@ def _cfg():
     return simba.config.load("hooks")
 
 
-def main(hook_input: dict) -> str:
-    """Run the UserPromptSubmit hook pipeline. Returns JSON output string."""
+def run(hook_input: dict) -> CanonicalResult:
+    """Run the UserPromptSubmit hook pipeline. Returns a CanonicalResult."""
+    from simba.harness.core import CanonicalResult
 
     prompt = hook_input.get("prompt", "")
     cwd_str = hook_input.get("cwd")
-    cwd = pathlib.Path(cwd_str) if cwd_str else pathlib.Path.cwd()
+    # Path derives from payload only \u2014 dispatch may run in the daemon process
+    # whose own cwd differs from the agent's.
+    cwd = pathlib.Path(cwd_str) if cwd_str else None
 
     cfg = _cfg()
     parts: list[str] = []
@@ -86,7 +92,7 @@ def main(hook_input: dict) -> str:
             parts.append(formatted)
 
     # 3. Search: project memory + QMD context
-    if prompt and len(prompt) >= cfg.prompt_min_length:
+    if cwd is not None and prompt and len(prompt) >= cfg.prompt_min_length:
         try:
             search_ctx = simba.search.rag_context.build_context(prompt, cwd)
             if search_ctx:
@@ -109,4 +115,11 @@ def main(hook_input: dict) -> str:
             tags += " | \u2713 rules"
         combined += f"\n[simba: {tags}]"
         print(f"[simba: {tags}]", file=sys.stderr)
-    return simba.hooks._io.context("UserPromptSubmit", combined)
+    return CanonicalResult(additional_context=combined)
+
+
+def main(hook_input: dict) -> str:
+    """Run the UserPromptSubmit hook and render the Claude/Codex envelope."""
+    import simba.harness.adapters.claude as claude
+
+    return claude.render("UserPromptSubmit", run(hook_input))
