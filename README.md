@@ -154,7 +154,7 @@ Ask Codex to use:
 
 ## pi Support
 
-Simba runs under [**pi**](https://github.com/earendil-works/pi) (`@mariozechner/pi-coding-agent`) via a thin bundled bridge extension — the same memory loop, no logic duplicated in TypeScript.
+Simba runs under [**pi**](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`) via a thin bundled bridge extension — the same memory loop, no logic duplicated in TypeScript.
 
 A small `simba.ts` extension subscribes to pi's lifecycle events and forwards each
 to simba over the daemon's `POST /hook/{event}` endpoint (falling back to the

@@ -11,7 +11,7 @@ shipping a per-harness manifest that invokes `simba hook <Event>` as a
 subprocess. Each invocation reads a JSON payload on stdin and writes a
 harness-specific envelope on stdout (`hooks/_io.py`).
 
-We want simba to support a third harness: **pi** (`@mariozechner/pi-coding-agent`,
+We want simba to support a third harness: **pi** (`@earendil-works/pi-coding-agent`,
 v0.78.0), an AI coding assistant CLI the user runs daily (`~/.pi/agent/`,
 deepseek-v4-flash). pi extends differently from the other two: extensions are
 **in-process TypeScript modules** that subscribe to an `EventBus`, not
@@ -211,5 +211,5 @@ Pure-Python tests carry the weight:
   rendering out of `_io.py`/`main()` into adapters. The byte-identical
   regression tests are the gate; this lands first, before any pi code.
 - **pi version drift.** The extension contract is pinned to pi 0.78.0
-  (`@mariozechner/pi-coding-agent` 0.51.3 in the verified install). Event names
+  (`@earendil-works/pi-coding-agent` 0.51.3 in the verified install). Event names
   could change; the golden contract test will catch breakage at upgrade time.
