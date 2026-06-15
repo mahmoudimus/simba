@@ -8,7 +8,7 @@
 [![Runtimes: Claude Code + Codex + pi](https://img.shields.io/badge/runtimes-Claude%20Code%20%2B%20Codex%20%2B%20pi-8a2be2.svg)](#codex-support)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A unified memory + reasoning plugin for **Claude Code**, **Codex**, and **[pi](https://github.com/mariozechner/pi)**. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills across runtimes.
+A unified memory + reasoning plugin for **Claude Code**, **Codex**, and **[pi](https://github.com/mariozechner/pi)** — the local-first coding agent. It combines semantic memory, CLAUDE.md rule enforcement, neuro-symbolic logic (Z3 + Datalog), project-aware search, and **RLM lossless transcript recall** into a single pure-Python package — with full hook integration and native skills across all three runtimes.
 
 ## Quick Start
 
