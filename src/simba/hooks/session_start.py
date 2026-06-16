@@ -15,6 +15,7 @@ import httpx
 import simba.config
 import simba.db
 import simba.hooks._memory_client
+import simba.memory.config
 import simba.search.project_memory
 import simba.tailor.session_start
 from simba.harness.core import CanonicalResult
@@ -80,6 +81,7 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
     export_session = metadata.get("session_id", session_id)
     cwd = metadata.get("project_path", cwd)  # the resolved (matching) project
     url = simba.hooks._memory_client.daemon_url()
+    maxlen = simba.memory.config.resolve_max_content_length(pathlib.Path(cwd))
 
     return (
         "\n<learning-extraction-required>\n"
@@ -109,7 +111,7 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
         "- Confidence 0.95+ for explicitly confirmed, 0.85+ for strong evidence\n"
         "- Skip generic programming knowledge Claude already knows\n"
         "- Focus on user-specific infrastructure, preferences, workflows\n"
-        "- Keep content under 200 characters, use context for details\n"
+        f"- Keep content under {maxlen} characters, use context for details\n"
         "- Preserve proper nouns, file paths, and identifiers verbatim — "
         "never replace them with generic words\n"
         "- Preserve numeric precision: keep exact values exact; never weaken "

@@ -243,7 +243,9 @@ def _store_failure_rule(failure: dict, cwd: str) -> None:
     if _check_rule_dedup(error_hash):
         return
 
-    content = f"{tool}: {error}"[:200]
+    from simba.memory.config import resolve_max_content_length
+
+    content = f"{tool}: {error}"[: resolve_max_content_length()]
     context_data = {
         "tool": tool,
         "pattern": normalized[:200],
