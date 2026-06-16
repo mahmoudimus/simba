@@ -219,6 +219,14 @@ class MemoryConfig:
     # LLM — it serves the fast order and reranks off the hot path, caching the
     # result by (query, candidate-set) for the next recurrence. Cache capacity:
     rerank_cache_size: int = 256
+    # Persistent query-embedding cache (daemon). Identical recall queries hit a
+    # sha1(model|prefix|text) sqlite lookup instead of re-running the GGUF embed
+    # under the process-global llama lock — a pure speedup (same vector), default
+    # ON. Big win when a query repeats (e.g. the conflict detector firing the same
+    # pairwise check N times) and across the frequent daemon restarts. Path empty
+    # -> ``<db dir>/embed_cache.db``.
+    embed_cache_enabled: bool = True
+    embed_cache_path: str = ""
     # Decay / forgetting + feedback-aware ranking (Phase 6). Mutable per-memory
     # ranking signals live in the sqlite ``memory_usage`` table; these tunables
     # drive how strength decays over time, how access reinforces it, and how

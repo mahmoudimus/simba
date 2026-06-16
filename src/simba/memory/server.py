@@ -22,6 +22,7 @@ import uvicorn
 
 import simba.memory.config
 import simba.memory.diagnostics
+import simba.memory.embedding_cache
 import simba.memory.embeddings
 import simba.memory.fts
 import simba.memory.hyde_cache
@@ -104,6 +105,7 @@ def create_app(
     app.state.fts_path = None
     app.state.embed = None
     app.state.embed_query = None
+    app.state.embed_cache = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
         reservoir_size=config.diagnostics_reservoir_size,
@@ -125,6 +127,46 @@ def _resolve_db_path(config: simba.memory.config.MemoryConfig) -> pathlib.Path:
     if config.db_path:
         return pathlib.Path(config.db_path)
     return pathlib.Path.cwd() / _DEFAULT_DB_DIR
+
+
+def _embed_cache_model_id(config: simba.memory.config.MemoryConfig) -> str:
+    """Stable model identifier for the embed-cache key (a model change -> new key)."""
+    return (
+        getattr(config, "embed_url", "")
+        or f"{getattr(config, 'model_repo', '')}/{getattr(config, 'model_file', '')}"
+        or "default"
+    )
+
+
+def _embed_cache_path(config: simba.memory.config.MemoryConfig) -> pathlib.Path:
+    """Persistent query-embed cache path (or ``<db dir>/embed_cache.db``)."""
+    if config.embed_cache_path:
+        return pathlib.Path(config.embed_cache_path)
+    return _resolve_db_path(config) / "embed_cache.db"
+
+
+def _cached_query_embedder(
+    service: simba.memory.embeddings.EmbeddingService,
+    cache: simba.memory.embedding_cache.EmbeddingCache,
+    model_id: str,
+):
+    """Async query embed that hits the persistent cache first, dedups identical queries.
+
+    Cache get/put run on the event-loop thread (embed_query is only awaited from the
+    async recall handler), so the sqlite connection stays single-threaded.
+    """
+
+    async def embed_query(text: str) -> list[float]:
+        hit = cache.get(model_id, "search_query", text)
+        if hit is not None:
+            return hit
+        vector = await service.embed(
+            text, task=simba.memory.embeddings.TaskType.QUERY
+        )
+        cache.put(model_id, "search_query", text, vector)
+        return vector
+
+    return embed_query
 
 
 async def init_database(
@@ -226,9 +268,17 @@ async def init_embeddings(
     await service.start()
     logger.info("[embed] Ready")
     app.state.embed = service.embed
-    app.state.embed_query = lambda text: service.embed(
-        text, task=simba.memory.embeddings.TaskType.QUERY
-    )
+    if config.embed_cache_enabled:
+        cache = simba.memory.embedding_cache.EmbeddingCache(_embed_cache_path(config))
+        app.state.embed_cache = cache
+        app.state.embed_query = _cached_query_embedder(
+            service, cache, _embed_cache_model_id(config)
+        )
+        logger.info("[embed] query cache: %s", _embed_cache_path(config))
+    else:
+        app.state.embed_query = lambda text: service.embed(
+            text, task=simba.memory.embeddings.TaskType.QUERY
+        )
     app.state._embedding_service = service
     return service
 
@@ -238,6 +288,9 @@ async def shutdown_embeddings(app: fastapi.FastAPI) -> None:
     service = getattr(app.state, "_embedding_service", None)
     if service:
         await service.stop()
+    cache = getattr(app.state, "embed_cache", None)
+    if cache is not None:
+        cache.close()
 
 
 def main() -> None:
