@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-16
+
 ### Added
 
 - **pi pitfall/doctrine tool gate** (spec 24 v2.1). pi's tool gate can now block
