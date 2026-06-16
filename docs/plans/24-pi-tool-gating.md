@@ -107,18 +107,20 @@ escalated_block: str | None = None
 - `simba.ts`: `pi.on("tool_call", async (e, ctx) => {…})`:
   - Map pi tool name → Claude convention (`bash`→`Bash`, `edit`→`Edit`,
     `write`→`Write`, `read`→`Read`, …) and `e.input` → `tool_input`.
-  - POST `/hook/pre_tool` with `{tool_name, tool_input, cwd}` (gated by
-    `pi.tool_gate_enabled`).
+  - POST `/hook/pre_tool` with `{tool_name, tool_input, cwd}`.
   - Apply: `transform` → mutate `e.input.command = transform.command`, note
     `[simba: rewrote → …]`, allow; `block_reason` or `escalated_block` →
     `return {block: true, reason}`, note `[simba: blocked — …]`; else allow.
   - Extend the TS `Canonical` interface with `transform` + `escalated_block`.
-- `pi.tool_gate_enabled: bool = True` config (extension reads it via the daemon
-  result — or simpler, default-on client-side; keep the daemon authoritative).
+- No new pi config: the extension always wires `tool_call` and the **daemon is
+  authoritative** — gating reuses the existing `hooks.redirect_enabled` /
+  `hooks.rule_check_enabled` / `permission_deny_similarity`. (Decided during the
+  build: a separate `pi.tool_gate_enabled` would be redundant and the TS extension
+  can't cheaply read daemon config per-call.)
 
-### Phase D — config + docs
-- New: `pi.tool_gate_enabled` (default on). No new daemon gating config (reuses
-  `redirect_*` and `permission_deny_similarity`).
+### Phase D — docs
+- No new daemon gating config (reuses `redirect_*` and
+  `permission_deny_similarity`).
 - README pi section + CHANGELOG (v0.9.0 — new pi capability) + this spec's index row.
 
 ## Testing
