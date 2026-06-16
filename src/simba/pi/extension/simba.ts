@@ -51,20 +51,44 @@ function claudeToolName(piName: string): string {
   return PI_TOOL_TO_CLAUDE[piName] ?? piName.charAt(0).toUpperCase() + piName.slice(1);
 }
 
+// Flatten an assistant message's content to text. Handles a plain string and the
+// structured `{type:"text",text}[]` shape; ignores tool-call / non-text blocks.
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((p): p is { type: "text"; text: string } =>
+        Boolean(p && typeof p === "object" && (p as { type?: string }).type === "text"))
+      .map((p) => p.text)
+      .join("\n");
+  }
+  return "";
+}
+
 function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role !== "assistant") continue;
-    const c = m.content;
-    if (typeof c === "string") return c;
-    if (Array.isArray(c)) {
-      return c
-        .filter((p): p is { type: "text"; text: string } =>
-          Boolean(p && typeof p === "object" && (p as { type?: string }).type === "text"))
-        .map((p) => p.text)
-        .join("\n");
-    }
+    return messageText(m.content);
+  }
+  return "";
+}
+
+// The agent's most recent reasoning, pulled from the live session branch (pi has
+// no transcript file at tool_call time). The pitfall/doctrine gate keys on this.
+// Defensive: getBranch() returns a SessionEntry union; only message entries carry
+// `.message`, so narrow via `as any` and skip non-message entries silently.
+function lastAssistantReasoning(sessionManager: { getBranch(): unknown[] }): string {
+  let branch: unknown[];
+  try {
+    branch = sessionManager.getBranch();
+  } catch {
     return "";
+  }
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const msg = (branch[i] as { message?: { role?: string; content?: unknown } })?.message;
+    if (!msg || msg.role !== "assistant") continue;
+    return messageText(msg.content);
   }
   return "";
 }
@@ -132,7 +156,10 @@ export default function (pi: ExtensionAPI) {
         ? { command: (e.input as { command?: string }).command }
         : (e.input as Record<string, unknown>);
 
-    const r = await callSimba("pre_tool", { tool_name, tool_input, cwd: ctx.cwd });
+    // Pass the agent's last reasoning so the daemon's pitfall/doctrine gate can fire
+    // (it only reads this when pitfall_gate_enabled). Cheap, in-memory — always send.
+    const thinking = lastAssistantReasoning(ctx.sessionManager);
+    const r = await callSimba("pre_tool", { tool_name, tool_input, cwd: ctx.cwd, thinking });
 
     if (r.transform && r.transform.command && e.toolName === "bash") {
       // Silent rewrite — mutate the (mutable) bash input in place and allow.

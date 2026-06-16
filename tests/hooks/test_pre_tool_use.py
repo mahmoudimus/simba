@@ -337,6 +337,135 @@ class TestPitfallGate:
         assert simba.hooks.pre_tool_use._check_pitfall("anything", None) is None
 
 
+class TestPitfallGatePayloadThinking:
+    """The v2.1 pi path: ``thinking`` arrives in the payload (no transcript file).
+
+    A fired pitfall must escalate to ``CanonicalResult.escalated_block`` (so pi's
+    block-only tool gate enforces it) while still appearing in ``additional_context``
+    (so Claude/Codex see it unchanged).
+    """
+
+    def _hit(self):
+        return [
+            {
+                "type": "PREFERENCE",
+                "content": "No assertion weakening",
+                "similarity": 0.82,
+            }
+        ]
+
+    def test_payload_thinking_escalates_pitfall(self, tmp_path, monkeypatch):
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
+        )
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=self._hit()
+            ),
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            # No transcript_path — only payload thinking, as pi sends it.
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git revert"},
+                    "thinking": "I'll revert and xfail the test",
+                }
+            )
+        assert result.escalated_block is not None
+        assert "pitfall-warning" in result.escalated_block
+        # The directive also rides in additional_context (Claude/Codex channel).
+        assert "pitfall-warning" in result.additional_context
+        assert result.escalated_block in result.additional_context
+
+    def test_no_thinking_no_escalation(self, tmp_path, monkeypatch):
+        # No transcript, no payload thinking → the gate never runs → no escalation.
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=self._hit()
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {"tool_name": "Bash", "tool_input": {"command": "git revert"}}
+            )
+        assert result.escalated_block is None
+        assert "pitfall-warning" not in result.additional_context
+
+    def test_disabled_gate_no_escalation_with_thinking(self, tmp_path, monkeypatch):
+        # Gate OFF (default) → payload thinking is ignored, no escalation.
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=False
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
+        )
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=self._hit()
+            ),
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git revert"},
+                    "thinking": "I'll revert and xfail the test",
+                }
+            )
+        assert result.escalated_block is None
+
+    def test_payload_thinking_preferred_over_transcript(self, tmp_path, monkeypatch):
+        # When both are present, the payload thinking wins (pi never sends both, but
+        # the precedence must be deterministic). Transcript holds a NON-violating
+        # thought; the payload holds the violating one → the gate fires on the payload.
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
+        )
+        seen = {}
+
+        def _check(thinking, cwd):
+            seen["thinking"] = thinking
+            return None  # don't matter; we only assert which text was passed
+
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_check_pitfall", _check)
+        transcript = _thinking_transcript(tmp_path, "harmless transcript thought")
+        with (
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git revert"},
+                    "transcript_path": str(transcript),
+                    "thinking": "payload violating thought",
+                }
+            )
+        assert seen["thinking"] == "payload violating thought"
+
+
 class TestCheckContextLow:
     def test_below_threshold_returns_none(self, tmp_path):
         transcript = tmp_path / "transcript.jsonl"
