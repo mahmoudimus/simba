@@ -423,6 +423,11 @@ def run(hook_input: dict) -> CanonicalResult:
     tool_input = hook_input.get("tool_input", {})
     transcript_path_str = hook_input.get("transcript_path", "")
     cwd_str = hook_input.get("cwd")
+    # pi has no transcript file but carries the agent's last reasoning in memory; it
+    # passes that as ``thinking``. Claude/Codex send a transcript and NO ``thinking``
+    # field, so ``payload_thinking == ""`` and the transcript path below is used
+    # exactly as before — byte-identical for them.
+    payload_thinking = hook_input.get("thinking", "")
 
     # --- Tool-call redirect (Bash): deny-with-correction or silent rewrite ---
     # Runs first so a redirected command never proceeds to recall/injection.
@@ -478,9 +483,15 @@ def run(hook_input: dict) -> CanonicalResult:
     run_pitfall = (
         getattr(_hcfg, "pitfall_gate_enabled", False) and tool_name in pitfall_tools
     )
-    if transcript_path_str and (tool_name in _ENABLED_TOOLS or run_pitfall):
-        transcript_path = pathlib.Path(transcript_path_str)
-        thinking = _extract_thinking(transcript_path)
+    if (transcript_path_str or payload_thinking) and (
+        tool_name in _ENABLED_TOOLS or run_pitfall
+    ):
+        # Prefer the payload's thinking (pi); else read the transcript (Claude/Codex).
+        thinking = payload_thinking or (
+            _extract_thinking(pathlib.Path(transcript_path_str))
+            if transcript_path_str
+            else ""
+        )
 
         # Pitfall/doctrine enforcement gate (own dedup so it fires once per turn and
         # does not collide with general recall's hash cache).
@@ -492,7 +503,11 @@ def run(hook_input: dict) -> CanonicalResult:
             directive = _check_pitfall(thinking, cwd_str)
             _save_hash(thinking, _PITFALL_DEDUP_CACHE)
             if directive:
-                parts.append(directive)
+                parts.append(directive)  # additional_context (Claude/Codex)
+                # pi-only hard block (claude adapter IGNORES escalated_block →
+                # byte-identical). Pitfall takes precedence over a strong-TOOL_RULE
+                # escalated_block: the doctrine you set is the stronger signal.
+                escalated_block = directive
 
         # General thinking-block recall (unchanged; only for the enabled tool set).
         if tool_name in _ENABLED_TOOLS and thinking and not _check_dedup(thinking):
