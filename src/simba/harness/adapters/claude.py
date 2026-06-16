@@ -20,13 +20,26 @@ NATIVE_TO_CANONICAL = {
     "UserPromptSubmit": "prompt_submit",
     "Stop": "stop",
     "PreCompact": "pre_compact",
-    # v2: "PreToolUse": "pre_tool", "PostToolUse": "post_tool",
+    "PreToolUse": "pre_tool",
+    # v2: "PostToolUse": "post_tool",
     #     "PermissionRequest": "permission_request",
 }
 
 
 def render(event: str, result: CanonicalResult) -> str:
     """Render ``result`` for Claude/Codex ``event`` as a JSON string."""
+    # PreToolUse has its own deny/rewrite shapes (permissionDecision), distinct
+    # from the generic top-level block envelope — so it is handled before the
+    # generic block_reason short-circuit. ``escalated_block`` is pi-only metadata
+    # (the warning is already in additional_context); render ignores it.
+    if event == "PreToolUse":
+        if result.transform:
+            return simba.hooks._io.pretool_rewrite(
+                result.transform["command"], result.transform.get("reason", "")
+            )
+        if result.block_reason:
+            return simba.hooks._io.pretool_deny(result.block_reason)
+        return simba.hooks._io.context("PreToolUse", result.additional_context)
     # A block decision short-circuits event-specific rendering. v2 (tool gating)
     # may refine this to a per-event deny shape; for now the generic block envelope.
     if result.block_reason:

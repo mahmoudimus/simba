@@ -47,6 +47,24 @@ def _build_query(tool_name: str, tool_input: dict) -> str:
     return ""
 
 
+def strong_rule_deny_message(memory: dict) -> str:
+    """Build the deny message for a strong TOOL_RULE match (shared with PreToolUse).
+
+    Uses the rule's ``content`` plus any ``correction`` in its context. Falls back
+    to a generic message when neither is present.
+    """
+    msg = (memory.get("content") or "")[:180]
+    correction = ""
+    with contextlib.suppress(json.JSONDecodeError, TypeError):
+        ctx = json.loads(memory.get("context") or "{}")
+        correction = ctx.get("correction", "") if isinstance(ctx, dict) else ""
+    if correction:
+        msg = f"{msg} (try: {correction})"
+    if not msg:
+        msg = "Blocked by TOOL_RULE memory."
+    return msg
+
+
 def main(hook_input: dict) -> str:
     cfg = _hooks_cfg()
     if not cfg.permission_check_enabled:
@@ -75,13 +93,4 @@ def main(hook_input: dict) -> str:
     if sim < cfg.permission_deny_similarity:
         return simba.hooks._io.empty("PermissionRequest")
 
-    msg = (top.get("content") or "")[:180]
-    correction = ""
-    with contextlib.suppress(json.JSONDecodeError, TypeError):
-        ctx = json.loads(top.get("context") or "{}")
-        correction = ctx.get("correction", "") if isinstance(ctx, dict) else ""
-    if correction:
-        msg = f"{msg} (try: {correction})"
-    if not msg:
-        msg = "Blocked by TOOL_RULE memory."
-    return simba.hooks._io.permission_decision("deny", msg)
+    return simba.hooks._io.permission_decision("deny", strong_rule_deny_message(top))

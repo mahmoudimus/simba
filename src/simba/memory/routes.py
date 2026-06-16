@@ -775,5 +775,6 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
         "suppress_output": result.suppress_output,
         "memory_count": result.memory_count,
         "block_reason": result.block_reason,
-        "transform": result.transform,  # None today; v2 tool gating
+        "transform": result.transform,  # redirect rewrite (v2 tool gating)
+        "escalated_block": result.escalated_block,  # pi-only strong TOOL_RULE block
     }

@@ -61,6 +61,21 @@ def test_hook_endpoint_transform_present_in_response():
     assert "transform" in resp.json()
 
 
+def test_hook_endpoint_pre_tool_returns_canonical_fields():
+    resp = _client().post(
+        "/hook/pre_tool",
+        json={"tool_name": "Read", "tool_input": {}, "cwd": "/tmp"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "transform" in body
+    assert "escalated_block" in body
+    # No redirect/rule fired → no block/transform/escalation.
+    assert body["block_reason"] is None
+    assert body["transform"] is None
+    assert body["escalated_block"] is None
+
+
 def test_stop_capture_uses_payload_cwd(tmp_path):
     # A transcript with an error so the tailor pipeline actually writes to disk;
     # the write must land under the payload cwd, never the daemon/process cwd.
