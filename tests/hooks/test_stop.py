@@ -58,3 +58,43 @@ class TestStopHook:
         )
         # No hookSpecificOutput for Stop hooks
         assert "hookSpecificOutput" not in result
+
+
+class TestStopSignalFlag:
+    """Stop records the [✓ rules] signal flag for the session (spec 25)."""
+
+    def test_records_signal_present(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        simba.hooks.stop.main(
+            {
+                "response": "Done. [✓ rules]",
+                "cwd": str(tmp_path),
+                "session_id": "sig-present",
+            }
+        )
+        assert sf.signal_present("sig-present") is True
+
+    def test_records_signal_absent(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        simba.hooks.stop.main(
+            {
+                "response": "Done without the marker.",
+                "cwd": str(tmp_path),
+                "session_id": "sig-absent",
+            }
+        )
+        assert sf.signal_present("sig-absent") is False
+
+    def test_no_session_id_does_not_crash(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        # No session_id — nothing to key the flag on; must not raise.
+        result = json.loads(
+            simba.hooks.stop.main({"response": "Done. [✓ rules]", "cwd": str(tmp_path)})
+        )
+        assert "hookSpecificOutput" not in result

@@ -68,9 +68,7 @@ class TestParseTranscriptToMarkdown:
                             {"type": "text", "text": "normal text"},
                             {
                                 "type": "tool_result",
-                                "content": [
-                                    {"type": "text", "text": "nested"}
-                                ],
+                                "content": [{"type": "text", "text": "nested"}],
                             },
                         ],
                     }
@@ -139,6 +137,31 @@ class TestPreCompactMain:
         )
         assert result.get("suppressOutput") is True
 
+    def test_resets_signal_flag(self, tmp_path):
+        """PreCompact clears the rules-signal flag so the next prompt
+        re-injects the CORE block after compaction (spec 25)."""
+        import simba.guardian.signal_flag as sf
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "test"}}) + "\n"
+        )
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+
+        with unittest.mock.patch.object(sf, "_TMP_DIR", tmp_path):
+            sf.record_signal("compact-session", present=True)
+            assert sf.flag_path("compact-session").exists()
+            with unittest.mock.patch("pathlib.Path.home", return_value=fake_home):
+                simba.hooks.pre_compact.main(
+                    {
+                        "session_id": "compact-session",
+                        "transcript_path": str(transcript),
+                        "cwd": str(tmp_path),
+                    }
+                )
+            assert not sf.flag_path("compact-session").exists()
+
 
 class TestRlmDigestTrigger:
     def test_no_dispatch_when_engine_claude(self, monkeypatch):
@@ -146,15 +169,18 @@ class TestRlmDigestTrigger:
         import simba.hooks.pre_compact as pc
 
         monkeypatch.setattr(
-            simba.config, "load",
-            lambda section, *a, **k: type("C", (), {
-                "engine": "claude", "engine_min_new_exchanges": 1
-            })(),
+            simba.config,
+            "load",
+            lambda section, *a, **k: type(
+                "C", (), {"engine": "claude", "engine_min_new_exchanges": 1}
+            )(),
         )
         called = {"n": 0}
         import simba.rlm.engine
+
         monkeypatch.setattr(
-            simba.rlm.engine, "get_engine",
+            simba.rlm.engine,
+            "get_engine",
             lambda cfg: called.__setitem__("n", called["n"] + 1) or None,
         )
         pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=100)
@@ -168,10 +194,11 @@ class TestRlmDigestTrigger:
         import simba.rlm.jobs
 
         monkeypatch.setattr(
-            simba.config, "load",
-            lambda section, *a, **k: type("C", (), {
-                "engine": "claude-cli", "engine_min_new_exchanges": 20
-            })(),
+            simba.config,
+            "load",
+            lambda section, *a, **k: type(
+                "C", (), {"engine": "claude-cli", "engine_min_new_exchanges": 20}
+            )(),
         )
         dispatched = {}
 
@@ -190,10 +217,11 @@ class TestRlmDigestTrigger:
         import simba.rlm.engine
 
         monkeypatch.setattr(
-            simba.config, "load",
-            lambda section, *a, **k: type("C", (), {
-                "engine": "claude-cli", "engine_min_new_exchanges": 20
-            })(),
+            simba.config,
+            "load",
+            lambda section, *a, **k: type(
+                "C", (), {"engine": "claude-cli", "engine_min_new_exchanges": 20}
+            )(),
         )
 
         class _Engine:
@@ -210,10 +238,11 @@ class TestRlmDigestTrigger:
         import simba.rlm.jobs
 
         monkeypatch.setattr(
-            simba.config, "load",
-            lambda section, *a, **k: type("C", (), {
-                "engine": "claude-cli", "engine_min_new_exchanges": 20
-            })(),
+            simba.config,
+            "load",
+            lambda section, *a, **k: type(
+                "C", (), {"engine": "claude-cli", "engine_min_new_exchanges": 20}
+            )(),
         )
 
         class _Engine:
