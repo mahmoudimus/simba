@@ -1084,7 +1084,7 @@ def _cmd_hook(args: list[str]) -> int:
         return 0
 
     # Legacy path for not-yet-canonicalized events
-    # (PreToolUse/PostToolUse/PermissionRequest).
+    # (PostToolUse/PermissionRequest).
     module_name = _HOOK_EVENTS.get(event)
     if module_name is None:
         print(f"Unknown hook event: {event}", file=sys.stderr)

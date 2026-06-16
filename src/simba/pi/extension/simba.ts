@@ -11,6 +11,8 @@ import type {
   ExtensionContext,
   BeforeAgentStartEvent,
   AgentEndEvent,
+  ToolCallEvent,
+  ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
@@ -25,6 +27,28 @@ interface Canonical {
   suppress_output?: boolean;
   memory_count?: number;
   block_reason?: string | null;
+  // A silent rewrite of the tool arguments (redirect rewrite). For bash we apply
+  // transform.command by mutating event.input.command in place.
+  transform?: { command?: string; reason?: string } | null;
+  // A directive that block-only harnesses (pi tool_call) enforce as a hard block
+  // — a strong TOOL_RULE match. Claude/Codex inject it as context instead.
+  escalated_block?: string | null;
+}
+
+// pi lowercases tool names ("bash", "edit", …); simba's PreToolUse speaks the
+// Claude convention ("Bash", "Edit", …). Unknown tools fall back to
+// capitalize-first so a custom tool still reaches the gate with a sane name.
+const PI_TOOL_TO_CLAUDE: Record<string, string> = {
+  bash: "Bash",
+  edit: "Edit",
+  write: "Write",
+  read: "Read",
+  grep: "Grep",
+  find: "Find",
+};
+
+function claudeToolName(piName: string): string {
+  return PI_TOOL_TO_CLAUDE[piName] ?? piName.charAt(0).toUpperCase() + piName.slice(1);
 }
 
 function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>): string {
@@ -94,6 +118,34 @@ export default function (pi: ExtensionAPI) {
       };
     }
     note("nothing to inject");
+  });
+
+  // Tool gate: before a tool runs, ask simba's PreToolUse path whether to block
+  // or silently rewrite it. Same redirect/TOOL_RULE rules as Claude/Codex; the
+  // daemon decides (gated by redirect_enabled / rule_check_enabled), the bridge
+  // only enforces. pi tool_call has no context channel, so context-only
+  // injections (weak TOOL_RULE, recall, context-low warnings) are dropped.
+  pi.on("tool_call", async (e: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | void> => {
+    const tool_name = claudeToolName(e.toolName);
+    const tool_input =
+      e.toolName === "bash"
+        ? { command: (e.input as { command?: string }).command }
+        : (e.input as Record<string, unknown>);
+
+    const r = await callSimba("pre_tool", { tool_name, tool_input, cwd: ctx.cwd });
+
+    if (r.transform && r.transform.command && e.toolName === "bash") {
+      // Silent rewrite — mutate the (mutable) bash input in place and allow.
+      (e.input as { command?: string }).command = r.transform.command;
+      note(`rewrote → ${r.transform.command}`);
+      return;
+    }
+    if (r.block_reason || r.escalated_block) {
+      const reason = r.block_reason || r.escalated_block || "blocked by simba";
+      note(`blocked tool — ${reason}`);
+      return { block: true, reason };
+    }
+    // No gate fired — allow with the original input (context injections dropped).
   });
 
   pi.on("agent_end", async (e: AgentEndEvent, ctx: ExtensionContext) => {
