@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-16
+
 ### Added
 
 - **pi tool-gating** (#77). The pi bridge now wires pi's `tool_call` event to
