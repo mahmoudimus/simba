@@ -17,7 +17,7 @@ re-injects them after context compaction.
 - **Hook I/O protocol**: Read JSON from stdin, write `{ hookSpecificOutput: { hookEventName, additionalContext } }` to stdout
 - **Hooks are plugin-level**: Registered via `.claude-plugin/hooks.json`, invoked as `uv run python -m simba.hooks.<name>`
 - **No external embedding services**: llama-cpp-python loads nomic-embed-text GGUF in-process. Task prefixes: "search_document" (store), "search_query" (recall)
-- **Memory content max 200 chars**: Enforced on storage. Use context field for details.
+- **Memory content cap = `memory.max_content_length` (default 200)**: Enforced on storage; use the context field for details. Single source of truth — `simba.memory.config.resolve_max_content_length()` drives both enforcement and the "keep content under N chars" guidance in every extraction/digest/episode/reflection prompt. Never hardcode the number.
 - **All config via `simba config`**: Every configurable value must be a field on a `@configurable` dataclass, gettable/settable via `simba config get/set <section>.<key>`. No hidden constants or env-var-only config.
 - **SoTA levers graduate to default-ON**: a DAEMON lever MEASURED (real, attributed, re-runnable A/B) to reach SoTA-or-at-par flips its default to True in the same change (cite the measurement in the config comment; fix default-assertion tests). Default-OFF stays the rule for UNMEASURED / situational / negative levers. Eval/answerer levers (reader/judge) live in bench config, not the daemon.
 

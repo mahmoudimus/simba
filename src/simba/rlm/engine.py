@@ -61,7 +61,7 @@ _DIGEST_PROMPT = (
     "transcript_id '{tid}'. Use rlm_grep / rlm_peek / rlm_window to read the "
     "key decisions, gotchas, working solutions, and failures from it — read "
     "the actual regions, be lossless, do not guess. Store each as a memory:\n"
-    "  simba memory store --type <TYPE> --content <<=200 chars> "
+    "  simba memory store --type <TYPE> --content <<={maxlen} chars> "
     "--context <details> --project-path '{cwd}' --session-source '{tid}'\n"
     "TYPE is one of WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, "
     "PREFERENCE. Store 5-15 high-value, specific learnings; skip generic "
@@ -76,16 +76,20 @@ _LLM_DIGEST_PROMPT = (
     "specific learnings worth remembering long-term. Return ONLY a JSON array; "
     'each element an object with keys "type", "content", "context". "type" is '
     "one of WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, PREFERENCE. "
-    '"content" is a specific statement of at most 200 characters; "context" '
+    '"content" is a specific statement of at most {maxlen} characters; "context" '
     "holds supporting detail. Capture 5-15 high-value items; skip generic "
     "knowledge. Output nothing but the JSON array.\n\nTranscript:\n{transcript}"
 )
 
 
 def _build_digest_prompt(
-    transcript_id: str, cwd: str, *, template: str = _DIGEST_PROMPT
+    transcript_id: str,
+    cwd: str,
+    *,
+    template: str = _DIGEST_PROMPT,
+    maxlen: int = 200,
 ) -> str:
-    return template.format(tid=transcript_id, cwd=cwd)
+    return template.format(tid=transcript_id, cwd=cwd, maxlen=maxlen)
 
 
 class ClaudeCliEngine:
@@ -134,8 +138,16 @@ class ClaudeCliEngine:
         )
 
     def digest(self, transcript_id: str, query: str, *, cwd: str) -> None:
+        import simba.memory.config
+
+        maxlen = simba.memory.config.resolve_max_content_length()
         template = getattr(self._cfg, "digest_prompt", "") or _DIGEST_PROMPT
-        self.run(_build_digest_prompt(transcript_id, cwd, template=template), cwd=cwd)
+        self.run(
+            _build_digest_prompt(
+                transcript_id, cwd, template=template, maxlen=maxlen
+            ),
+            cwd=cwd,
+        )
 
 
 class LlmCliEngine:
@@ -148,9 +160,14 @@ class LlmCliEngine:
         _spawn_worker(prompt, cwd=cwd, session_source=session_source, mark_rlm=False)
 
     def digest(self, transcript_id: str, query: str, *, cwd: str) -> None:
+        import simba.memory.config
+
+        maxlen = simba.memory.config.resolve_max_content_length()
         text = _load_transcript_text(transcript_id)
         template = getattr(self._cfg, "digest_prompt", "") or _LLM_DIGEST_PROMPT
-        prompt = template.format(transcript=text, cwd=cwd, tid=transcript_id)
+        prompt = template.format(
+            transcript=text, cwd=cwd, tid=transcript_id, maxlen=maxlen
+        )
         _spawn_worker(prompt, cwd=cwd, session_source=transcript_id, mark_rlm=True)
 
 

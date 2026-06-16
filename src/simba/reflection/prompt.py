@@ -17,13 +17,13 @@ already stated verbatim in a memory.
 
 For each insight you identify (maximum {max_reflections}), store it with:
   simba memory store --type REFLECTION \\
-    --content "<≤200-char cross-session insight>" \\
+    --content "<≤{maxlen}-char cross-session insight>" \\
     --context "<evidence: list 2-4 memory ids that support this>" \\
     --confidence <0.0-1.0> \\
     --project-path '{project}'
 
 Rules:
-- content MUST be ≤200 characters
+- content MUST be ≤{maxlen} characters
 - confidence ≥ {importance_threshold} (discard weaker candidates)
 - Do NOT paraphrase a single memory — that is an EPISODE, not a REFLECTION
 - Do NOT store a reflection if an existing REFLECTION memory already captures it
@@ -60,14 +60,21 @@ def build_reflection_prompt(
     max_source_memories: int = 100,
     max_reflections: int = 3,
     importance_threshold: float = 0.6,
+    max_content_length: int = 200,
 ) -> str:
-    """Return the reflection synthesis prompt for the LLM."""
+    """Return the reflection synthesis prompt for the LLM.
+
+    ``max_content_length`` hydrates the "≤N characters" guidance from
+    ``memory.max_content_length`` (the caller resolves it); the default keeps
+    this function pure and testable in isolation.
+    """
     capped = memories[:max_source_memories]
     return _REFLECTION_PROMPT.format(
         n=len(capped),
         project=project,
         max_reflections=max_reflections,
         importance_threshold=importance_threshold,
+        maxlen=max_content_length,
         existing_reflections=_format_lines(existing_reflections) or "(none)",
         memory_lines=_format_lines(capped) or "(none)",
     )

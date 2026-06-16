@@ -10,6 +10,9 @@ import typing
 
 import simba.config
 
+if typing.TYPE_CHECKING:
+    import pathlib
+
 
 @simba.config.configurable("memory")
 @dataclasses.dataclass
@@ -347,6 +350,23 @@ class MemoryConfig:
     # Default-OFF — when False, recall reads the first stored candidate with no LLM
     # call (current behavior). Always fail-open (any error falls back).
     conflict_recall_recheck: bool = False
+
+
+def resolve_max_content_length(root: pathlib.Path | None = None) -> int:
+    """Resolve the configured memory content cap (``memory.max_content_length``).
+
+    Single source of truth for both enforcement (store truncation/validation) and
+    the "keep content under N chars" guidance the daemon emits to extraction /
+    digest / episode / reflection agents. Fail-open to the dataclass default so
+    prompt building and the CLI never crash on a missing/broken config.
+    """
+    default = int(MemoryConfig.max_content_length)
+    try:
+        cfg = simba.config.load("memory", root)
+        max_len = int(getattr(cfg, "max_content_length", default))
+        return max_len if max_len > 0 else default
+    except Exception:
+        return default
 
 
 def load_config(**overrides: typing.Any) -> MemoryConfig:
