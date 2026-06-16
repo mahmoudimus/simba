@@ -12,6 +12,7 @@ import pathlib
 
 import simba.config
 import simba.guardian.check_signal
+import simba.guardian.signal_flag
 import simba.memory.continuous
 import simba.tailor.hook
 from simba.harness.core import CanonicalResult
@@ -21,6 +22,7 @@ def run(hook_input: dict) -> CanonicalResult:
     """Run the Stop hook pipeline. Returns a CanonicalResult."""
     cwd_str = hook_input.get("cwd")
     cwd = pathlib.Path(cwd_str) if cwd_str else None
+    session_id = hook_input.get("session_id", "")
 
     parts: list[str] = []
 
@@ -30,6 +32,16 @@ def run(hook_input: dict) -> CanonicalResult:
         signal_result = simba.guardian.check_signal.main(response=response, cwd=cwd)
         if signal_result:
             parts.append(signal_result)
+
+    # 1b. Record the per-session signal flag so UserPromptSubmit can gate CORE
+    #     re-injection next turn (spec 25, guardian_signal_gated). Fail-soft —
+    #     the reader fail-opens to inject when the flag is missing/unreadable.
+    if session_id:
+        with contextlib.suppress(Exception):
+            simba.guardian.signal_flag.record_signal(
+                session_id,
+                present=simba.guardian.signal_flag.signal_in_response(response),
+            )
 
     # 2. Tailor: error capture from transcript
     #    Side effect: writes reflections under <cwd>/.simba/ (cwd from payload).

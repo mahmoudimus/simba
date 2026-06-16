@@ -84,6 +84,12 @@ class TestUserPromptSubmitHook:
         assert cfg.prompt_min_similarity == 0.45
         assert cfg.prompt_min_length == 10
 
+    def test_guardian_signal_gated_defaults_off(self):
+        import simba.hooks.config
+
+        # Default-OFF preserves today's behavior (CORE block every prompt).
+        assert simba.hooks.config.HooksConfig().guardian_signal_gated is False
+
     def test_recall_floor_comes_from_config(self, tmp_path, monkeypatch):
         class _Stub:
             prompt_min_similarity = 0.6
@@ -232,3 +238,129 @@ class TestRlmPointerInjection:
             [{"content": "x"}], "/p"
         )
         assert out == ""
+
+
+def _claude_md_with_core(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Rules\n<!-- BEGIN SIMBA:core -->\nImportant rule\n<!-- END SIMBA:core -->\n"
+    )
+
+
+class _GatedCfg:
+    """HooksConfig stub with the signal-gating lever ON."""
+
+    prompt_min_similarity = 0.45
+    prompt_min_length = 10
+    guardian_signal_gated = True
+
+
+class TestGuardianSignalGating:
+    """Proposal A (spec 25): conditional CORE re-injection."""
+
+    def test_default_off_injects_every_prompt(self, tmp_path):
+        """Characterization: lever OFF (default) → CORE present every prompt,
+        regardless of any recorded signal flag."""
+        import simba.guardian.signal_flag as sf
+
+        _claude_md_with_core(tmp_path)
+        # Even with a 'signal present' flag for this session, default-off ignores it.
+        with (
+            unittest.mock.patch.object(sf, "should_inject", return_value=False),
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=[]
+            ),
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"cwd": str(tmp_path), "session_id": "s-default"}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "Important rule" in ctx
+
+    def test_gated_first_prompt_injects(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        _claude_md_with_core(tmp_path)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _GatedCfg(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"cwd": str(tmp_path), "session_id": "s-first"}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "Important rule" in ctx
+
+    def test_gated_prior_signal_present_skips(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        _claude_md_with_core(tmp_path)
+        sf.record_signal("s-keep", present=True)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _GatedCfg(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"cwd": str(tmp_path), "session_id": "s-keep"}
+                )
+            )
+        # No CORE block (and no memories) → empty context envelope (no
+        # additionalContext key), and certainly no "Important rule"/"✓ rules" tag.
+        ctx = result["hookSpecificOutput"].get("additionalContext", "")
+        assert "Important rule" not in ctx
+        assert "✓ rules" not in ctx
+
+    def test_gated_prior_signal_missing_injects(self, tmp_path, monkeypatch):
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        _claude_md_with_core(tmp_path)
+        sf.record_signal("s-decayed", present=False)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _GatedCfg(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"cwd": str(tmp_path), "session_id": "s-decayed"}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "Important rule" in ctx
+
+    def test_gated_fails_open_on_error(self, tmp_path, monkeypatch):
+        """Any error in the decision → inject (never silently drop the rules)."""
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        _claude_md_with_core(tmp_path)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _GatedCfg(), raising=False
+        )
+
+        def boom(_session_id):
+            raise RuntimeError("flag read failed")
+
+        monkeypatch.setattr(sf, "should_inject", boom)
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"cwd": str(tmp_path), "session_id": "s-err"}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "Important rule" in ctx

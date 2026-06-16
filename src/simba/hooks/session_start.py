@@ -14,6 +14,7 @@ import httpx
 
 import simba.config
 import simba.db
+import simba.guardian.signal_flag
 import simba.hooks._memory_client
 import simba.memory.config
 import simba.search.project_memory
@@ -130,6 +131,14 @@ def run(hook_input: dict) -> CanonicalResult:
     # in the daemon). gather_context / get_db_path accept None and handle it.
     cwd = pathlib.Path(cwd_str) if cwd_str else None
     session_id = hook_input.get("session_id", "")
+
+    # Reset the rules-signal flag (spec 25): a fresh session has no prior
+    # response, so the first prompt must re-inject the CORE block. Fail-soft.
+    if session_id:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            simba.guardian.signal_flag.reset_signal(session_id)
 
     parts: list[str] = []
 

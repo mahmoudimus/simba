@@ -28,6 +28,19 @@ class HooksConfig:
     prompt_min_length: int = 10  # skip recall for prompts shorter than this
     prompt_min_similarity: float = 0.45  # stricter floor than the daemon default
 
+    # Guardian CORE re-injection (spec 25). The CLAUDE.md guardian re-injects the
+    # SIMBA:core block on EVERY UserPromptSubmit (~2k tokens of per-turn overhead
+    # even when the model still has the rules). When True, inject the block only
+    # when the rules look decayed — i.e. the model's PREVIOUS response was MISSING
+    # the [✓ rules] signal, or there is no recorded signal yet (first prompt /
+    # post-compaction). Skip otherwise. Always fail-open: any uncertainty or error
+    # re-injects (the block is the safety layer). The Stop hook records the
+    # per-session signal flag (simba.guardian.signal_flag) that this reads;
+    # PreCompact/SessionStart reset it. UNMEASURED token-saver → DEFAULT-OFF, which
+    # is byte-identical to today (block injected every prompt). Enable:
+    # `simba config set hooks.guardian_signal_gated 1`.
+    guardian_signal_gated: bool = False
+
     # Pre-tool-use. General thinking-block recall defers to the daemon's
     # intent-aware floor (memory.min_similarity / min_similarity_broad), so
     # there is no general-recall floor here — only the strict rule gate below.
