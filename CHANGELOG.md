@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-06-16
+
+### Fixed
+
+- **Daemon crash under concurrent recalls** (#75). The embedder and the
+  bge-reranker cross-encoder are two `llama_cpp.Llama` instances sharing the
+  process-global ggml backend, which is not safe under concurrent context use:
+  a simultaneous embed and rerank score corrupted shared buffers
+  (`GGML_ASSERT … "tensor write out of bounds"` → `SIGSEGV`). The embedder's
+  asyncio queue and the reranker's lock each serialized only themselves, not
+  one another. A new `simba.memory._llama.LLAMA_LOCK` guards **every** native
+  llama.cpp call — embedder embed/load and reranker load/score — so no two
+  threads enter llama.cpp at once (all call sites run in worker threads, so the
+  lock never blocks the event loop). Most likely to bite when multiple agents
+  share one daemon.
+
 ## [0.8.0] — 2026-06-15
 
 ### Added
