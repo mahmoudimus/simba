@@ -14,6 +14,7 @@ import shutil
 import sys
 import time
 
+import simba.guardian.signal_flag
 import simba.hooks._memory_client
 from simba.harness.core import CanonicalResult
 
@@ -164,6 +165,12 @@ def run(hook_input: dict) -> CanonicalResult:
         hook_input.get("transcript_path") or hook_input.get("transcriptPath") or ""
     )
     cwd_str = hook_input.get("cwd", "")
+
+    # Reset the rules-signal flag (spec 25): the model loses context across a
+    # compaction, so the next prompt must re-inject the CORE block. Fail-soft.
+    if session_id:
+        with contextlib.suppress(Exception):
+            simba.guardian.signal_flag.reset_signal(session_id)
 
     if not session_id or not transcript_path_str:
         return CanonicalResult(suppress_output=True)

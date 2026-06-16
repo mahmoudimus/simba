@@ -26,6 +26,22 @@ class TestSessionStartHook:
         # Tailor context includes time
         assert "Time:" in ctx
 
+    def test_resets_signal_flag(self, tmp_path):
+        """A fresh session clears any stale rules-signal flag so the first
+        prompt re-injects the CORE block (spec 25)."""
+        import simba.guardian.signal_flag as sf
+
+        with unittest.mock.patch.object(sf, "_TMP_DIR", tmp_path):
+            sf.record_signal("fresh-session", present=True)
+            assert sf.flag_path("fresh-session").exists()
+            with unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ):
+                simba.hooks.session_start.main(
+                    {"cwd": str(tmp_path), "session_id": "fresh-session"}
+                )
+            assert not sf.flag_path("fresh-session").exists()
+
     def test_includes_memory_status_when_healthy(self):
         health = {"memoryCount": 42, "embeddingModel": "nomic-embed-text"}
         with unittest.mock.patch(

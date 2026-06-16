@@ -57,10 +57,28 @@ def _cfg():
     return simba.config.load("hooks")
 
 
+def _should_inject_core(cfg, session_id: str) -> bool:
+    """Decide whether to (re)inject the CORE block this prompt (spec 25).
+
+    When the ``guardian_signal_gated`` lever is OFF (default), always inject —
+    byte-identical to today's behavior. When ON, defer to the per-session signal
+    flag (fail-open: any error → inject, never silently drop the rules).
+    """
+    if not getattr(cfg, "guardian_signal_gated", False):
+        return True
+    try:
+        import simba.guardian.signal_flag
+
+        return simba.guardian.signal_flag.should_inject(session_id)
+    except Exception:
+        return True
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the UserPromptSubmit hook pipeline. Returns a CanonicalResult."""
     prompt = hook_input.get("prompt", "")
     cwd_str = hook_input.get("cwd")
+    session_id = hook_input.get("session_id", "")
     # Path derives from payload only \u2014 dispatch may run in the daemon process
     # whose own cwd differs from the agent's.
     cwd = pathlib.Path(cwd_str) if cwd_str else None
@@ -71,8 +89,11 @@ def run(hook_input: dict) -> CanonicalResult:
     # 1. Guardian: extract CORE blocks from CLAUDE.md.
     #    Only when the payload carried a cwd — extract_core.main(cwd=None) falls
     #    back to Path.cwd(), which inside the daemon is the wrong project.
+    #    When guardian_signal_gated is ON (spec 25), skip the block while the
+    #    rules are still present (prior response carried [✓ rules]); re-inject
+    #    when they've decayed / on the first prompt. Fail-open: error → inject.
     core_blocks = ""
-    if cwd is not None:
+    if cwd is not None and _should_inject_core(cfg, session_id):
         core_blocks = simba.guardian.extract_core.main(cwd=cwd)
     if core_blocks:
         parts.append(core_blocks)
