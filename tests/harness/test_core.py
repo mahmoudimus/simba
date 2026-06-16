@@ -11,6 +11,8 @@ def test_canonical_result_defaults():
     assert r.suppress_output is False
     assert r.memory_count == 0
     assert r.block_reason is None
+    assert r.transform is None
+    assert r.escalated_block is None
 
 
 def test_dispatch_unknown_event_raises():
@@ -39,3 +41,14 @@ def test_dispatch_stop_returns_canonical():
 def test_dispatch_pre_compact_returns_canonical():
     r = core.dispatch("pre_compact", {})
     assert isinstance(r, core.CanonicalResult)
+
+
+def test_dispatch_pre_tool_returns_canonical():
+    # No transcript/rules → empty context path, no block/transform.
+    r = core.dispatch(
+        "pre_tool", {"tool_name": "Read", "tool_input": {}, "cwd": "/tmp"}
+    )
+    assert isinstance(r, core.CanonicalResult)
+    assert r.block_reason is None
+    assert r.transform is None
+    assert r.escalated_block is None

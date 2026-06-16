@@ -53,8 +53,18 @@ def test_render_pre_compact_suppress():
     assert json.loads(out) == {"suppressOutput": True}
 
 
-def test_render_block_reason_short_circuits():
+def test_render_pretool_block_reason_uses_pretool_deny():
+    # PreToolUse deny uses the permissionDecision shape, NOT the generic block.
     out = claude.render("PreToolUse", CanonicalResult(block_reason="nope"))
+    hso = json.loads(out)["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecisionReason"] == "nope"
+
+
+def test_render_generic_block_reason_short_circuits():
+    # Non-PreToolUse events still use the generic top-level block envelope.
+    out = claude.render("Stop", CanonicalResult(block_reason="nope"))
     assert json.loads(out) == {"decision": "block", "reason": "nope"}
 
 
