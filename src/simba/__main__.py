@@ -939,6 +939,8 @@ def _hook_via_daemon(
                 suppress_output=b.get("suppress_output", False),
                 memory_count=b.get("memory_count", 0),
                 block_reason=b.get("block_reason"),
+                transform=b.get("transform"),
+                escalated_block=b.get("escalated_block"),
             )
     except (httpx.HTTPError, ValueError):
         pass
@@ -992,6 +994,8 @@ def _cmd_hook_canonical(args: list[str]) -> int:
                 "suppress_output": result.suppress_output,
                 "memory_count": result.memory_count,
                 "block_reason": result.block_reason,
+                "transform": result.transform,
+                "escalated_block": result.escalated_block,
             }
         )
     )

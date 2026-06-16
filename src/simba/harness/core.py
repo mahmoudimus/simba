@@ -20,7 +20,8 @@ _EVENT_MODULES = {
     "prompt_submit": "simba.hooks.user_prompt_submit",
     "stop": "simba.hooks.stop",
     "pre_compact": "simba.hooks.pre_compact",
-    # v2: "pre_tool", "post_tool"
+    "pre_tool": "simba.hooks.pre_tool_use",
+    # v2: "post_tool"
 }
 
 
@@ -37,6 +38,11 @@ class CanonicalResult:
     # v2 fields (defined for forward-compat; unused in MVP):
     block_reason: str | None = None
     transform: dict | None = None
+    # A directive that context-capable harnesses (Claude/Codex) inject as
+    # additionalContext (already included in additional_context) but block-only
+    # harnesses (pi tool_call) must enforce as a hard block. Populated for a
+    # strong TOOL_RULE match. Claude/Codex render IGNORES it (byte-identical).
+    escalated_block: str | None = None
 
 
 def dispatch(event: str, payload: dict) -> CanonicalResult:
