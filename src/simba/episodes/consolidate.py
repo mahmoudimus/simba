@@ -23,6 +23,7 @@ import simba.config
 import simba.episodes.config
 import simba.episodes.jobs
 import simba.hooks._memory_client
+import simba.memory.config
 import simba.rlm.engine
 
 logger = logging.getLogger("simba.episodes")
@@ -35,10 +36,10 @@ _EPISODE_PROMPT = (
     "(project '{cwd}'). Synthesize ONE concise episode that summarizes the "
     "session: its goal, the work done, and the outcome. Store exactly one "
     "memory:\n"
-    "  simba memory store --type EPISODE --content <=200-char summary> "
+    "  simba memory store --type EPISODE --content <={maxlen}-char summary> "
     "--context <key points + member ids> --project-path '{cwd}' "
     "--session-source '{sid}'\n"
-    "Keep --content under 200 characters; put detail in --context. When "
+    "Keep --content under {maxlen} characters; put detail in --context. When "
     "finished, run: simba episodes complete '{sid}'.\n\nMemories:\n{members}"
 )
 
@@ -48,8 +49,8 @@ _LLM_EPISODE_PROMPT = (
     "These memories were captured during session '{sid}' (project '{cwd}'). "
     "Synthesize ONE concise episode summarizing the session: its goal, the work "
     "done, and the outcome. Return ONLY a JSON array with a single object: "
-    '{{"type": "EPISODE", "content": "<=200-char summary>", '
-    '"context": "key points + member ids"}}. Keep "content" at most 200 '
+    '{{"type": "EPISODE", "content": "<={maxlen}-char summary>", '
+    '"context": "key points + member ids"}}. Keep "content" at most {maxlen} '
     "characters. Output nothing but the JSON array.\n\nMemories:\n{members}"
 )
 
@@ -123,9 +124,13 @@ def _build_episode_prompt(
     max_members: int,
     *,
     template: str = _EPISODE_PROMPT,
+    maxlen: int = 200,
 ) -> str:
     return template.format(
-        sid=sid, cwd=cwd, members=_member_lines(members, max_members)
+        sid=sid,
+        cwd=cwd,
+        members=_member_lines(members, max_members),
+        maxlen=maxlen,
     )
 
 
@@ -176,6 +181,7 @@ def consolidate_session(
         members,
         ecfg.max_members,
         template=_episode_template(ecfg, engine),
+        maxlen=simba.memory.config.resolve_max_content_length(),
     )
     try:
         engine.run(prompt, cwd=project_path, session_source=sid)

@@ -22,6 +22,7 @@ import httpx
 import simba.config
 import simba.db
 import simba.hooks.config
+import simba.memory.config
 
 _DURATION_RE = re.compile(r"^(\d+)([smhdw])$")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
@@ -55,7 +56,9 @@ def _daemon_url() -> str:
 
 def _cmd_add(args: argparse.Namespace) -> int:
     """Store a new TOOL_RULE memory."""
-    content = f"{args.tool}: {args.correction}"[:200]
+    content = f"{args.tool}: {args.correction}"[
+        : simba.memory.config.resolve_max_content_length()
+    ]
     context_data = {
         "tool": args.tool,
         "pattern": args.pattern or "",

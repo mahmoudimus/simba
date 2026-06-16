@@ -16,6 +16,7 @@ import httpx
 
 import simba.config
 import simba.hooks._memory_client
+import simba.memory.config
 import simba.reflection.config
 import simba.reflection.prompt
 import simba.rlm.engine
@@ -104,6 +105,7 @@ def reflect_pass(
         max_source_memories=rcfg.max_source_memories,
         max_reflections=rcfg.max_reflections_per_pass,
         importance_threshold=rcfg.importance_threshold,
+        max_content_length=simba.memory.config.resolve_max_content_length(),
     )
     try:
         engine.run(prompt, cwd=cwd)

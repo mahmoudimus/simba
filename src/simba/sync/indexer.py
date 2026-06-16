@@ -18,6 +18,7 @@ import httpx
 
 import simba.config
 import simba.db
+import simba.memory.config
 from simba.sync import exporter
 from simba.sync.text_render import INDEXABLE_TABLES, render_row
 from simba.sync.watermarks import get_watermark, set_watermark
@@ -51,7 +52,7 @@ def _post_to_daemon(
     """
     payload = {
         "type": "SYSTEM",
-        "content": text[:200],
+        "content": text[: simba.memory.config.resolve_max_content_length()],
         "context": text,
         "tags": [table_name, "sync"],
         "confidence": 1.0,

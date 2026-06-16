@@ -896,9 +896,19 @@ Automatically triggered after context compaction:
 Memory types: `GOTCHA`, `WORKING_SOLUTION`, `PATTERN`, `DECISION`, `FAILURE`, `PREFERENCE`
 
 Extraction follows quality rules baked into the prompt (shared by the hook and
-the skill): keep content under 200 chars, preserve proper nouns / file paths /
-identifiers verbatim, preserve numeric precision (never weaken an exact value),
-and resolve relative dates to absolute ones.
+the skill): keep content within the configured cap, preserve proper nouns / file
+paths / identifiers verbatim, preserve numeric precision (never weaken an exact
+value), and resolve relative dates to absolute ones.
+
+The content cap is configurable via `memory.max_content_length` (defaults to
+200) — set it with `simba config set memory.max_content_length <N>` (globally),
+or per-project in `.simba/config.toml`. It is the single source of truth: the
+same value enforced on storage is the number every extraction / digest / episode
+/ reflection prompt tells the agent to stay under. Note the trade-off — content
+(not the unbounded `context` field) is what recall injects into the agent, so a
+larger cap means more tokens per memory and, under the recall token budget, can
+surface **fewer** memories per turn. Raise it for richer facts; keep it tight to
+fit more memories.
 
 Can also be invoked manually with `/memories-learn`.
 
@@ -1105,7 +1115,7 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
 | `supersede_enabled` | true | Replace a near-duplicate same-type memory on store |
 | `supersede_threshold` | 0.85 | Supersede band floor (below `duplicate_threshold`) |
-| `max_content_length` | 200 | Maximum memory content length (chars) |
+| `max_content_length` | 200 | Max memory content length (chars). Single source of truth — enforced on storage **and** the cap every extraction/digest/episode/reflection prompt cites. Larger = richer facts but more tokens per memory (can surface fewer per turn under the recall budget). |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
 | `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |

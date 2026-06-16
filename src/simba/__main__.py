@@ -1168,19 +1168,14 @@ _VALID_MEMORY_TYPES = {
 
 
 def _memory_max_content_length() -> int:
-    """Return configured memory content length cap (default 200)."""
-    try:
-        import simba.config
-        import simba.memory.config
+    """Return configured memory content length cap (default 200).
 
-        _ = simba.memory.config  # ensure section registration
-        cfg = simba.config.load("memory")
-        max_len = int(getattr(cfg, "max_content_length", 200))
-        if max_len <= 0:
-            return 200
-        return max_len
-    except Exception:
-        return 200
+    Thin wrapper over the single source of truth in ``simba.memory.config`` so
+    the CLI store path and the daemon agree on the cap.
+    """
+    import simba.memory.config
+
+    return simba.memory.config.resolve_max_content_length()
 
 
 def _cmd_memory(args: list[str]) -> int:
