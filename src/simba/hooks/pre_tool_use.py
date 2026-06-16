@@ -24,6 +24,7 @@ import simba.hooks._io
 import simba.hooks._kg_client
 import simba.hooks._memory_client
 import simba.redirect.check
+from simba.harness.core import CanonicalResult
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
@@ -250,13 +251,17 @@ def _project_has_tool_rules(project_id: str, cfg) -> bool:
     return count > 0
 
 
-def _check_tool_rules(
+def _recall_tool_rules(
     tool_name: str, tool_input: dict, cwd_str: str | None
-) -> str | None:
-    """Query TOOL_RULE memories matching this tool call."""
+) -> list[dict]:
+    """Recall TOOL_RULE memories matching this tool call (post recency gate).
+
+    Returns the memory list (possibly empty). Shared by the warning builder and
+    the strong-match escalation so both see the same single recall.
+    """
     cfg = _hooks_cfg()
     if not cfg.rule_check_enabled:
-        return None
+        return []
 
     # Build a query from the tool input
     if tool_name == "Bash":
@@ -264,10 +269,10 @@ def _check_tool_rules(
     elif tool_name in ("Read", "Write", "Edit"):
         query = tool_input.get("file_path", "")
     else:
-        return None
+        return []
 
     if not query:
-        return None
+        return []
 
     # Scope to the opaque, worktree-robust project id the learner stores under,
     # so another repo's rules never surface here (and a repo's worktrees share).
@@ -275,7 +280,7 @@ def _check_tool_rules(
 
     # Skip the embed+recall entirely when the project has no learned rules.
     if not _project_has_tool_rules(project_id, cfg):
-        return None
+        return []
 
     memories = simba.hooks._memory_client.recall_memories(
         query,
@@ -285,7 +290,7 @@ def _check_tool_rules(
         filters={"types": ["TOOL_RULE"]},
     )
     if not memories:
-        return None
+        return []
 
     # Recency gate: stale rules (e.g. a "no such file" probe recorded weeks ago
     # against a since-moved path) age out of the warning injection.
@@ -294,9 +299,13 @@ def _check_tool_rules(
         memories = [
             m for m in memories if _within_max_age(m.get("createdAt"), max_age_days)
         ]
-        if not memories:
-            return None
+    return memories
 
+
+def _format_tool_rule_warning(memories: list[dict]) -> str | None:
+    """Build the ``<tool-rule-warning>`` block from recalled rules, or None."""
+    if not memories:
+        return None
     lines = ["<tool-rule-warning>"]
     for m in memories:
         ctx_str = m.get("context", "{}")
@@ -308,6 +317,33 @@ def _check_tool_rules(
                 lines.append(f"  INSTEAD: {correction}")
     lines.append("</tool-rule-warning>")
     return "\n".join(lines) if len(lines) > 2 else None
+
+
+def _check_tool_rules(
+    tool_name: str, tool_input: dict, cwd_str: str | None
+) -> str | None:
+    """Query TOOL_RULE memories matching this tool call; return a warning block."""
+    return _format_tool_rule_warning(_recall_tool_rules(tool_name, tool_input, cwd_str))
+
+
+def _strong_tool_rule_block(memories: list[dict]) -> str | None:
+    """Deny reason when the top TOOL_RULE match is strong (pi-only escalation).
+
+    Mirrors the Codex ``PermissionRequest`` hook: when the strongest matching
+    rule crosses ``permission_deny_similarity`` it is severe enough to enforce as
+    a hard block on block-only harnesses (pi). Returns the deny message, or None
+    when no match is that strong. Claude/Codex ignore this (the warning is still
+    injected as context); only block-only harnesses act on it.
+    """
+    if not memories:
+        return None
+    import simba.hooks.permission_request
+
+    cfg = _hooks_cfg()
+    top = memories[0]
+    if float(top.get("similarity", 0)) < cfg.permission_deny_similarity:
+        return None
+    return simba.hooks.permission_request.strong_rule_deny_message(top)
 
 
 def _check_truth_constraints(
@@ -372,8 +408,17 @@ def _check_pitfall(thinking: str, cwd_str: str | None) -> str | None:
     return directive or None
 
 
-def main(hook_input: dict) -> str:
-    """Run the PreToolUse hook pipeline. Returns JSON output string."""
+def run(hook_input: dict) -> CanonicalResult:
+    """Run the PreToolUse hook pipeline. Returns a CanonicalResult.
+
+    Output shapes map to canonical fields:
+      - redirect rewrite  -> ``transform={"command": …, "reason": …}``
+      - redirect deny      -> ``block_reason=…``
+      - context injection  -> ``additional_context=combined`` (empty -> default)
+    A strong TOOL_RULE match additionally sets ``escalated_block`` — pi-only
+    metadata that block-only harnesses enforce as a hard block; the warning still
+    goes into ``additional_context`` so Claude/Codex are byte-identical.
+    """
     tool_name = hook_input.get("tool_name", "")
     tool_input = hook_input.get("tool_input", {})
     transcript_path_str = hook_input.get("transcript_path", "")
@@ -387,12 +432,16 @@ def main(hook_input: dict) -> str:
         )
         if decision is not None:
             if decision.action == "rewrite":
-                return simba.hooks._io.pretool_rewrite(
-                    decision.command, decision.reason
+                return CanonicalResult(
+                    transform={
+                        "command": decision.command,
+                        "reason": decision.reason,
+                    }
                 )
-            return simba.hooks._io.pretool_deny(decision.reason)
+            return CanonicalResult(block_reason=decision.reason)
 
     parts: list[str] = []
+    escalated_block: str | None = None
 
     # --- Context-low check (fires for any tool, once per session) ---
     if transcript_path_str:
@@ -402,9 +451,13 @@ def main(hook_input: dict) -> str:
 
     # --- Tool-rule check (fires before thinking recall) ---
     if tool_input:
-        rule_warning = _check_tool_rules(tool_name, tool_input, cwd_str)
+        rule_memories = _recall_tool_rules(tool_name, tool_input, cwd_str)
+        rule_warning = _format_tool_rule_warning(rule_memories)
         if rule_warning:
             parts.append(rule_warning)
+        # A strong match escalates to a hard block on block-only harnesses (pi);
+        # Claude/Codex ignore this — the warning above is what they act on.
+        escalated_block = _strong_tool_rule_block(rule_memories)
 
         truth_warning = _check_truth_constraints(tool_name, tool_input, cwd_str)
         if truth_warning:
@@ -460,9 +513,16 @@ def main(hook_input: dict) -> str:
                 parts.append(formatted)
 
     if not parts:
-        return simba.hooks._io.empty("PreToolUse")
+        return CanonicalResult(escalated_block=escalated_block)
 
     combined = "\n\n".join(parts)
     tokens = len(combined) // 4
     combined += f"\n[simba: ~{tokens} tokens injected]"
-    return simba.hooks._io.context("PreToolUse", combined)
+    return CanonicalResult(additional_context=combined, escalated_block=escalated_block)
+
+
+def main(hook_input: dict) -> str:
+    """Run the PreToolUse hook and render the Claude/Codex envelope."""
+    import simba.harness.adapters.claude as claude
+
+    return claude.render("PreToolUse", run(hook_input))
