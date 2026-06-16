@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- **pi pitfall/doctrine tool gate** (spec 24 v2.1). pi's tool gate can now block
+  on the pitfall/doctrine gate — "you're about to take the workaround you told me
+  not to" — not just on redirects and `TOOL_RULE` matches. The pitfall gate keys
+  on the agent's *reasoning*, which pi's `tool_call` event doesn't carry, so the
+  bridge pulls the last assistant message from the live session
+  (`ctx.sessionManager.getBranch()`) and passes it to the daemon as `thinking`.
+  When a pending mutating tool (`hooks.pitfall_gate_tools`, default Edit/Write/Bash)
+  violates a stored doctrine, the daemon escalates the directive to
+  `escalated_block` so pi enforces it as a hard block; Claude/Codex still receive
+  it as `additionalContext` and stay byte-identical (their payloads carry no
+  `thinking` field, so `pre_tool` reads the transcript exactly as before). Gated
+  by the existing `hooks.pitfall_gate_enabled` (default off) — no new config.
+
 ## [0.9.0] — 2026-06-16
 
 ### Added

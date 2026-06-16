@@ -104,6 +104,23 @@ def test_main_empty_context_path_is_byte_identical(monkeypatch) -> None:
     assert json.loads(out) == {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
 
 
+def test_main_no_thinking_field_is_unaffected(tmp_path, monkeypatch) -> None:
+    # v2.1 added a payload ``thinking`` channel (pi). A Claude/Codex-style payload
+    # has NO ``thinking`` field — it must produce the SAME envelope as before. Here
+    # a redirect rule fires deterministically and the absence of ``thinking`` leaves
+    # the output byte-identical to the canonical rewrite.
+    _force_mode(monkeypatch, "rewrite")
+    _add_cargo_rule(tmp_path)
+    out = hook.main(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo build --release"},
+            "cwd": str(tmp_path),
+        }
+    )
+    assert out == simba.hooks._io.pretool_rewrite("soldr cargo build --release")
+
+
 # ── render() equivalences ───────────────────────────────────────────────────
 
 
