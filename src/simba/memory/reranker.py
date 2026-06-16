@@ -23,10 +23,10 @@ import ctypes
 import logging
 import pathlib
 import re
-import threading
 import typing
 
 import simba.memory.llm_rerank as llm_rerank
+from simba.memory._llama import LLAMA_LOCK
 
 if typing.TYPE_CHECKING:
     import llama_cpp
@@ -38,7 +38,10 @@ logger = logging.getLogger("simba.memory")
 # Lazily-built per-process singletons, one per GGUF backend.
 _CROSS_ENCODER: _CrossEncoderReranker | None = None
 _LOCAL_LLM: _LocalLlmReranker | None = None
-_LOCK = threading.Lock()
+# ALL native llama.cpp access (embedder + reranker, load + score) shares this
+# one process-global lock — ggml is not safe under concurrent contexts. See
+# simba.memory._llama. Guards the lazy load below AND each score() call.
+_LOCK = LLAMA_LOCK
 
 # Intent gate (spec 22, LME-gate correction). The reranker is a POINTWISE relevance
 # pass: it helps latest/compositional-multihop recall but HURTS multi-evidence
@@ -150,7 +153,8 @@ class _CrossEncoderReranker:
         return cls(model)
 
     def score(self, query: str, doc: str) -> float:
-        res = self._model.create_embedding(f"{query}</s>{doc}")
+        with _LOCK:
+            res = self._model.create_embedding(f"{query}</s>{doc}")
         emb = res["data"][0]["embedding"]
         return float(emb[0]) if isinstance(emb, list) else float(emb)
 
@@ -198,13 +202,14 @@ class _LocalLlmReranker:
         )
 
     def score(self, query: str, doc: str) -> float:
-        toks = self._model.tokenize(
-            self._prompt(query, doc).encode("utf-8"), add_bos=True, special=True
-        )
-        self._model.reset()
-        self._model.eval(toks)
-        logits = self._model.eval_logits[-1]  # final (assistant) position
-        return float(logits[self._true_token])
+        with _LOCK:
+            toks = self._model.tokenize(
+                self._prompt(query, doc).encode("utf-8"), add_bos=True, special=True
+            )
+            self._model.reset()
+            self._model.eval(toks)
+            logits = self._model.eval_logits[-1]  # final (assistant) position
+            return float(logits[self._true_token])
 
 
 # ── lazy singleton accessors (patched in unit tests) ─────────────────────────

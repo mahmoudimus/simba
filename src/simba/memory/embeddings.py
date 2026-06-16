@@ -13,6 +13,8 @@ import logging
 import pathlib
 from typing import TYPE_CHECKING
 
+from simba.memory._llama import LLAMA_LOCK
+
 if TYPE_CHECKING:
     import llama_cpp
 
@@ -162,26 +164,35 @@ class EmbeddingService:
 
         # Suppress C-level ggml/llama.cpp log noise (bf16 kernel skips, etc.)
         # Store on class to prevent garbage collection of the C callback.
-        if not hasattr(EmbeddingService, "_llama_log_cb"):
-            EmbeddingService._llama_log_cb = llama_cpp.llama_log_callback(
-                lambda *_args: None
-            )
-            llama_cpp.llama_log_set(EmbeddingService._llama_log_cb, ctypes.c_void_p(0))
+        # Under LLAMA_LOCK: a model load (buffer allocation) racing a live embed
+        # or reranker score is the exact crash trigger (cross-encoder loads while
+        # the daemon serves recalls — see _llama.py).
+        with LLAMA_LOCK:
+            if not hasattr(EmbeddingService, "_llama_log_cb"):
+                EmbeddingService._llama_log_cb = llama_cpp.llama_log_callback(
+                    lambda *_args: None
+                )
+                llama_cpp.llama_log_set(
+                    EmbeddingService._llama_log_cb, ctypes.c_void_p(0)
+                )
 
-        return llama_cpp.Llama(
-            model_path=str(model_path),
-            embedding=True,
-            n_ctx=0,  # use model's training context (2048 for nomic-embed-text)
-            pooling_type=llama_cpp.LLAMA_POOLING_TYPE_MEAN,
-            n_gpu_layers=self.config.n_gpu_layers,
-            verbose=False,
-        )
+            return llama_cpp.Llama(
+                model_path=str(model_path),
+                embedding=True,
+                n_ctx=0,  # use model's training context (2048 for nomic-embed-text)
+                pooling_type=llama_cpp.LLAMA_POOLING_TYPE_MEAN,
+                n_gpu_layers=self.config.n_gpu_layers,
+                verbose=False,
+            )
 
     def _embed_sync(self, text: str, task: TaskType) -> list[float]:
         """Synchronous embedding call (runs in executor thread)."""
         assert self._model is not None
         prefixed = self._prefixed(text, task)
-        result = self._model.create_embedding(prefixed)
+        # Serialize ALL native llama.cpp access process-wide (see _llama.py):
+        # a concurrent reranker score corrupts shared ggml buffers otherwise.
+        with LLAMA_LOCK:
+            result = self._model.create_embedding(prefixed)
         embedding = result["data"][0]["embedding"]
         assert isinstance(embedding, list)
         return embedding  # type: ignore[return-value]
