@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **pi tool-gating** (#77). The pi bridge now wires pi's `tool_call` event to
+  simba's canonical `pre_tool` path, giving pi the same command-level
+  enforcement Claude Code and Codex get from `PreToolUse` — reusing the same
+  redirect and `TOOL_RULE` rules, with no logic duplicated in TypeScript. Before
+  a tool runs, simba can: **block** the call on a redirect *deny* or a strong
+  `TOOL_RULE` match (escalated to a hard block via `escalated_block`, since pi's
+  `tool_call` has no context-injection channel); **silently rewrite** it on a
+  redirect *rewrite* (e.g. the universal `rg -rn` → `rg -n` fix) by mutating
+  `event.input` in place — no model round-trip; or **allow** it (context-only
+  injections like recall hints and weak `TOOL_RULE` warnings are dropped, having
+  nowhere to render). The `PreToolUse` path was canonicalized first and remains
+  byte-identical for Claude/Codex (characterization-tested). The daemon stays
+  authoritative — gating is governed by the existing `hooks.redirect_enabled` /
+  `hooks.rule_check_enabled` / `permission_deny_similarity` config, so the
+  extension always wires the gate and Python decides. The pitfall/doctrine gate
+  (which keys on the agent's reasoning) is deferred.
+
 ## [0.8.2] — 2026-06-16
 
 ### Added
