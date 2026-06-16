@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-06-16
+
+### Added
+
+- **Persistent query-embedding cache for the daemon** (#76). After the 0.8.1
+  concurrency fix serialized all llama.cpp calls, a *repeated* recall query
+  re-embedded from scratch each time and the embeds queued behind the lock —
+  tail latency climbed to ~8s under a burst (e.g. the conflict detector firing
+  the same pairwise check N times). The existing content-hash `embedding_cache`
+  is now wired into the daemon's `embed_query`: identical queries hit a ~ms
+  sqlite lookup instead of a fresh GGUF embed, and the cache is **persistent**
+  so it survives daemon restarts. `memory.embed_cache_enabled` (default on),
+  `memory.embed_cache_path` (empty → `<db dir>/embed_cache.db`). Correctness-
+  neutral — the key includes `model_id`, so a model swap can't serve a stale
+  vector.
+
 ## [0.8.1] — 2026-06-16
 
 ### Fixed
