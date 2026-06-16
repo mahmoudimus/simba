@@ -165,12 +165,22 @@ and rule logic stays in Python; the extension is pure marshalling.
 |----------|-----------------|------------|
 | `session_start` | `session_start` | Daemon health + onboarding context |
 | `before_agent_start` | `prompt_submit` | Recall relevant memories, inject as a message |
+| `tool_call` | `pre_tool` | **Tool gate**: block a forbidden command or silently rewrite a redirect, before the tool runs |
 | `agent_end` | `stop` | Capture error patterns / rule signal from the response |
 | `session_before_compact` | `pre_compact` | Export the transcript for learning extraction |
 
-This is the **MVP**: the memory loop (recall-on-prompt, capture-on-stop, daemon
-health, transcript export). Tool-gating (`PreToolUse`-style deny/rewrite) and
-skill registration under pi are future work.
+The **tool gate** reuses the same redirect and `TOOL_RULE` rules as Claude Code
+and Codex's `PreToolUse` hook. Before a tool runs, simba can **block** a forbidden
+command (a redirect deny, or a strong `TOOL_RULE` match — escalated to a hard
+block since pi's `tool_call` has no context channel) or **silently rewrite** it
+(e.g. the universal `rg -rn` → `rg -n` fix, applied by mutating the tool input in
+place — no model round-trip). Context-only injections (recall hints, weak
+`TOOL_RULE` warnings) have nowhere to go on `tool_call` and are dropped.
+
+This rounds out the memory loop (recall-on-prompt, capture-on-stop, daemon
+health, transcript export) with command-level enforcement. The
+pitfall/doctrine gate (which keys on the agent's reasoning) and skill
+registration under pi are future work.
 
 ```bash
 simba pi-install            # Write the bridge extension + register it in pi's settings.json
