@@ -76,6 +76,28 @@ def test_hook_endpoint_pre_tool_returns_canonical_fields():
     assert body["escalated_block"] is None
 
 
+def test_hook_endpoint_context_returns_canonical_fields():
+    # pi-only context re-injection (spec 27). Off by default → empty context, 200.
+    resp = _client().post(
+        "/hook/context",
+        json={"messages_text": "let me edit the schema", "cwd": "/tmp"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["additional_context"] == ""  # lever off → nothing to re-inject
+    assert "memory_count" in body
+
+
+def test_hook_endpoint_message_end_returns_canonical_fields():
+    # pi-only message_end doctrine-verify (spec 27). Off by default → no block, 200.
+    resp = _client().post(
+        "/hook/message_end",
+        json={"message_text": "I will just skip the failing test", "cwd": "/tmp"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["block_reason"] is None
+
+
 def test_stop_capture_uses_payload_cwd(tmp_path):
     # A transcript with an error so the tailor pipeline actually writes to disk;
     # the write must land under the payload cwd, never the daemon/process cwd.
