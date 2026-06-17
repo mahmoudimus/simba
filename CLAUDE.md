@@ -33,7 +33,7 @@ StopHook           → Monitor for [✓ rules] signal (memory-guardian)
 
 Hook output follows the Claude Code hook protocol: read JSON from stdin, write `hookSpecificOutput` JSON to stdout with `additionalContext` for context injection.
 
-The `simba` Python package supports three coding-agent runtimes: **Claude Code** (native hooks), **Codex** (`.codex/hooks.json`, same handlers minus PreCompact plus PermissionRequest), and **pi** (`@earendil-works/pi-coding-agent`) via a thin bundled `src/simba/pi/extension/simba.ts` bridge that forwards pi lifecycle events to the daemon's `POST /hook/{event}` endpoint (CLI fallback). Install per runtime with `simba install` / `simba codex-install` / `simba pi-install`.
+The `simba` Python package supports three coding-agent runtimes: **Claude Code** (native hooks), **Codex** (`.codex/hooks.json`, same handlers including PreCompact plus PermissionRequest), and **pi** (`@earendil-works/pi-coding-agent`) via a thin bundled `src/simba/pi/extension/simba.ts` bridge that forwards pi lifecycle events to the daemon's `POST /hook/{event}` endpoint (CLI fallback). Install per runtime with `simba install` / `simba codex-install` / `simba pi-install`.
 
 ### claude-tailor (tailor-nano)
 

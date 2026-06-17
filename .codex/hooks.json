@@ -9,7 +9,7 @@
             "timeout": 15
           }
         ],
-        "matcher": "startup|resume|clear"
+        "matcher": "startup|resume|clear|compact"
       }
     ],
     "UserPromptSubmit": [
@@ -45,6 +45,18 @@
           }
         ],
         "matcher": "Bash|apply_patch|Edit|Write"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "simba hook PreCompact",
+            "timeout": 5
+          }
+        ],
+        "matcher": "manual|auto"
       }
     ],
     "Stop": [

@@ -1,6 +1,6 @@
 ---
 name: simba-codex-lifecycle
-description: Enforce Simba's Codex lifecycle routine for coding tasks. Use when starting or finishing implementation work in a Simba-enabled repo to run `simba codex-status` at start, `simba codex-extract` when extraction is pending, and `simba codex-finalize` before final handoff.
+description: Enforce Simba's Codex lifecycle routine for coding tasks. Use when starting or finishing implementation work in a Simba-enabled repo to run `simba codex-status` at start, handle any still-pending raw Codex transcript extraction, and run `simba codex-finalize` before final handoff.
 ---
 
 # Simba Codex Lifecycle
@@ -26,7 +26,15 @@ Do not run this on every prompt. Re-run only if:
 - memory actions fail unexpectedly,
 - you are about to finalize and want a fresh check.
 
-3. If status reports `pending_extraction`, run:
+3. Codex `PreCompact` is the primary automatic session-analysis path. If
+   `codex-status` still reports a raw JSONL transcript as `pending_extraction`
+   and you need to analyze it now, run the explicit storage path:
+
+```bash
+simba codex-extract --run
+```
+
+If that reports no candidates or fails, run the manual prompt path:
 
 ```bash
 simba codex-extract
@@ -58,4 +66,6 @@ uvx --from /Users/mahmoud/src/ai/simba simba codex-status
 
 - Mention whether `codex-recall` returned relevant memories and how they informed your approach.
 - Mention in your final update that lifecycle checks were run.
-- If `codex-status` reports pending extraction, do not ignore it. Run `codex-extract` and report that action.
+- If you run `codex-extract --run`, mention the stored / duplicate / error
+  counts. If extraction remains pending, run `codex-extract` and report that
+  action.

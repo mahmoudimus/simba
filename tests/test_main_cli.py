@@ -9,6 +9,28 @@ import pathlib
 import simba.__main__ as cli
 
 
+def _write_codex_session(
+    codex_home: pathlib.Path,
+    *,
+    session_id: str = "abc123",
+    cwd: str = "/tmp/codex-project",
+    text: str | None = None,
+) -> pathlib.Path:
+    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    codex_jsonl = session_dir / f"rollout-2026-02-20T08-33-13-{session_id}.jsonl"
+    lines = [
+        {
+            "type": "session_meta",
+            "payload": {"id": session_id, "cwd": cwd},
+        }
+    ]
+    if text:
+        lines.append({"message": {"content": [{"type": "text", "text": text}]}})
+    codex_jsonl.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+    return codex_jsonl
+
+
 def test_install_codex_skills_copies_skill_and_agents(tmp_path: pathlib.Path) -> None:
     skills_dir = tmp_path / "skills"
 
@@ -244,12 +266,166 @@ def test_cmd_codex_status_shows_pending_extraction(
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp())
 
-    rc = cli._cmd_codex_status([])
+    rc = cli._cmd_codex_status(["--auto-extract"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "pending_extraction" in out
     assert "simba codex-extract" in out
     assert "transcript source: codex" in out
+
+
+def test_cmd_codex_status_auto_extracts_and_marks_ledger(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    transcript = _write_codex_session(
+        codex_home,
+        text=(
+            "Always use uv run for Simba CLI commands because it fixes lifecycle tests."
+        ),
+    )
+
+    class _HealthResp:
+        status_code = 200
+
+        def json(self):
+            return {"memoryCount": 10, "embeddingModel": "test"}
+
+    class _StoreResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "stored", "id": "mem_1"}
+
+    import httpx
+
+    import simba.hooks._memory_client
+
+    posts: list[tuple[str, dict]] = []
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _HealthResp())
+    monkeypatch.setattr(
+        simba.hooks._memory_client, "daemon_url", lambda: "http://daemon"
+    )
+
+    def _fake_post(url: str, json=None, timeout: float = 0.0):
+        if url.endswith("/sync"):
+            return _StoreResp()
+        posts.append((url, json))
+        return _StoreResp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._cmd_codex_status(["--auto-extract"])
+    assert rc == 0
+    assert len(posts) == 1
+    assert posts[0][0] == "http://daemon/store"
+    payload = posts[0][1]
+    assert payload["sessionSource"] == "abc123"
+    assert payload["projectPath"] == "/tmp/codex-project"
+    assert payload["content"].startswith("Always use uv run")
+
+    ledger_path = codex_home / "simba" / "extractions.jsonl"
+    record = json.loads(ledger_path.read_text().strip())
+    assert record["status"] == "extracted"
+    assert record["session_id"] == "abc123"
+    assert record["project_path"] == "/tmp/codex-project"
+    assert record["transcript_path"] == str(transcript)
+    assert record["stored"] == 1
+    out = capsys.readouterr().out
+    assert "auto-extract: status=stored" in out
+
+    rc = cli._cmd_codex_status([])
+    assert rc == 0
+    assert len(posts) == 1
+    out = capsys.readouterr().out
+    assert "extraction status: extracted" in out
+
+
+def test_cmd_codex_extract_run_skips_already_extracted_transcript(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    transcript = _write_codex_session(
+        codex_home,
+        text=(
+            "Always use uv run for Simba CLI commands because it fixes lifecycle tests."
+        ),
+    )
+
+    import httpx
+
+    import simba.codex.ledger as codex_ledger
+
+    fingerprint = codex_ledger.transcript_fingerprint(transcript)
+    assert fingerprint is not None
+    codex_ledger.append_extracted(
+        codex_home=codex_home,
+        transcript_path=str(transcript),
+        session_id="abc123",
+        project_path="/tmp/codex-project",
+        fingerprint=fingerprint,
+        candidates=1,
+        stored=1,
+        duplicates=0,
+    )
+
+    def _unexpected_post(*args, **kwargs):
+        raise AssertionError("already-extracted transcript should not be stored")
+
+    monkeypatch.setattr(httpx, "post", _unexpected_post)
+
+    rc = cli._cmd_codex_extract(["--run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already_extracted" in out
+
+
+def test_cmd_codex_extract_run_keeps_pending_on_store_error(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    _write_codex_session(
+        codex_home,
+        text=(
+            "Always use uv run for Simba CLI commands because it fixes lifecycle tests."
+        ),
+    )
+
+    class _StoreResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "error"}
+
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(
+        simba.hooks._memory_client, "daemon_url", lambda: "http://daemon"
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _StoreResp())
+
+    rc = cli._cmd_codex_extract(["--run"])
+    assert rc == 1
+    assert not (codex_home / "simba" / "extractions.jsonl").exists()
+    out = capsys.readouterr().out
+    assert "store_errors" in out
+    assert "errors=1" in out
 
 
 def test_cmd_codex_finalize_runs_signal_and_reflection(
@@ -284,6 +460,17 @@ def test_cmd_codex_finalize_runs_signal_and_reflection(
     assert called["payload"]["transcript_path"] == str(transcript)
     out = capsys.readouterr().out
     assert "signal check: ok" in out
+
+
+def test_codex_config_visible_via_config_cli(
+    tmp_path: pathlib.Path,
+    capsys,
+) -> None:
+    import simba.config_cli
+
+    rc = simba.config_cli.cmd_get("codex.auto_extract_on_status", tmp_path)
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "False"
 
 
 def test_cmd_codex_recall_prints_memories(monkeypatch, capsys) -> None:
@@ -759,12 +946,15 @@ class TestCodexProjectHooks:
         assert hooks_path.exists()
         data = json.loads(hooks_path.read_text())
         assert set(data["hooks"]) == set(cli._CODEX_HOOK_EVENTS)
+        assert "PreCompact" in data["hooks"]
 
     def test_write_has_correct_matchers(self, tmp_path: pathlib.Path) -> None:
         cli._write_codex_project_hooks(tmp_path)
         data = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
         hooks = data["hooks"]
         assert hooks["SessionStart"][0]["matcher"] == cli._CODEX_SESSION_MATCHER
+        assert "compact" in hooks["SessionStart"][0]["matcher"]
+        assert hooks["PreCompact"][0]["matcher"] == cli._CODEX_COMPACT_MATCHER
         assert hooks["PreToolUse"][0]["matcher"] == cli._CODEX_TOOL_MATCHER
         assert hooks["PermissionRequest"][0]["matcher"] == cli._CODEX_TOOL_MATCHER
         assert "matcher" not in hooks["UserPromptSubmit"][0]

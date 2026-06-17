@@ -7,8 +7,8 @@ Usage:
     simba codex-install    Install bundled skills for Codex (~/.codex/skills)
     simba codex-install --remove
                            Remove bundled Codex skills
-    simba codex-status     Check daemon health + pending transcript extraction
-    simba codex-extract    Show extraction prompt for pending transcript
+    simba codex-status     Check daemon health + transcript extraction status
+    simba codex-extract    Show manual extraction prompt for pending transcript
     simba codex-recall     Query semantic memory (/recall) for a text query
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
@@ -95,12 +95,14 @@ _CLAUDE_HOOK_EVENTS = (
     "SubagentStop",
 )
 
-# Subset that Codex understands.  Codex has no PreCompact event.
+# Subset that Codex understands.  Codex also has PermissionRequest, which
+# Claude Code does not expose.
 _CODEX_HOOK_EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    "PreCompact",
     "Stop",
     "SubagentStop",
     "PermissionRequest",
@@ -215,7 +217,8 @@ def _build_hooks_config() -> dict:
 
 # Matchers used in per-project .codex/hooks.json
 _CODEX_TOOL_MATCHER = "Bash|apply_patch|Edit|Write"
-_CODEX_SESSION_MATCHER = "startup|resume|clear"
+_CODEX_SESSION_MATCHER = "startup|resume|clear|compact"
+_CODEX_COMPACT_MATCHER = "manual|auto"
 
 
 def _build_codex_hooks_config() -> dict:
@@ -235,6 +238,8 @@ def _build_codex_hooks_config() -> dict:
         }
         if event == "SessionStart":
             entry["matcher"] = _CODEX_SESSION_MATCHER
+        elif event == "PreCompact":
+            entry["matcher"] = _CODEX_COMPACT_MATCHER
         elif event in ("PreToolUse", "PostToolUse", "PermissionRequest"):
             entry["matcher"] = _CODEX_TOOL_MATCHER
         # UserPromptSubmit and Stop: no matcher (Codex ignores it anyway)
@@ -327,12 +332,24 @@ def _latest_codex_transcript_metadata() -> dict[str, Any] | None:
     except OSError:
         return None
 
+    import simba.codex.ledger as codex_ledger
+
+    fingerprint = codex_ledger.transcript_fingerprint(latest)
+    status = codex_ledger.status_for(
+        codex_home=_codex_home(),
+        transcript_path=str(latest),
+        session_id=session_id,
+        project_path=project_path,
+        fingerprint=fingerprint,
+    )
+
     return {
         "session_id": session_id,
         "project_path": project_path,
         "transcript_path": str(latest),
-        "status": "pending_extraction",
+        "status": status,
         "source": "codex",
+        "_fingerprint": fingerprint,
     }
 
 
@@ -663,12 +680,150 @@ def _cmd_codex_install(args: list[str]) -> int:
     return 0
 
 
-def _cmd_codex_status(args: list[str]) -> int:
-    """Check Codex-oriented Simba status: daemon + pending extraction."""
-    del args
+def _run_codex_extraction(
+    meta: dict[str, Any],
+    *,
+    max_items: int,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Extract and store learnings for one Codex transcript metadata record."""
     import httpx
 
+    import simba.codex.ledger as codex_ledger
     import simba.hooks._memory_client
+
+    transcript = str(meta.get("transcript_path", ""))
+    session_id = str(meta.get("session_id", ""))
+    project_path = str(meta.get("project_path", pathlib.Path.cwd()))
+    status = str(meta.get("status", ""))
+
+    if not transcript:
+        return {
+            "status": "error",
+            "message": "latest transcript metadata is missing transcript_path",
+        }
+
+    if status and status != codex_ledger.PENDING and not force:
+        return {
+            "status": "already_extracted",
+            "candidates": 0,
+            "stored": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "message": f"extraction status is '{status}'",
+        }
+
+    transcript_path = pathlib.Path(transcript)
+    fingerprint = meta.get("_fingerprint")
+    if not isinstance(fingerprint, dict):
+        fingerprint = codex_ledger.transcript_fingerprint(transcript_path)
+    if not fingerprint:
+        return {
+            "status": "error",
+            "message": f"could not fingerprint transcript {transcript_path}",
+        }
+
+    if not force and codex_ledger.is_extracted(
+        codex_home=_codex_home(),
+        transcript_path=transcript,
+        session_id=session_id,
+        project_path=project_path,
+        fingerprint=fingerprint,
+    ):
+        return {
+            "status": "already_extracted",
+            "candidates": 0,
+            "stored": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "message": "transcript fingerprint already extracted",
+        }
+
+    text = _extract_transcript_text(transcript_path)
+    if not text.strip():
+        return {
+            "status": "no_content",
+            "candidates": 0,
+            "stored": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "message": f"no readable transcript content found in {transcript_path}",
+        }
+
+    learnings = _extract_learnings(text, max_items=max_items)
+    if not learnings:
+        return {
+            "status": "no_candidates",
+            "candidates": 0,
+            "stored": 0,
+            "duplicates": 0,
+            "errors": 0,
+            "message": "no candidate learnings found heuristically",
+        }
+
+    daemon = simba.hooks._memory_client.daemon_url()
+    stored = 0
+    duplicates = 0
+    errors = 0
+
+    for mem in learnings:
+        payload = {
+            "type": mem["type"],
+            "content": mem["content"],
+            "context": mem["context"],
+            "confidence": mem["confidence"],
+            "sessionSource": session_id,
+            "projectPath": project_path,
+        }
+        try:
+            resp = httpx.post(f"{daemon}/store", json=payload, timeout=10.0)
+            resp.raise_for_status()
+            body = resp.json()
+            store_status = body.get("status")
+            if store_status in {"stored", "superseded"}:
+                stored += 1
+            elif store_status == "duplicate":
+                duplicates += 1
+            else:
+                errors += 1
+        except (httpx.HTTPError, ValueError):
+            errors += 1
+
+    result = {
+        "status": "stored" if errors == 0 else "store_errors",
+        "candidates": len(learnings),
+        "stored": stored,
+        "duplicates": duplicates,
+        "errors": errors,
+    }
+    if errors == 0 and stored + duplicates == len(learnings):
+        ledger = codex_ledger.append_extracted(
+            codex_home=_codex_home(),
+            transcript_path=transcript,
+            session_id=session_id,
+            project_path=project_path,
+            fingerprint=fingerprint,
+            candidates=len(learnings),
+            stored=stored,
+            duplicates=duplicates,
+        )
+        result["ledger_path"] = str(ledger)
+    return result
+
+
+def _cmd_codex_status(args: list[str]) -> int:
+    """Check Codex-oriented Simba status: daemon + transcript extraction."""
+    import httpx
+
+    import simba.codex.config  # registers "codex"
+    import simba.codex.ledger as codex_ledger
+    import simba.config
+    import simba.hooks._memory_client
+
+    cfg = simba.config.load("codex")
+    auto_extract = (cfg.auto_extract_on_status or "--auto-extract" in args) and (
+        "--no-auto-extract" not in args
+    )
 
     url = simba.hooks._memory_client.daemon_url()
     print(f"[codex] daemon: {url}")
@@ -707,17 +862,55 @@ def _cmd_codex_status(args: list[str]) -> int:
     print(f"[codex] latest transcript: {transcript or 'unknown'}")
     print(f"[codex] latest session: {session_id or 'unknown'}")
     print(f"[codex] extraction status: {status}")
-    if status == "pending_extraction":
-        print("[codex] next: run `simba codex-extract`")
+    if status == codex_ledger.PENDING:
+        if auto_extract and health_ok:
+            result = _run_codex_extraction(
+                meta,
+                max_items=max(1, int(cfg.auto_extract_max_items)),
+            )
+            r_status = result.get("status", "unknown")
+            print(
+                "[codex] auto-extract: "
+                f"status={r_status} candidates={result.get('candidates', 0)} "
+                f"stored={result.get('stored', 0)} "
+                f"duplicate={result.get('duplicates', 0)} "
+                f"errors={result.get('errors', 0)}"
+            )
+            if result.get("ledger_path"):
+                print(f"[codex] extraction ledger: {result['ledger_path']}")
+            if r_status != "stored":
+                if result.get("message"):
+                    print(f"[codex] auto-extract detail: {result['message']}")
+                print("[codex] next: run `simba codex-extract` for the manual prompt")
+        else:
+            if auto_extract and not health_ok:
+                reason = "skipped because memory daemon is down"
+            elif "--no-auto-extract" in args:
+                reason = "disabled for this run"
+            else:
+                reason = "disabled by codex.auto_extract_on_status"
+            print(f"[codex] auto-extract: {reason}")
+            print("[codex] next: run `simba codex-extract`")
     return 0
 
 
 def _cmd_codex_extract(args: list[str]) -> int:
-    """Print a ready-to-run extraction prompt and optionally mark it done."""
-    import httpx
+    """Print a ready-to-run extraction prompt or run extraction explicitly."""
+    import simba.codex.config  # registers "codex"
+    import simba.config
 
+    cfg = simba.config.load("codex")
     mark_done = "--mark-done" in args
     run_mode = "--run" in args
+    force = "--force" in args
+    max_items = max(1, int(cfg.auto_extract_max_items))
+    raw_max_items = _parse_opt_value(args, "--max-items")
+    if raw_max_items:
+        try:
+            max_items = max(1, int(raw_max_items))
+        except ValueError:
+            print(f"Error: --max-items must be an integer, got {raw_max_items!r}")
+            return 1
 
     meta = _latest_codex_transcript_metadata()
     if not meta:
@@ -737,52 +930,31 @@ def _cmd_codex_extract(args: list[str]) -> int:
         print(f"Extraction status is '{status}' (not pending).")
 
     if run_mode:
-        transcript_path = pathlib.Path(transcript)
-        text = _extract_transcript_text(transcript_path)
-        if not text.strip():
-            print(f"No readable transcript content found in {transcript_path}")
-            return 1
-
-        learnings = _extract_learnings(text, max_items=15)
-        if not learnings:
-            print("No candidate learnings found heuristically.")
+        result = _run_codex_extraction(meta, max_items=max_items, force=force)
+        print(
+            f"[codex] extract run complete: status={result.get('status', 'unknown')} "
+            f"candidates={result.get('candidates', 0)} "
+            f"stored={result.get('stored', 0)} "
+            f"duplicate={result.get('duplicates', 0)} "
+            f"errors={result.get('errors', 0)}"
+        )
+        if result.get("ledger_path"):
+            print(f"[codex] extraction ledger: {result['ledger_path']}")
+        if result.get("message"):
+            print(f"[codex] extract detail: {result['message']}")
+        if result.get("status") == "no_candidates":
             print(
                 "Fallback: run `simba codex-extract` without --run for manual prompt."
             )
-            return 1
-
-        daemon = "http://localhost:8741"
-        stored = 0
-        duplicates = 0
-        errors = 0
-
-        for mem in learnings:
-            payload = {
-                "type": mem["type"],
-                "content": mem["content"],
-                "context": mem["context"],
-                "confidence": mem["confidence"],
-                "sessionSource": session_id,
-                "projectPath": project_path,
-            }
-            try:
-                resp = httpx.post(f"{daemon}/store", json=payload, timeout=10.0)
-                resp.raise_for_status()
-                body = resp.json()
-                if body.get("status") == "stored":
-                    stored += 1
-                elif body.get("status") == "duplicate":
-                    duplicates += 1
-                else:
-                    errors += 1
-            except (httpx.HTTPError, ValueError):
-                errors += 1
-
-        print(
-            f"[codex] extract run complete: candidates={len(learnings)} "
-            f"stored={stored} duplicate={duplicates} errors={errors}"
-        )
+        if result.get("status") in {"stored", "already_extracted"}:
+            return 0
+        return 1
     else:
+        if mark_done:
+            print(
+                "[codex] --mark-done is ignored without --run; "
+                "Codex sessions are marked extracted only after successful storage."
+            )
         print("Use this prompt with Codex (or the `memories-learn` skill):")
         print("---")
         print(
@@ -801,20 +973,6 @@ def _cmd_codex_extract(args: list[str]) -> int:
             "Types: WORKING_SOLUTION, GOTCHA, PATTERN, DECISION, FAILURE, PREFERENCE."
         )
         print("---")
-
-    if mark_done:
-        meta_path = meta.get("_metadata_path")
-        if isinstance(meta_path, str) and meta_path:
-            meta["status"] = "extracted"
-            to_write = {k: v for k, v in meta.items() if not k.startswith("_")}
-            target = pathlib.Path(meta_path)
-            target.write_text(json.dumps(to_write, indent=2))
-            print(f"Updated extraction status to 'extracted' in {target}")
-        else:
-            print(
-                "Mark-done not persisted for Codex session JSONL metadata "
-                "(no writable latest.json)."
-            )
 
     return 0
 
@@ -914,9 +1072,10 @@ def _cmd_codex_automation(args: list[str]) -> int:
     print(
         '::automation-update{mode="suggested create" '
         'name="Simba Codex Health" '
-        'prompt="Run simba codex-status and report whether extraction is pending '
-        "or memory daemon is down. If pending extraction exists, include the exact "
-        'simba codex-extract command in the result." '
+        'prompt="Run simba codex-status --auto-extract and report whether memory '
+        "is down, whether auto-extraction ran, and whether extraction is still "
+        "pending. "
+        'If pending remains, include the exact simba codex-extract command." '
         'rrule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" '
         f'cwds="{cwd}" status="ACTIVE"}}'
     )

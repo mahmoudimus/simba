@@ -105,7 +105,7 @@ Simba ships both Codex-native skills and a full Codex hook integration.
 
 `.codex/hooks.json` registers the same handlers Claude Code uses, so memory
 recall, rule reinforcement, and TOOL_RULE checks all fire under Codex too.
-Codex's event set differs slightly: there is no `PreCompact`, but there is a
+Codex's event set differs slightly: it supports `PreCompact` and also exposes a
 `PermissionRequest` event that Claude Code doesn't expose.
 
 | Event | Claude Code | Codex |
@@ -115,7 +115,7 @@ Codex's event set differs slightly: there is no `PreCompact`, but there is a
 | PreToolUse | ✓ | ✓ |
 | PostToolUse | ✓ | ✓ |
 | Stop | ✓ | ✓ |
-| PreCompact | ✓ | — |
+| PreCompact | ✓ | ✓ |
 | PermissionRequest | — | ✓ |
 
 Run `simba codex-install` to set up everything Codex needs:
@@ -129,18 +129,53 @@ simba codex-install --remove  # Removes both skills and the feature flag
 The first time you open a Codex session in a project that ships `.codex/hooks.json`,
 Codex will prompt you to trust it — accept so hooks load. The hooks invoke
 the same `simba hook <Event>` dispatcher used by Claude Code; no extra step
-is needed beyond having `simba` on `PATH`.
+is needed beyond having `simba` on `PATH`. Codex may launch multiple matching
+command hooks for the same event concurrently, so Simba's compaction path is
+fail-soft, idempotent, and does not assume it runs before or after another hook.
 
 ### Skills + CLI
 
 ```bash
 simba codex-install           # Install bundled Codex skills to $CODEX_HOME/skills
 simba codex-install --remove  # Remove bundled Codex skills
-simba codex-status            # Check daemon health + pending extraction
-simba codex-extract           # Print extraction prompt for latest transcript
+simba codex-status            # Check daemon health + extraction status
+simba codex-status --auto-extract
+                              # Explicit raw-JSONL fallback extraction
+simba codex-extract           # Print manual extraction prompt for latest transcript
+simba codex-extract --run     # Run the conservative heuristic extractor now
 simba codex-recall "<query>"  # Query semantic memory via /recall
 simba codex-finalize          # Run end-of-task signal/error checks
 simba codex-automation        # Print a suggested Codex automation directive
+```
+
+Codex `PreCompact` runs the same Simba transcript export path as Claude Code:
+the active JSONL transcript is converted to
+`~/.claude/transcripts/{sessionId}/transcript.md`, marked
+`pending_extraction`, and handed to the RLM digest / episodic consolidation
+flow when those engines are enabled.
+
+For raw Codex JSONL sessions under `${CODEX_HOME:-$HOME/.codex}/sessions/`
+where `PreCompact` did not run or has not been trusted yet, `simba codex-status
+--auto-extract` is an explicit fallback. It uses the newest Codex JSONL
+transcript for the current project and runs the same conservative path as
+`simba codex-extract --run` when the transcript is pending and the memory daemon
+is healthy. Successful runs store memories with the Codex session id as
+`sessionSource` and the transcript `cwd` as `projectPath`.
+
+Idempotency is tracked separately from memory duplicate detection:
+`${CODEX_HOME:-$HOME/.codex}/simba/extractions.jsonl` is an append-only Simba
+ledger keyed by transcript path, session id, project path, and content
+fingerprint. The ledger is written only after all store calls are accepted
+(`stored`, `superseded`, or `duplicate`). If an active transcript grows, its
+fingerprint changes and it becomes pending again; unchanged transcripts are
+skipped without hitting `/store`.
+
+Configure the behavior with:
+
+```bash
+simba config get codex.auto_extract_on_status
+simba config set codex.auto_extract_on_status true
+simba config set codex.auto_extract_max_items 15
 ```
 
 Default install path:
@@ -337,6 +372,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ✅ | Tool-call redirect | `hooks.redirect_enabled` (`redirect_mode=deny`) | Steer bare commands to better tooling (`python`→`uv run`, …). |
 | ✅ | Auto-learn from failures | `hooks.auto_learn_from_failures` | PostToolUse: record tool failures as rules (probe/reader/exit-code guards on). |
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
+| ⬜ | Codex raw-transcript fallback | `codex.auto_extract_on_status` | Optional `codex-status` fallback stores learnings from pending Codex JSONL transcripts and records an append-only extraction ledger. |
 | ✅ | Guardian | `guardian.core_injection_mode` | Re-inject `SIMBA:core` rule blocks every prompt / after compaction; `capsule` mode injects a compact compiled reminder. |
 | ✅ | Reflection | `reflection.enabled` | Background pattern/reflection extraction (scheduler on, project-scoped). |
 | ✅ | Episodic consolidation | `episodes.enabled` | Consolidate episodes (auto on PreCompact). |
@@ -656,15 +692,30 @@ simba neuron run --root-dir .
 
 Simba implements the **Recursive Language Model (RLM)** paradigm ([Zhang et al., arXiv:2512.24601](https://arxiv.org/abs/2512.24601)): rather than cramming a long context into the model, the full text is treated as *external data the agent navigates with code* — `grep`/`peek`/`window` over it, recursing into only the relevant slices.
 
-Simba already exports every session's **full transcript** on `PreCompact` (to `~/.claude/transcripts/{id}/`). Normally those are mined once for ≤200-char memories and then sit idle. RLM turns them into a **queryable, lossless store**: a normal vector recall becomes a *pointer* into the full transcript (every memory carries its `sessionSource`), and the agent navigates the original text to reconstruct exactly what happened — no information loss from summarization.
+Simba exports every Claude Code, Codex, and pi session's **full transcript** on
+`PreCompact` (to `~/.claude/transcripts/{id}/`). Normally those are mined once
+for <=200-char memories and then sit idle. RLM turns them into a **queryable,
+lossless store**: a normal vector recall becomes a *pointer* into the full
+transcript (every memory carries its `sessionSource`), and the agent navigates
+the original text to reconstruct exactly what happened — no information loss
+from summarization.
 
-**How it works (Claude drives the recursion):**
+For raw Codex JSONL sessions that did not pass through `PreCompact`, the
+explicit fallback (`simba codex-status --auto-extract` or
+`simba codex-extract --run`) stores memories with the same `sessionSource`, so
+ordinary recall and RLM pointers can reconnect them to the lossless transcript
+when the transcript is available.
+
+**How lossless navigation works:**
 
 1. `rlm_recall("what did we decide about X")` → project-scoped vector recall returns **pointers** `{snippet, transcript_id, similarity, available}`.
 2. `rlm_grep(transcript_id, "X")` → matches with line numbers + char offsets.
 3. `rlm_peek` / `rlm_window` → read the exact region losslessly; repeat across regions/transcripts as needed.
 
-By default Simba runs **no LLM** — it exposes navigation primitives as MCP tools on the [Neuron](#neuron--neuro-symbolic-logic-server) server and the agent already in the loop performs the recursion. An **opt-in autonomous engine** (`rlm.engine`) can also run it without any agent present — see [below](#autonomous-engine-opt-in).
+RLM exposes navigation primitives as MCP tools on the
+[Neuron](#neuron--neuro-symbolic-logic-server) server, so the agent already in
+the loop can perform the recursion. Simba also has an autonomous engine
+(`rlm.engine`) for agentless digest work — see [below](#autonomous-engine).
 
 ### RLM MCP Tools
 
@@ -678,29 +729,31 @@ By default Simba runs **no LLM** — it exposes navigation primitives as MCP too
 
 Recall is **project-scoped** (it reuses the leak-free LanceDB recall), so a transcript from another repo never surfaces. Configure via `simba config` (`rlm` section): `max_search_matches`, `regex_timeout_seconds`, `lru_documents`, `transcript_source`, `default_max_pointers`.
 
-### Autonomous engine (opt-in)
+### Autonomous engine
 
-By default RLM is **agent-driven** and passive injection is off. Two opt-in knobs:
+Two useful knobs:
 
-- **Passive pointers** — `simba config set rlm.inject_pointers true` makes `UserPromptSubmit` surface navigable transcripts (an `<rlm-pointers>` block) every turn, so the agent knows it can go lossless.
-- **Autonomous engine** — `simba config set rlm.engine claude-cli` lets Simba run the recursion itself in **agentless** contexts. After a session compacts (`PreCompact`), it spawns a **detached, cheap** `claude -p` (default `--model haiku`, never Opus) that navigates the transcript via the `rlm_*` tools and stores memories. Default `rlm.engine=claude` ⇒ off (zero extra cost).
+- **Passive pointers** — `rlm.inject_pointers` makes `UserPromptSubmit` surface navigable transcripts (an `<rlm-pointers>` block) every turn, so the agent knows it can go lossless. It is on by default; set it to `false` to suppress pointer injection.
+- **Autonomous engine** — `rlm.engine=claude-cli` lets Simba run the recursion itself in **agentless** contexts. After a session compacts (`PreCompact`), it spawns a **detached, cheap** `claude -p` (default `--model haiku`, never Opus) that navigates the transcript via the `rlm_*` tools and stores memories. Set `rlm.engine=claude` to disable autonomous spend.
 
 ```bash
-simba config set rlm.engine claude-cli   # opt in (default model: haiku)
+simba config set rlm.inject_pointers false    # disable pointer injection
+simba config set rlm.engine claude-cli        # enable autonomous digest (default)
+simba config set rlm.engine claude       # disable autonomous digest
 simba rlm digest --latest                # manual one-shot on the newest transcript
 simba rlm complete <id> --stored N       # the spawned agent calls this to close its job
 ```
 
-Guardrails: opt-in, cheap-by-default, **detached** (never blocks a hook), rate-limited (`engine_min_new_exchanges`), and deduped via the `rlm_jobs` table. Point it at a cheaper backend (DeepSeek/OpenRouter/local) with `engine_base_url` + `engine_api_key_env`.
+Guardrails: configurable, cheap-by-default, **detached** (never blocks a hook), rate-limited (`engine_min_new_exchanges`), and deduped via the `rlm_jobs` table. Point it at a cheaper backend (DeepSeek/OpenRouter/local) with `engine_base_url` + `engine_api_key_env`, or set `rlm.engine=claude` to disable autonomous digest.
 
 > **Roadmap:** RLM navigation + lossless recall, the autonomous engine **Phase 1 (`claude-cli`)**, **episodic consolidation (L2)**, **hybrid BM25+vector recall (L3)**, and the **temporal entity-relationship knowledge graph (L4)** are implemented. Planned: engine phases **`api`** (OpenAI-compatible / DeepSeek) and **`local-gguf`** (offline).
 
 ### Episodic consolidation (L2)
 
-Raw memories are per-fact (≤200 chars). **Episodic consolidation** rolls a whole session's memories into one coarser `EPISODE` memory — a tier between per-fact memories and the L4 knowledge graph. It reuses the **same RLM engine** (so it is opt-in and agentless): the configured engine spawns a detached agent that reads the session's memories, synthesizes one episode, and stores it with `--type EPISODE`. Because an episode is a normal memory, it is embedded, project-scoped, and surfaced by ordinary (and hybrid) recall.
+Raw memories are per-fact (≤200 chars). **Episodic consolidation** rolls a whole session's memories into one coarser `EPISODE` memory — a tier between per-fact memories and the L4 knowledge graph. It reuses the **same RLM engine**, so consolidation is engine-gated and agentless: the configured engine spawns a detached agent that reads the session's memories, synthesizes one episode, and stores it with `--type EPISODE`. Because an episode is a normal memory, it is embedded, project-scoped, and surfaced by ordinary (and hybrid) recall.
 
 ```bash
-simba config set rlm.engine claude-cli              # episodes reuse the RLM engine (opt-in)
+simba config set rlm.engine claude-cli              # episodes reuse the RLM engine
 simba memory consolidate                            # this project's eligible sessions
 simba memory consolidate --session <id>             # one session
 simba memory consolidate --all                      # every project's eligible sessions
@@ -897,12 +950,34 @@ make && make test
 <!-- END SIMBA:build_commands -->
 ```
 
-### `/memories-learn` — Extract Learnings from Transcripts
+### Chat-session analysis
 
-Automatically triggered after context compaction:
-1. **PreCompact hook** exports the session transcript to `~/.claude/transcripts/{sessionId}/` with `status: "pending_extraction"`
-2. **SessionStart hook** on the next session detects the pending export and injects extraction instructions
-3. A **memory-extractor agent** reads the transcript, extracts 5-15 learnings, and POSTs each to the memory daemon (`/store`)
+Simba analyzes chat sessions through runtime-specific capture paths and a shared
+memory store:
+
+1. **Claude Code, Codex, and pi PreCompact** export the session transcript to
+   `~/.claude/transcripts/{sessionId}/` with `status: "pending_extraction"`.
+   The pi bridge forwards `session_before_compact` / `session_compact` into the
+   same canonical PreCompact behavior.
+2. **Next-session extraction** detects pending exports on
+   `SessionStart` and injects extraction instructions. `/memories-learn` remains
+   the explicit manual path for reading a pending transcript and storing
+   learnings.
+3. **Codex raw-JSONL fallback** covers sessions where `PreCompact` did not run
+   or has not been trusted yet. `simba codex-status --auto-extract` reads the
+   newest `${CODEX_HOME:-$HOME/.codex}/sessions/**/*.jsonl` transcript, runs
+   conservative heuristic extraction, stores learnings through `/store`, and
+   appends a done record to
+   `${CODEX_HOME:-$HOME/.codex}/simba/extractions.jsonl` only after successful
+   storage. `simba codex-extract` still prints the manual prompt, and
+   `simba codex-extract --run` runs the same storage path explicitly.
+4. **RLM lossless recall and digest** keep the full transcript navigable by
+   `sessionSource`; the autonomous engine can digest full transcripts in the
+   background while the MCP tools let the active agent inspect exact transcript
+   slices.
+5. **Episodic consolidation** rolls a session's stored memories into a coarser
+   `EPISODE` memory once enough facts exist, so the next recall can retrieve
+   both specific memories and a session-level summary.
 
 Memory types: `GOTCHA`, `WORKING_SOLUTION`, `PATTERN`, `DECISION`, `FAILURE`, `PREFERENCE`
 
@@ -921,7 +996,7 @@ larger cap means more tokens per memory and, under the recall token budget, can
 surface **fewer** memories per turn. Raise it for richer facts; keep it tight to
 fit more memories.
 
-Can also be invoked manually with `/memories-learn`.
+Transcript extraction can also be invoked manually with `/memories-learn`.
 
 ### `/memories-sanitize` — Review and Clean Up Memories
 
@@ -950,11 +1025,19 @@ answering from the first plausible hit, the skill drives a correction loop:
 ### Memory Pipeline Flow
 
 ```
-Session ends → PreCompact exports transcript
-    → Next session: SessionStart detects pending extraction
-    → memory-extractor agent reads transcript.md
-    → POSTs learnings to /store (semantic memories in LanceDB)
+Claude/Codex/pi session compacts
+    → PreCompact exports ~/.claude/transcripts/{sessionId}/metadata.json
+    → Next SessionStart or /memories-learn extracts and POSTs to /store
+
+Codex raw-JSONL fallback, when needed
+    → simba codex-status sees newest ~/.codex/sessions/**/*.jsonl
+    → --auto-extract stores learnings and appends ~/.codex/simba/extractions.jsonl
+
+Stored learnings
+    → semantic memories in LanceDB with sessionSource + projectPath
     → simba sync extract converts memories to proven facts (SQLite)
+    → RLM pointers reconnect memories to lossless transcripts when available
+    → episodic consolidation stores EPISODE summaries for eligible sessions
     → UserPromptSubmit + PreToolUse hooks recall memories on future prompts
 ```
 
@@ -986,8 +1069,11 @@ simba install --global        Register hooks + skills (~/.claude/)
 simba install --remove        Remove hooks and skills
 simba codex-install           Install bundled Codex skills (~/.codex/skills)
 simba codex-install --remove  Remove bundled Codex skills
-simba codex-status            Check daemon health + pending extraction
-simba codex-extract           Print extraction prompt for latest transcript
+simba codex-status            Check daemon health + extraction status
+simba codex-status --auto-extract
+                              Explicit raw-JSONL fallback extraction
+simba codex-extract           Print manual extraction prompt for latest transcript
+simba codex-extract --run     Run conservative heuristic extraction now
 simba codex-recall <query>    Query semantic memory via /recall
 simba codex-finalize          Run end-of-task signal/error checks
 simba codex-automation        Print a suggested Codex automation directive

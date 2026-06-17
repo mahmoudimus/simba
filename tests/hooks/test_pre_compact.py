@@ -126,6 +126,35 @@ class TestPreCompactMain:
         assert metadata["session_id"] == "test-session"
         assert metadata["status"] == "pending_extraction"
 
+    def test_exports_codex_camel_case_payload(self, tmp_path):
+        transcript = tmp_path / "codex.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "codex test"}}) + "\n"
+        )
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+
+        with unittest.mock.patch("pathlib.Path.home", return_value=fake_home):
+            result = json.loads(
+                simba.hooks.pre_compact.main(
+                    {
+                        "sessionId": "codex-session",
+                        "transcriptPath": str(transcript),
+                        "cwd": str(tmp_path),
+                    }
+                )
+            )
+
+        assert result.get("suppressOutput") is True
+
+        session_dir = fake_home / ".claude" / "transcripts" / "codex-session"
+        metadata = json.loads((session_dir / "metadata.json").read_text())
+        assert metadata["session_id"] == "codex-session"
+        assert metadata["project_path"] == str(tmp_path)
+        assert metadata["status"] == "pending_extraction"
+        assert (session_dir / "transcript.md").exists()
+
     def test_nonexistent_transcript(self, tmp_path):
         result = json.loads(
             simba.hooks.pre_compact.main(
