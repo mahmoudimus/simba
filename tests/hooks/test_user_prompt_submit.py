@@ -370,12 +370,19 @@ class _GatedCfg:
 class TestGuardianSignalGating:
     """Proposal A (spec 25): conditional CORE re-injection."""
 
-    def test_default_off_injects_every_prompt(self, tmp_path):
+    def test_default_off_injects_every_prompt(self, tmp_path, monkeypatch):
         """Characterization: lever OFF (default) → CORE present every prompt,
         regardless of any recorded signal flag."""
         import simba.guardian.signal_flag as sf
+        import simba.hooks.config
 
         _claude_md_with_core(tmp_path)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit,
+            "_cfg",
+            lambda: simba.hooks.config.HooksConfig(),
+            raising=False,
+        )
         # Even with a 'signal present' flag for this session, default-off ignores it.
         with (
             unittest.mock.patch.object(sf, "should_inject", return_value=False),

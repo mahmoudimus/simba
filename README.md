@@ -337,7 +337,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ✅ | Tool-call redirect | `hooks.redirect_enabled` (`redirect_mode=deny`) | Steer bare commands to better tooling (`python`→`uv run`, …). |
 | ✅ | Auto-learn from failures | `hooks.auto_learn_from_failures` | PostToolUse: record tool failures as rules (probe/reader/exit-code guards on). |
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
-| ✅ | Guardian | *(always-on hook)* | Re-inject `SIMBA:core` rule blocks every prompt / after compaction. |
+| ✅ | Guardian | `guardian.core_injection_mode` | Re-inject `SIMBA:core` rule blocks every prompt / after compaction; `capsule` mode injects a compact compiled reminder. |
 | ✅ | Reflection | `reflection.enabled` | Background pattern/reflection extraction (scheduler on, project-scoped). |
 | ✅ | Episodic consolidation | `episodes.enabled` | Consolidate episodes (auto on PreCompact). |
 | ✅ | Sync extraction | `sync.llm_extract_enabled` | Background LLM extraction in the sync scheduler. |
@@ -823,7 +823,7 @@ reason = "black -> ruff format"
 
 ## Guardian — CLAUDE.md Rule Enforcement
 
-Extracts content between `<!-- BEGIN SIMBA:core -->` tags from CLAUDE.md and injects it as context on every prompt. On session stop, checks whether Claude's response contains the `[✓ rules]` compliance signal.
+Extracts content between `<!-- BEGIN SIMBA:core -->` tags from the intended project rule surfaces — top-level CLAUDE.md / AGENTS.md and `.claude/rules/{guardian.core_filename}` — and injects it as context on every prompt. On session stop, checks whether Claude's response contains the `[✓ rules]` compliance signal.
 
 Mark critical rules in your CLAUDE.md:
 
@@ -836,6 +836,17 @@ Mark critical rules in your CLAUDE.md:
 ```
 
 These rules are reinforced on every prompt regardless of context window state.
+
+For lower token tax, use the deterministic capsule compiler:
+
+```bash
+simba config set guardian.core_injection_mode capsule
+simba config set hooks.guardian_signal_gated true
+```
+
+The full CORE file remains the source of truth; capsule mode injects a short
+reminder with a source pointer, and the guardian signal gate controls whether
+that reminder needs to be re-injected on a given turn.
 
 ## Markers CLI
 
