@@ -2,6 +2,75 @@
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-17
+
+Every new lever in this release defaults **OFF** (backward-compatible): with the
+defaults, hook output stays byte-identical to 0.10.0.
+
+### Added
+
+- **`memory.max_content_length` is now the single source of truth for the memory
+  content cap** (#79). The configured cap (default 200) drives both enforcement
+  *and* the "keep content under N chars" guidance in every extraction / digest /
+  episode / reflection prompt, plus the content-producing truncations (`simba rule
+  add`, auto-learned `TOOL_RULE`, `SYSTEM` sync rows) — previously these hardcoded
+  `200` in ~13 places, so raising the cap silently had no effect. Resolved via
+  `simba.memory.config.resolve_max_content_length()`. Set it once
+  (`simba config set memory.max_content_length <N>`, or per-project) and all
+  guidance + truncation follow. `content` is what recall surfaces (not the
+  unbounded `context`), so a larger cap means more tokens per memory and, under
+  the recall token budget, can surface fewer memories per turn.
+
+- **Conditional guardian re-injection** (spec 25; `hooks.guardian_signal_gated`,
+  default off). The CLAUDE.md `SIMBA:core` block is re-injected every prompt
+  (~2k tokens) regardless of need. When enabled, the block is re-injected only on
+  the first prompt of a session, after compaction, or when the prior response
+  dropped the `[✓ rules]` signal — reclaiming the per-turn token tax. Fail-open
+  (inject when uncertain). A per-session flag written by `Stop`, read by
+  `UserPromptSubmit`, reset by `PreCompact`/`SessionStart`. Plus documented
+  gate-graduation discipline (a rule that becomes a deterministic gate leaves the
+  CORE block).
+
+- **Hierarchical (ancestor-prefix) project recall** (spec 26;
+  `memory.hierarchical_recall` + `hierarchical_recall_include_global`, default
+  off). A child cwd (`/repo/api`) inherits memories scoped to its ancestors
+  (`/repo`) + global, bounded at the git root — the client computes the scope
+  chain, the daemon does string-membership across both the vector and BM25 arms;
+  `projectPath` is normalized to a resolved absolute path on store. Dissolves the
+  dedup dual-home problem (place a fact once at the right level). **Measured**
+  (A/B on the production stack): a *situational* lever — near-free at low
+  ancestor:child noise ratios, a real recall@k cost at high ratios with sparse
+  gold (LoCoMo 9:1 ≈ −0.7pp, longmemeval_s 14.8:1 −4 to −9pp) — so it stays
+  default-off and is enabled per-project where the ancestor scope is small.
+
+- **Intent-primed doctrine + mandated preflight** (spec 28;
+  `hooks.intent_priming_enabled` / `preflight_mandate_enabled` /
+  `preflight_mandate_risk_only`, default off). `UserPromptSubmit` classifies the
+  prompt against project doctrine *triggers* (cosine over precomputed embeddings,
+  no LLM) and injects the matched doctrine + applicable gates; on a risk-tier
+  match it arms a mandate, and `PreToolUse` then blocks a mutating tool that runs
+  without a `simba preflight <task>` this turn. New `simba preflight` CLI +
+  `/preflight` endpoint.
+
+- **Reasoning-layer verification** (spec 27; `hooks.engagement_marker_enabled` /
+  `reasoning_verify_enabled`, default off). A *simba-emitted* `🦁☑` ledger of what
+  simba surfaced this turn is injected at `UserPromptSubmit` (every turn, tools or
+  not), the agent echoes it, and `Stop` verifies the echo — observability, not
+  self-attestation. `reasoning_verify` lets `Stop`/`SubagentStop` (the latter newly
+  wired) doctrine-check the finalized response and **block-to-reconsider** on a
+  violation — the catch for tools-free / mid-reasoning output. On **pi** only, the
+  `context` event re-injects doctrine before every LLM call and `message_end`
+  annotates a doctrine-violating finalized message (Tier 2; pi `context` injection
+  pending runtime verification).
+
+### Changed
+
+- **CI hardening.** A per-test `pytest-timeout` (`--timeout=120 --timeout-method=
+  thread`) plus a job-level `timeout-minutes: 20` turn a hung test into a fast
+  fail instead of running to the 6-hour Actions ceiling. A global autouse fixture
+  forbids real GGUF model loads in the unit suite (reranker fail-opens;
+  `gguf`-marked tests exempt), so CI never reaches Hugging Face.
+
 ## [0.10.0] — 2026-06-16
 
 ### Added
