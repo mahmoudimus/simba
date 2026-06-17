@@ -155,6 +155,13 @@ class RecallRequest(pydantic.BaseModel):
     min_similarity: float | None = pydantic.Field(default=None, alias="minSimilarity")
     max_results: int | None = pydantic.Field(default=None, alias="maxResults")
     project_path: str | None = pydantic.Field(default=None, alias="projectPath")
+    # Hierarchical (ancestor-prefix) recall (spec 26): the client-computed scope
+    # chain ``[cwd-resolved, …ancestors…, git-root-resolved]``. Honored only when
+    # ``memory.hierarchical_recall`` is on; otherwise the daemon ignores it and
+    # uses the strict ``project_path`` exact match (byte-identical legacy).
+    project_scopes: list[str] | None = pydantic.Field(
+        default=None, alias="projectScopes"
+    )
     filters: dict[str, typing.Any] = pydantic.Field(default_factory=dict)
 
 
@@ -179,6 +186,11 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             detail=f"content too long (max {max_len} chars, got {got_len})",
         )
 
+    # Normalize the scope path to an absolute, symlink-resolved path (spec 26) so
+    # the client's resolved ancestor chain can match it by string membership. An
+    # empty (global) path stays empty.
+    project_path = simba.memory.vector_db.normalize_project_path(body.project_path)
+
     text_to_embed = body.content + (f" {body.context}" if body.context else "")
     try:
         embedding = await embed(text_to_embed)
@@ -195,7 +207,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
     if dup_check["is_duplicate"]:
         logger.info(
             "[store] project=%s type=%s -> duplicate (sim: %.2f)",
-            body.project_path or "(global)",
+            project_path or "(global)",
             body.type,
             round(dup_check["similarity"], 2),
         )
@@ -217,7 +229,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             embedding,
             config.supersede_threshold,
             1,
-            {"projectPath": body.project_path, "types": [body.type]},
+            {"projectPath": project_path, "types": [body.type]},
         )
         if candidates:
             superseded_id = candidates[0]["id"]
@@ -246,7 +258,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
                 "tags": json.dumps(body.tags),
                 "confidence": body.confidence,
                 "sessionSource": body.session_source,
-                "projectPath": body.project_path,
+                "projectPath": project_path,
                 "createdAt": now,
                 "lastAccessedAt": now,
                 "accessCount": 0,
@@ -257,7 +269,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
 
     logger.info(
         '[store] project=%s type=%s content="%s" -> stored %s',
-        body.project_path or "(global)",
+        project_path or "(global)",
         body.type,
         body.content[:50],
         memory_id,
@@ -276,7 +288,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
                     "context": stored_context,
                     "confidence": body.confidence,
                     "createdAt": now,
-                    "projectPath": body.project_path,
+                    "projectPath": project_path,
                 },
             )
         except Exception:
@@ -348,6 +360,18 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     filters = dict(body.filters)
     if body.project_path:
         filters["projectPath"] = body.project_path
+
+    # Hierarchical (ancestor-prefix) recall (spec 26): when the lever is on AND the
+    # client supplied a resolved scope chain, hand both arms the scope set so
+    # ancestor/root facts inherit down. Off / no chain → strict projectPath match
+    # (byte-identical legacy). The flags ride in ``filters`` so search_memories +
+    # the FTS arm read a single source of truth.
+    if getattr(config, "hierarchical_recall", False) and body.project_scopes:
+        filters["hierarchical_recall"] = True
+        filters["project_scopes"] = list(body.project_scopes)
+        filters["hierarchical_recall_include_global"] = bool(
+            getattr(config, "hierarchical_recall_include_global", True)
+        )
 
     # On a HyDE cache miss, warm the cache off the hot path so the next identical
     # query gets the LLM answer for its 2nd arm (this recall serves the fallback).
@@ -658,8 +682,14 @@ async def patch_memory(
 ) -> dict:
     table = request.app.state.table
     updates: dict[str, str] = {}
+    new_project_path: str | None = None
     if body.project_path is not None:
-        updates["projectPath"] = body.project_path
+        # Normalize the scope path on patch too (spec 26) so a moved memory keeps
+        # the same absolute/resolved form the store path uses.
+        new_project_path = simba.memory.vector_db.normalize_project_path(
+            body.project_path
+        )
+        updates["projectPath"] = new_project_path
     if body.session_source is not None:
         updates["sessionSource"] = body.session_source
     if not updates:
@@ -667,10 +697,10 @@ async def patch_memory(
     await table.update(updates=updates, where=f"id = '{memory_id}'")
 
     fts_path = getattr(request.app.state, "fts_path", None)
-    if fts_path and body.project_path is not None:
+    if fts_path and new_project_path is not None:
         try:
             await asyncio.to_thread(
-                _fts_set_project, fts_path, memory_id, body.project_path
+                _fts_set_project, fts_path, memory_id, new_project_path
             )
         except Exception:
             logger.debug("[patch] fts mirror project update failed", exc_info=True)

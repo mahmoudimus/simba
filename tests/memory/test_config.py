@@ -81,3 +81,16 @@ class TestSupersedeDefaults:
         # The supersede band sits below the duplicate threshold.
         cfg = config.MemoryConfig()
         assert 0 < cfg.supersede_threshold < cfg.duplicate_threshold
+
+
+class TestHierarchicalRecallDefaults:
+    def test_hierarchical_recall_off_by_default(self) -> None:
+        # UNMEASURED lever (precision-dilution risk) -> default OFF so recall stays
+        # byte-identical to today's strict exact-match scoping.
+        assert config.MemoryConfig().hierarchical_recall is False
+
+    def test_include_global_on_by_default(self) -> None:
+        # Global memories are the root of the tree; this is a separate lever so it
+        # can be measured independently, but it defaults ON (no effect while
+        # hierarchical_recall is OFF).
+        assert config.MemoryConfig().hierarchical_recall_include_global is True
