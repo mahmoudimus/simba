@@ -2249,6 +2249,82 @@ def _cmd_markers(args: list[str]) -> int:
     return simba.markers_cli.main(args)
 
 
+def _cmd_preflight(args: list[str]) -> int:
+    """`simba preflight <task>` — surface the right approach BEFORE acting (spec 28).
+
+    Returns the intent-relevant doctrine (project-scoped recall), the applicable
+    TOOL_RULEs + redirect rules, and a short brief; sets the per-turn preflight
+    flag (so the PreToolUse gate sees it) and emits the 🦁☑ ledger. Mostly
+    intent-keyed recall + a rules/redirects lookup.
+    """
+    import simba.db
+    import simba.doctrine.preflight as preflight
+    import simba.guardian.preflight_flag as preflight_flag
+    import simba.hooks._memory_client
+    import simba.redirect.store as redirect_store
+
+    session_id = _parse_opt_value(args, "--session") or ""
+    project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+
+    # Task is everything that isn't a --flag or its value.
+    skip_next = False
+    task_parts: list[str] = []
+    for tok in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok.startswith("--"):
+            skip_next = True
+            continue
+        task_parts.append(tok)
+    task = " ".join(task_parts).strip()
+
+    if not task:
+        print("Usage: simba preflight [--session SID] <task>", file=sys.stderr)
+        print("Error: a task description is required", file=sys.stderr)
+        return 1
+
+    cwd = pathlib.Path.cwd()
+
+    # (a) intent-relevant doctrine (project-scoped recall — spec 26).
+    doctrine_mems = simba.hooks._memory_client.recall_memories(
+        task, project_path=project_path
+    )
+    doctrine_lines = [
+        (m.get("content") or "").strip()
+        for m in doctrine_mems
+        if (m.get("content") or "").strip()
+    ]
+
+    # (b) applicable TOOL_RULEs + redirect rules for the project.
+    project_id = simba.db.resolve_project_id(cwd)
+    tool_rule_mems = simba.hooks._memory_client.recall_memories(
+        task,
+        project_path=project_id,
+        filters={"types": ["TOOL_RULE"]},
+    )
+    tool_rules = preflight.tool_rule_lines(tool_rule_mems)
+    try:
+        redirects = preflight.redirect_lines(
+            redirect_store.load_rules(cwd, project_path=project_id)
+        )
+    except Exception:
+        redirects = []
+
+    # (c) the brief + the 🦁☑ ledger.
+    brief = preflight.build_brief(
+        task=task,
+        doctrine_lines=doctrine_lines,
+        tool_rules=tool_rules,
+        redirects=redirects,
+    )
+    print(brief)
+
+    # Side effect: set the per-turn flag so the PreToolUse mandate gate clears.
+    preflight_flag.set_preflight(session_id, task=task)
+    return 0
+
+
 def _cmd_rule(args: list[str]) -> int:
     """Manage tool rules (auto-learned + manual) and tool-call redirects."""
     if args and args[0] == "redirect":
@@ -3129,6 +3205,8 @@ def main() -> None:
         sys.exit(_cmd_markers(rest))
     elif cmd == "rule":
         sys.exit(_cmd_rule(rest))
+    elif cmd == "preflight":
+        sys.exit(_cmd_preflight(rest))
     elif cmd == "rlm":
         sys.exit(_cmd_rlm(rest))
     elif cmd == "eval":
