@@ -158,12 +158,21 @@ def _keyword_arm(
     project_path: str | None,
     types: list[str] | None,
     limit: int,
+    project_scopes: list[str] | None = None,
+    include_global: bool = True,
 ) -> list[dict[str, typing.Any]]:
-    """Open a per-call connection (thread-affinity safe) and run the bm25 search."""
+    """Open a per-call connection (thread-affinity safe) and run the bm25 search.
+
+    Forwards the hierarchical scope set (spec 26) so the keyword arm scopes
+    identically to the vector arm; falls back to the strict ``project_path`` match
+    when no scope chain is supplied.
+    """
     with simba.memory.fts.connect(fts_path):
         return simba.memory.fts.search(
             query_text,
             project_path=project_path,
+            project_scopes=project_scopes,
+            include_global=include_global,
             types=types,
             limit=limit,
         )
@@ -223,6 +232,13 @@ async def hybrid_search(
     kw_terms = simba.memory.keywords.focus_terms(
         query_text, max_terms=cfg.fts_max_terms
     )
+    # Hierarchical scope (spec 26): forward the client-computed chain so the
+    # keyword arm scopes identically to the vector arm. Honored only when the
+    # lever is on AND a chain is present; otherwise the strict projectPath applies.
+    kw_scopes: list[str] | None = None
+    if filters.get("hierarchical_recall") and filters.get("project_scopes"):
+        kw_scopes = list(filters.get("project_scopes") or [])
+    kw_include_global = bool(filters.get("hierarchical_recall_include_global", True))
     if fts_path and kw_terms:
         try:
             keyword_results = await asyncio.to_thread(
@@ -232,6 +248,8 @@ async def hybrid_search(
                 filters.get("projectPath"),
                 filters.get("types"),
                 candidate_pool,
+                kw_scopes,
+                kw_include_global,
             )
         except Exception:
             keyword_results = []

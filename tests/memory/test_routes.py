@@ -95,6 +95,43 @@ class TestStoreEndpoint:
         assert rows[0]["confidence"] == 0.85
 
     @pytest.mark.asyncio
+    async def test_normalizes_project_path_on_store(self, async_client, lance_table):
+        """projectPath is stored as an absolute, symlink-resolved path (spec 26).
+
+        A relative or non-normalized path is resolved so the client's ancestor
+        chain (also resolved) can match it by string membership.
+        """
+        import pathlib
+
+        resp = await async_client.post(
+            "/store",
+            json={
+                "type": "PATTERN",
+                "content": "scoped fact",
+                "projectPath": ".",
+            },
+        )
+        assert resp.status_code == 200
+        stored_id = resp.json()["id"]
+        rows = await lance_table.query().where(f"id = '{stored_id}'").to_list()
+        assert len(rows) == 1
+        expected = str(pathlib.Path(".").resolve())
+        assert rows[0]["projectPath"] == expected
+        assert pathlib.Path(rows[0]["projectPath"]).is_absolute()
+
+    @pytest.mark.asyncio
+    async def test_empty_project_path_stays_global(self, async_client, lance_table):
+        """An empty projectPath (global memory) is NOT resolved to cwd."""
+        resp = await async_client.post(
+            "/store",
+            json={"type": "PATTERN", "content": "global fact"},
+        )
+        assert resp.status_code == 200
+        stored_id = resp.json()["id"]
+        rows = await lance_table.query().where(f"id = '{stored_id}'").to_list()
+        assert rows[0]["projectPath"] == ""
+
+    @pytest.mark.asyncio
     async def test_duplicate_detection(self, async_client):
         """Storing the same content twice flags the second as duplicate."""
         resp1 = await async_client.post(

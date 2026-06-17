@@ -86,6 +86,38 @@ class TestScoping:
         assert [r["memory_id"] for r in rows] == ["g"]
 
 
+class TestHierarchicalScoping:
+    """The keyword arm honors the same ancestor-prefix scope set (spec 26)."""
+
+    def test_scopes_include_ancestor_and_global(self, fts_db) -> None:
+        fts.upsert(_mem("api", "delta keyword here", projectPath="/repo/api"))
+        fts.upsert(_mem("root", "delta keyword here", projectPath="/repo"))
+        fts.upsert(_mem("glob", "delta keyword here", projectPath=""))
+        fts.upsert(_mem("web", "delta keyword here", projectPath="/repo/web"))
+        rows = fts.search(
+            "delta",
+            project_scopes=["/repo/api", "/repo"],
+            include_global=True,
+        )
+        assert {r["memory_id"] for r in rows} == {"api", "root", "glob"}
+
+    def test_scopes_exclude_global_when_flag_off(self, fts_db) -> None:
+        fts.upsert(_mem("root", "epsilon keyword", projectPath="/repo"))
+        fts.upsert(_mem("glob", "epsilon keyword", projectPath=""))
+        rows = fts.search(
+            "epsilon",
+            project_scopes=["/repo"],
+            include_global=False,
+        )
+        assert {r["memory_id"] for r in rows} == {"root"}
+
+    def test_scopes_exclude_package_from_root_recall(self, fts_db) -> None:
+        fts.upsert(_mem("api", "zeta keyword", projectPath="/repo/api"))
+        fts.upsert(_mem("root", "zeta keyword", projectPath="/repo"))
+        rows = fts.search("zeta", project_scopes=["/repo"], include_global=True)
+        assert {r["memory_id"] for r in rows} == {"root"}
+
+
 class TestSetProject:
     def test_set_project_moves_scope(self, fts_db) -> None:
         fts.upsert(_mem("m1", "movable gamma content", projectPath="proj-1"))

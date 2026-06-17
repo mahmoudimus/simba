@@ -74,6 +74,28 @@ class TestCmdSet:
         captured = capsys.readouterr()
         assert "9000" in captured.out
 
+    def test_hierarchical_recall_round_trip(
+        self,
+        tmp_path: pathlib.Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # spec 26 lever is gettable/settable via `simba config` (no env-only config).
+        import simba.memory.config
+
+        rc = simba.config_cli.cmd_get("memory.hierarchical_recall", tmp_path)
+        assert rc == 0
+        capsys.readouterr()
+
+        rc = simba.config_cli.cmd_set(
+            "memory.hierarchical_recall", "true", global_flag=False, root=tmp_path
+        )
+        assert rc == 0
+        capsys.readouterr()
+
+        rc = simba.config_cli.cmd_get("memory.hierarchical_recall", tmp_path)
+        captured = capsys.readouterr()
+        assert "True" in captured.out
+
 
 class TestCmdReset:
     def test_reset(

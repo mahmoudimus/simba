@@ -205,7 +205,15 @@ class TestKeywordArmFocus:
 
     @staticmethod
     def _patch_arms(monkeypatch, captured: dict, *, vec=None):
-        def fake_search(query, *, project_path=None, types=None, limit=20):
+        def fake_search(
+            query,
+            *,
+            project_path=None,
+            project_scopes=None,
+            include_global=True,
+            types=None,
+            limit=20,
+        ):
             captured["query"] = query
             captured["calls"] = captured.get("calls", 0) + 1
             return []
@@ -280,6 +288,96 @@ class TestKeywordArmFocus:
         )
         assert captured.get("calls", 0) == 0  # degraded to vector-only
         assert [r["id"] for r in results] == ["v"]
+
+
+class TestHierarchicalScopePropagation:
+    """Both arms honor the same ancestor-prefix scope set (spec 26 Phase C)."""
+
+    @pytest.mark.asyncio
+    async def test_keyword_arm_receives_scopes_not_just_project_path(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        captured: dict = {}
+
+        def fake_search(
+            query,
+            *,
+            project_path=None,
+            project_scopes=None,
+            include_global=True,
+            types=None,
+            limit=20,
+        ):
+            captured["project_path"] = project_path
+            captured["project_scopes"] = project_scopes
+            captured["include_global"] = include_global
+            return []
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            captured["vec_filters"] = filters
+            return []
+
+        monkeypatch.setattr("simba.memory.fts.search", fake_search)
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig()
+        await hybrid.hybrid_search(
+            None,
+            tmp_path / fts.FTS_FILENAME,  # truthy fts_path so the keyword arm runs
+            [0.1] * 768,
+            "unique_zeta_token",
+            min_similarity=0.35,
+            max_results=5,
+            filters={
+                "project_scopes": ["/repo/api", "/repo"],
+                "hierarchical_recall": True,
+                "hierarchical_recall_include_global": True,
+            },
+            cfg=cfg,
+        )
+        assert captured["project_scopes"] == ["/repo/api", "/repo"]
+        assert captured["include_global"] is True
+        # The vector arm still gets the full filter set (it scopes internally).
+        assert captured["vec_filters"]["project_scopes"] == ["/repo/api", "/repo"]
+
+    @pytest.mark.asyncio
+    async def test_inherited_root_memory_recalled_end_to_end(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        # A /repo (root) memory in the FTS mirror is recalled from a /repo/api cwd.
+        path = tmp_path / fts.FTS_FILENAME
+        with fts.connect(path):
+            fts.upsert(
+                {
+                    "id": "rootmem",
+                    "type": "DECISION",
+                    "content": "the unique_zeta shared decision",
+                    "context": "",
+                    "confidence": 0.8,
+                    "createdAt": "t",
+                    "projectPath": "/repo",
+                },
+            )
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return []  # vector arm empty; the inheritance comes via the keyword arm
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig()
+        results = await hybrid.hybrid_search(
+            None,
+            path,
+            [0.1] * 768,
+            "unique_zeta",
+            min_similarity=0.35,
+            max_results=5,
+            filters={
+                "project_scopes": ["/repo/api", "/repo"],
+                "hierarchical_recall": True,
+                "hierarchical_recall_include_global": True,
+            },
+            cfg=cfg,
+        )
+        assert {r["id"] for r in results} == {"rootmem"}
 
 
 def _vec_dated(mid: str, sim: float, created: str) -> dict:

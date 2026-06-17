@@ -174,20 +174,32 @@ def search(
     query: str,
     *,
     project_path: str | None = None,
+    project_scopes: list[str] | None = None,
+    include_global: bool = True,
     types: list[str] | None = None,
     limit: int = 20,
 ) -> list[dict[str, typing.Any]]:
     """Return up to ``limit`` bm25-ranked memories matching ``query``.
 
-    Scoped to ``project_path`` (exact match) and ``types`` when given.  Never
-    raises: a malformed ``MATCH`` or missing table yields ``[]``.
+    Project scoping mirrors the vector arm (spec 26): when ``project_scopes`` (the
+    client-computed cwd→git-root chain) is given, the keyword arm keeps memories
+    whose ``project_path`` is one of those scopes — ancestor (root) facts inherit
+    down — plus global (empty-path) memories when ``include_global``. Otherwise it
+    falls back to the strict exact ``project_path`` match. ``types`` filters by
+    memory type. Never raises: a malformed ``MATCH`` or missing table yields ``[]``.
     """
     match = _build_match(query)
     if not match:
         return []
 
     q = MemoryFTS.select().where(MemoryFTS.match(match))
-    if project_path:
+    if project_scopes:
+        # Hierarchical scope: project_path ∈ scopes, plus "" globals when included.
+        scope_clause = MemoryFTS.project_path.in_(list(project_scopes))
+        if include_global:
+            scope_clause = scope_clause | (MemoryFTS.project_path == "")
+        q = q.where(scope_clause)
+    elif project_path:
         q = q.where(MemoryFTS.project_path == project_path)
     if types:
         q = q.where(MemoryFTS.type.in_(types))

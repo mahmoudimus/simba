@@ -68,6 +68,49 @@ async def _resolve_table_dim(table: typing.Any) -> int | None:
         return None
 
 
+def normalize_project_path(project_path: str | None) -> str:
+    """Normalize a project path for hierarchical scoping (spec 26).
+
+    Resolves to an absolute, symlink-resolved path with no trailing slash
+    (``str(pathlib.Path(p).resolve())``) so the client's ancestor chain — also
+    resolved — matches it by string membership. An empty path stays empty (a
+    *global* memory, the root of the tree). Fail-soft: any resolution error
+    returns the original string (membership still works on literal paths).
+    """
+    p = (project_path or "").strip()
+    if not p:
+        return ""
+    import pathlib
+
+    try:
+        return str(pathlib.Path(p).resolve())
+    except (OSError, ValueError, RuntimeError):
+        return p
+
+
+def _scope_match(
+    project_path: str | None,
+    project_scopes: typing.Iterable[str],
+    *,
+    include_global: bool,
+) -> bool:
+    """Hierarchical (ancestor-prefix) scope membership for one memory (spec 26).
+
+    The client computes ``project_scopes`` = ``[cwd-resolved, …ancestors…,
+    git-root-resolved]`` (the path-aware work lives client-side; the daemon does
+    pure string membership). A memory is in scope when its ``project_path`` is one
+    of those scopes — so a ``/repo`` (root) fact inherits *down* to a ``/repo/api``
+    cwd (because ``/repo`` is in the chain) while a ``/repo/api`` fact does NOT
+    leak *up* to a ``/repo`` recall (``/repo/api`` is not in that chain). Global
+    (empty-path) memories are the root of the tree and match when ``include_global``
+    is set.
+    """
+    pp = project_path or ""
+    if not pp:
+        return include_global
+    return pp in set(project_scopes)
+
+
 async def find_duplicates(
     table: typing.Any, embedding: list[float], threshold: float
 ) -> dict[str, typing.Any]:
@@ -108,9 +151,17 @@ async def search_memories(
 ) -> list[dict[str, typing.Any]]:
     """Search memories by vector similarity.
 
-    When ``filters['projectPath']`` is set, results are scoped strictly to
-    that project: only memories tagged with exactly that project are kept, so
-    neither other projects' nor untagged memories leak into recall.
+    Project scoping has two modes:
+
+    * **Strict (legacy, default).** When ``filters['projectPath']`` is set,
+      results are scoped strictly to that project: only memories tagged with
+      exactly that project are kept, so neither other projects' nor untagged
+      memories leak into recall.
+    * **Hierarchical (spec 26).** When ``filters['hierarchical_recall']`` is set
+      and ``filters['project_scopes']`` (the client-computed cwd→git-root chain)
+      is present, a memory is kept when its ``projectPath`` is one of those scopes
+      — so ancestor (root) facts inherit down — plus global memories when
+      ``filters['hierarchical_recall_include_global']`` is set.
     """
     if filters is None:
         filters = {}
@@ -133,6 +184,15 @@ async def search_memories(
             .to_list()
         )
 
+        # Hierarchical scoping is active only when the lever is on AND the client
+        # supplied a scope chain; otherwise fall through to the strict legacy path
+        # (byte-identical behavior when off).
+        hierarchical = bool(filters.get("hierarchical_recall")) and bool(
+            filters.get("project_scopes")
+        )
+        project_scopes = filters.get("project_scopes") or []
+        include_global = bool(filters.get("hierarchical_recall_include_global", True))
+
         memories = []
         for r in results:
             similarity = 1 - (r.get("_distance", 0))
@@ -145,11 +205,21 @@ async def search_memories(
             if filter_types and r.get("type") not in filter_types:
                 continue
 
-            filter_project = filters.get("projectPath")
-            # Strict scope: keep only exact-project matches (drops both
-            # other-project and untagged/global memories).
-            if filter_project and r.get("projectPath") != filter_project:
-                continue
+            if hierarchical:
+                # Ancestor-membership scope (spec 26): keep exact-or-ancestor
+                # matches and (optionally) global memories.
+                if not _scope_match(
+                    r.get("projectPath"),
+                    project_scopes,
+                    include_global=include_global,
+                ):
+                    continue
+            else:
+                filter_project = filters.get("projectPath")
+                # Strict scope: keep only exact-project matches (drops both
+                # other-project and untagged/global memories).
+                if filter_project and r.get("projectPath") != filter_project:
+                    continue
 
             memories.append({**r, "similarity": similarity})
 

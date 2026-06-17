@@ -85,6 +85,122 @@ class TestRecallMemories:
         assert result == []
 
 
+class TestProjectScopeChain:
+    """Client-side ancestor-prefix chain computation (spec 26 Phase D)."""
+
+    def test_chain_walks_from_cwd_to_git_root(self, tmp_path, monkeypatch):
+        # repo/  (git root)  ->  repo/pkg/api  (cwd)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        cwd = repo / "pkg" / "api"
+        cwd.mkdir(parents=True)
+
+        chain = simba.hooks._memory_client.project_scope_chain(str(cwd))
+        # cwd-first, then ancestors up to (and including) the git root; resolved.
+        assert chain[0] == str(cwd.resolve())
+        assert str(repo.resolve()) in chain
+        assert str((repo / "pkg").resolve()) in chain
+        # bounded at the git root: the parent of repo is NOT in the chain
+        assert str(repo.resolve().parent) not in chain
+
+    def test_chain_no_git_root_is_just_cwd(self, tmp_path):
+        # No .git anywhere -> the chain is the resolved cwd alone (bounded).
+        cwd = tmp_path / "loose"
+        cwd.mkdir()
+        chain = simba.hooks._memory_client.project_scope_chain(str(cwd))
+        assert chain == [str(cwd.resolve())]
+
+
+class TestRecallHierarchical:
+    """recall_memories sends projectScopes only when the lever is on."""
+
+    def _on_cfg(self):
+        class _Cfg:
+            daemon_host = "localhost"
+            daemon_port = 8741
+            default_max_results = 3
+            default_timeout = 2.0
+
+        return _Cfg()
+
+    def test_sends_scopes_when_lever_on(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        cwd = repo / "api"
+        cwd.mkdir()
+
+        class _MemCfg:
+            hierarchical_recall = True
+
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_get_cfg", lambda: self._on_cfg()
+        )
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_memory_cfg", lambda: _MemCfg()
+        )
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"memories": []}
+        with unittest.mock.patch("httpx.post", return_value=mock_resp) as mock_post:
+            simba.hooks._memory_client.recall_memories(
+                "query text", project_path=str(cwd)
+            )
+        payload = mock_post.call_args.kwargs["json"]
+        assert "projectScopes" in payload
+        assert payload["projectScopes"][0] == str(cwd.resolve())
+        assert str(repo.resolve()) in payload["projectScopes"]
+        # the single projectPath is still sent (legacy fields untouched)
+        assert payload["projectPath"] == str(cwd)
+
+    def test_no_scopes_when_lever_off(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        cwd = repo / "api"
+        cwd.mkdir()
+
+        class _MemCfg:
+            hierarchical_recall = False
+
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_get_cfg", lambda: self._on_cfg()
+        )
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_memory_cfg", lambda: _MemCfg()
+        )
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"memories": []}
+        with unittest.mock.patch("httpx.post", return_value=mock_resp) as mock_post:
+            simba.hooks._memory_client.recall_memories(
+                "query text", project_path=str(cwd)
+            )
+        payload = mock_post.call_args.kwargs["json"]
+        assert "projectScopes" not in payload  # byte-identical legacy payload
+        assert payload["projectPath"] == str(cwd)
+
+    def test_no_scopes_for_non_directory_project(self, monkeypatch):
+        # The TOOL_RULE path scopes by an opaque project_id (not a filesystem
+        # path) -> no chain is computed, no scopes sent (lever on or off).
+        class _MemCfg:
+            hierarchical_recall = True
+
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_get_cfg", lambda: self._on_cfg()
+        )
+        monkeypatch.setattr(
+            simba.hooks._memory_client, "_memory_cfg", lambda: _MemCfg()
+        )
+        mock_resp = unittest.mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"memories": []}
+        with unittest.mock.patch("httpx.post", return_value=mock_resp) as mock_post:
+            simba.hooks._memory_client.recall_memories(
+                "q", project_path="deadbeefcafe1234"
+            )
+        payload = mock_post.call_args.kwargs["json"]
+        assert "projectScopes" not in payload
+
+
 class TestFormatMemories:
     def test_empty_returns_empty_string(self):
         assert simba.hooks._memory_client.format_memories([], source="test") == ""
