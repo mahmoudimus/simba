@@ -454,6 +454,27 @@ def _check_preflight_gate(tool_name: str, session_id: str) -> str | None:
     )
 
 
+def _record_gate_action(session_id: str, kind: str, detail: str) -> None:
+    """Append a gate action to this turn's engagement ledger (spec 27, Tier 1).
+
+    ``PreToolUse`` APPENDS the gate outcome (rewrote / blocked / rule-warned) onto
+    the ledger ``UserPromptSubmit`` anchored, so the ``🦁☑`` line reflects what
+    simba actually did this turn. Default-OFF (no session id / lever off) → no-op,
+    byte-identical to today. Fail-soft."""
+    cfg = _hooks_cfg()
+    if not getattr(cfg, "engagement_marker_enabled", False) or not session_id:
+        return
+    with contextlib.suppress(Exception):
+        import simba.guardian.engagement_flag as ef
+        import simba.hooks.engagement as eng
+
+        base = ef.last_ledger(session_id) or eng.prompt_ledger(
+            memory_count=0, top_similarity=0.0
+        )
+        action = eng.gate_action_label(kind, detail)
+        ef.record_engagement(session_id, ledger=eng.append_gate_action(base, action))
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the PreToolUse hook pipeline. Returns a CanonicalResult.
 
@@ -469,6 +490,7 @@ def run(hook_input: dict) -> CanonicalResult:
     tool_input = hook_input.get("tool_input", {})
     transcript_path_str = hook_input.get("transcript_path", "")
     cwd_str = hook_input.get("cwd")
+    session_id = hook_input.get("session_id", "")
     # pi has no transcript file but carries the agent's last reasoning in memory; it
     # passes that as ``thinking``. Claude/Codex send a transcript and NO ``thinking``
     # field, so ``payload_thinking == ""`` and the transcript path below is used
@@ -483,19 +505,21 @@ def run(hook_input: dict) -> CanonicalResult:
         )
         if decision is not None:
             if decision.action == "rewrite":
+                _record_gate_action(session_id, "rewrite", decision.command)
                 return CanonicalResult(
                     transform={
                         "command": decision.command,
                         "reason": decision.reason,
                     }
                 )
+            _record_gate_action(session_id, "block", decision.command)
             return CanonicalResult(block_reason=decision.reason)
 
     # --- Mandated-preflight gate (spec 28): block a mutating tool that ran with
     # no `simba preflight` this turn. Off by default → byte-identical to today. ---
-    session_id = hook_input.get("session_id", "")
     preflight_block = _check_preflight_gate(tool_name, session_id)
     if preflight_block is not None:
+        _record_gate_action(session_id, "block", "preflight required")
         return CanonicalResult(block_reason=preflight_block)
 
     parts: list[str] = []
@@ -513,6 +537,12 @@ def run(hook_input: dict) -> CanonicalResult:
         rule_warning = _format_tool_rule_warning(rule_memories)
         if rule_warning:
             parts.append(rule_warning)
+            target = (
+                tool_input.get("command", "")[:40]
+                if tool_name == "Bash"
+                else tool_input.get("file_path", "")
+            )
+            _record_gate_action(session_id, "warn", f"{tool_name} {target}".strip())
         # A strong match escalates to a hard block on block-only harnesses (pi);
         # Claude/Codex ignore this — the warning above is what they act on.
         escalated_block = _strong_tool_rule_block(rule_memories)

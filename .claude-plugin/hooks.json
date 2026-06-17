@@ -41,6 +41,13 @@
         "command": "simba hook Stop",
         "timeout": 5000
       }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "command": "simba hook SubagentStop",
+        "timeout": 5000
+      }
     ]
   }
 }

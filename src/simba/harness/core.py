@@ -19,6 +19,7 @@ _EVENT_MODULES = {
     "session_start": "simba.hooks.session_start",
     "prompt_submit": "simba.hooks.user_prompt_submit",
     "stop": "simba.hooks.stop",
+    "subagent_stop": "simba.hooks.subagent_stop",
     "pre_compact": "simba.hooks.pre_compact",
     "pre_tool": "simba.hooks.pre_tool_use",
     # v2: "post_tool"
