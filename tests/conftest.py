@@ -37,6 +37,30 @@ def _reset_db_globals():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _block_real_model_loads(request, monkeypatch):
+    """Globally forbid real GGUF reranker / local-LLM loads in the unit suite so no
+    test reaches Hugging Face. The default ``reranker_mode="cross-encoder"`` would
+    otherwise fetch + load a real GGUF on the rerank hot path — an HF 429 there hung
+    a CI run. The accessors raise → the reranker fail-opens (candidates unchanged);
+    tests that exercise reorder logic inject a fake scorer (their monkeypatch runs
+    after this autouse fixture and overrides it). Exempt tests marked ``gguf`` (the
+    opt-in real-model integration tests, run via ``-m gguf``). Promoted here from
+    tests/memory/conftest.py so it covers EVERY directory (the flaky fetch came from
+    a test outside tests/memory/)."""
+    if request.node.get_closest_marker("gguf"):
+        return
+    import simba.memory.reranker
+
+    def _forbidden(cfg):
+        raise RuntimeError(
+            "real GGUF model load blocked in tests (mark `gguf` to allow)"
+        )
+
+    monkeypatch.setattr(simba.memory.reranker, "_get_cross_encoder", _forbidden)
+    monkeypatch.setattr(simba.memory.reranker, "_get_local_llm", _forbidden)
+
+
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a temporary project directory structure."""
