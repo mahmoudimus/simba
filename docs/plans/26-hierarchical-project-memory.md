@@ -18,9 +18,9 @@ Today's project scoping is **flat and inconsistent**:
 - When a project filter is set, **global memories** (empty path) are excluded too
   (a global mem's `""` ≠ the filter), so a project recall is an island.
 
-**Monorepo pain (proj):** 36 facts seeded under `/proj/api` don't recall from the
-`/proj` root. Content-dedup (0.92) blocks dual-homing the same fact under two
-paths — so there's no clean way to make a fact visible from both today.
+**Monorepo pain (real case):** curated facts seeded under `/repo/api` don't recall
+from the `/repo` root. Content-dedup (0.92) blocks dual-homing the same fact under
+two paths — so there's no clean way to make a fact visible from both today.
 
 ## Model: ancestor-prefix recall
 
@@ -28,16 +28,16 @@ Recall at cwd `C` returns memories scoped to `C` **∪ every ancestor of `C` up 
 the git root ∪ global**:
 
 ```
-recall(/proj/api) → {/proj/api} ∪ {/proj} ∪ {global}
-recall(/proj)     →               {/proj} ∪ {global}
+recall(/repo/api) → {/repo/api} ∪ {/repo} ∪ {global}
+recall(/repo)     →               {/repo} ∪ {global}
 ```
 
 Root facts inherit **down** to every package; package-specific facts stay put and
 **don't leak** to siblings or root. Mirrors how CLAUDE.md cascades up the tree.
 
-**This dissolves the dedup pain:** place a shared fact at `/proj` **once**; `api`
-inherits it. You never dual-home, so content-dedup stays global and correct (each
-fact lives at exactly one node).
+**This dissolves the dedup pain:** place a shared fact at `/repo` **once**;
+`/repo/api` inherits it. You never dual-home, so content-dedup stays global and
+correct (each fact lives at exactly one node).
 
 ## Design
 
@@ -100,10 +100,10 @@ paths may not even exist on the daemon's host).
 - **Precision dilution.** A bigger candidate pool may surface less-relevant
   ancestor/global memories; the reranker + similarity floor + RRF should rank them
   out — but **measure** (Phase F) before default-on.
-- **Path normalization / symlinks.** proj has symlinks (symlinked MEMORY.md);
-  `.resolve()` both the stored paths and the chain, or ancestry breaks.
-- **Bound at the git root** by default (don't leak `/path/to` across
-  repos).
+- **Path normalization / symlinks.** some checkouts use symlinks (e.g. a symlinked
+  MEMORY.md); `.resolve()` both the stored paths and the chain, or ancestry breaks.
+- **Bound at the git root** by default (don't leak a parent directory's memories
+  across sibling repos).
 - `include_global` flips today's behavior (project recall starts including
   globals) — measure separately.
 
@@ -113,7 +113,8 @@ paths may not even exist on the daemon's host).
   memory-vs-rule inconsistency — **but flattens the repo** (an `api` fact would
   also surface in `web/`). It's the degenerate tree (store only at the root node);
   the full tree **subsumes** it. Ship the tree. (Collapse is a reasonable
-  same-day stopgap to make the proj facts recall from root before the tree lands.)
+  same-day stopgap to make an existing project's facts recall from root before the
+  tree lands.)
 
 ## Non-goals
 - Dual-homing (obviated by the tree).

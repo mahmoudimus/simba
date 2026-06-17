@@ -8,21 +8,21 @@ fresh context.
 
 ## 0. Current state (facts)
 
-- **Branch:** `main` @ `27ab8c6` (`chore(release): 0.11.0`). Clean tree (modulo
-  gitignored `.simba/`). **No open PRs** — all merged.
+- **Branch:** `main`. Clean tree (modulo gitignored `.simba/`). **No open PRs** —
+  all merged.
 - **Version:** `0.11.0` (pyproject + `uv.lock`). **Released to PyPI (`simba-ai`)
   + GitHub Release `v0.11.0`** this session (verified live on PyPI). Prior
   0.8.0–0.10.0 earlier.
 - **Every new lever this release defaults OFF** → with defaults, hook output is
   byte-identical to 0.10.0.
-- **Dogfood config** (simba repo `.simba/config.toml`, **gitignored / local-only**,
+- **Dogfood config** (this repo's `.simba/config.toml`, **gitignored / local-only**,
   so CI is unaffected): `[hooks] redirect_mode="rewrite"`, `pitfall_gate_enabled=true`,
-  `engagement_marker_enabled=true`, `reasoning_verify_enabled=true`. LLM provider
-  `deepseek-v4-flash` @ `:8082`, judge `deepseek-v4-pro` @ `:8083`.
-- **⚠️ The user's running daemon PREDATES specs 26/27/28** — restart `simba server`
-  to load the new code (daemon-served paths: `/hook/context`, `/hook/message_end`,
-  `project_scopes` recall). Subprocess hooks (Claude/Codex) already use new code via
-  `uv run -m simba.hooks.<name>`.
+  `engagement_marker_enabled=true`, `reasoning_verify_enabled=true`. Local LLM
+  provider + judge wired via `llm-cli`.
+- **⚠️ A long-running daemon predating specs 26/27/28 must be restarted**
+  (`simba server`) to load the new code (daemon-served paths: `/hook/context`,
+  `/hook/message_end`, `project_scopes` recall). Subprocess hooks (Claude/Codex)
+  already use the new code via `uv run -m simba.hooks.<name>`.
 
 ## 1. What we shipped this session (all on `main`, all default-OFF)
 
@@ -36,9 +36,11 @@ fresh context.
 | #85 | **Global no-real-GGUF-load guard** — autouse fixture in `tests/conftest.py` (reranker accessors raise → fail-open; `gguf`-marked tests exempt) so CI never reaches Hugging Face. | — |
 | #86 | **0.11.0 release** (CHANGELOG + version + uv.lock). | — |
 
-**Local (gitignored) doctrine gates:**
-- **proj** (`/path/to/proj`): drizzle hand-edit gate + `COMPOSE_PROJECT_NAME` redirect rewrite (`.simba/redirects.toml`); `hierarchical_recall` enabled; **29 curated facts re-tagged `/proj/api` → `/proj` root** (backup ids: `/tmp/proj_retag_ids.txt`). project_id `REDACTED-ID`.
-- **acme** (`/path/to/.../acme`): system-test docker-runner redirect rewrite + `TOOL_RULE` (`run_system_tests.sh`, carve out `--collect-only`).
+**Local (gitignored) doctrine gates:** per-project guards (a generated-file
+hand-edit guard, a docker-test-runner redirect rewrite, hierarchical recall + a
+one-time fact re-tag to the repo-root scope) were applied to two of the user's
+**private** projects via their gitignored local `.simba/` config — those live
+outside this repo and are intentionally not detailed here.
 
 ## 2. Tests & how we ran them
 
@@ -47,24 +49,24 @@ fresh context.
 - **Characterization** pins byte-identical Claude/Codex hook output with every lever
   OFF (the load-bearing invariant for all hook changes).
 - **Hierarchical recall MEASURED** (A/B on the production stack, recall@k OFF vs ON,
-  gold at child + ancestor/global distractors): harness `/tmp/hier_measure/measure.py`
-  (LoCoMo, `--max-q 0`) + `measure_lme.py` (longmemeval_s, bounded pool). Result:
-  **situational** — LoCoMo 9:1 ≈ −0.7pp, longmemeval_s 14.8:1 −4 to −9pp; inheritance
-  works (0 → 0.74). Stays default-OFF. (Memory: `hierarchical-recall-dilution-measured`.)
+  gold at child + ancestor/global distractors): throwaway harness under `/tmp`
+  (LoCoMo full-query + a bounded longmemeval_s replicate). Result: **situational** —
+  LoCoMo ~9:1 ratio ≈ −0.7pp, longmemeval_s ~15:1 −4 to −9pp recall@k; inheritance
+  works (0 → ~0.74). Stays default-OFF. (See memory: `hierarchical-recall-dilution-measured`.)
 - **CI per PR:** watched, then **explicitly verified the check conclusion**
   (`gh pr checks <N>` = pass / `mergeStateStatus` CLEAN) before merge — see Decisions.
 
 ## 3. Decisions made
 
 - **Content cap:** don't raise the default; make `max_content_length` the single
-  source of truth so all guidance hydrates from it (user pivoted from "raise to 750").
+  source of truth so all guidance hydrates from it (pivoted from "raise to 750").
 - **Hierarchical recall:** measured → situational lever, **stays default-OFF**
-  globally; enabled per-project (proj) where the ancestor:child noise ratio is low.
-- **proj data:** re-tag the 29 curated facts up to `/proj` root (option **A**); left
-  the 191 `legacy-service`-path facts as-is.
-- **proj PR-review gate: DEFERRED** → pursue **affordance over prohibition** (a
-  `simba pr-review` skill primed via intent) rather than a redirect-deny; revisit once
-  spec-27/28 machinery exists (noted in spec 28).
+  globally; enabled per-project where the ancestor:child noise ratio is low.
+- **One private project's data:** re-tagged its curated facts up to the repo-root
+  scope (option A); left the bulk under a legacy checkout path as-is.
+- **A per-project PR-review gate: DEFERRED** → pursue **affordance over prohibition**
+  (a `simba pr-review`-style skill primed via intent) rather than a redirect-deny;
+  revisit once spec-27/28 machinery exists (noted in spec 28).
 - **CORE rules graduate OUT when gated** — added as a CORE rule in `CORE_INSTRUCTIONS.md`.
 - **Release flow:** branch → PR → verify-conclusion → merge → tag `v*` → `release.yml`
   cuts the Release → **manual** `gh workflow run deploy.yml --ref v<ver>` for PyPI.
@@ -75,7 +77,7 @@ fresh context.
   custom-role** message — pi's `convertToLlm` may DROP it, making that tier a silent
   no-op. **UNVERIFIED** against the pi runtime; flagged inline in `simba.ts`. pi-only +
   default-OFF, so staged-not-live.
-- **191 `legacy-service` facts** — whether to re-home onto a proj path (user left as-is).
+- **Re-homing one project's legacy-path facts** onto its current scope (left as-is).
 - **Graduating any spec-25/27/28 lever** to default-ON — all unmeasured; would need an
   A/B like spec 26's.
 
@@ -102,50 +104,52 @@ fresh context.
   against the pi runtime (does `convertToLlm` keep custom-role messages? if not, switch
   to a converted/user-role shape).
 - **Measure** the spec-25/27/28 levers if pursuing default-ON graduation.
-- **proj PR-review affordance** (a `simba pr-review` skill) — the deferred item.
+- **PR-review affordance** (a `simba pr-review`-style skill) — the deferred item.
 - **Marker polish:** `🦁☑ top 0.00` on non-prompt turns → `idle`.
-- Older roadmap (memory `tk-is-the-ticket-system` / specs): blog draft, KU/0.7.1,
-  reader levers, multi-hop revisit at true 5M fullwiki.
+- Older roadmap (see memories / specs): blog draft, KU/0.7.1, reader levers, multi-hop
+  revisit at true 5M fullwiki.
 
 ## 7. Where to pick up
 
 The cleanest next thing is **activating + de-risking spec 27** (restart daemon → verify
-pi Tier-2 M2). Everything else is opt-in measurement or the deferred proj affordance.
+pi Tier-2 M2). Everything else is opt-in measurement or the deferred PR-review affordance.
 
 **Operational gotchas (memories):** `env -u GITHUB_TOKEN gh auth switch --user mahmoudimus`
 before any `gh`/push (active acct 401s); push over SSH; **verify the check CONCLUSION,
 not the `--watch` exit code, before merging**; `git -m` backticks run as commands in zsh
 (use `-F`); never `rg -rln` (`-r` is `--replace`); releases — tag `v*` → `release.yml`,
 then **manual** `gh workflow run deploy.yml --ref vX.Y.Z` (`vars.PUBLISH_TO_PYPI=true`).
+**Keep private project names / local paths out of this public repo** (commits, docs, specs).
 
 ---
 
 ## 8. Handoff prompt (paste into a fresh context)
 
-> You're continuing work on **simba** (`/Users/mahmoud/src/ai/simba`), a pure-Python
-> local-first memory/reasoning plugin for coding agents (Claude Code + Codex + pi).
-> `main` is at **0.11.0** (released to PyPI this session). Read `docs/plans/HANDOFF.md`
-> first, then `docs/plans/README.md` + the relevant `docs/plans/NN-*.md` specs (25–28),
-> and the personal-memory index `~/.claude/projects/-Users-mahmoud-src-ai-simba/memory/MEMORY.md`
+> You're continuing work on **simba** (a pure-Python local-first memory/reasoning
+> plugin for coding agents: Claude Code + Codex + pi). `main` is at **0.11.0**
+> (released to PyPI this session). Read `docs/plans/HANDOFF.md` first, then
+> `docs/plans/README.md` + the relevant `docs/plans/NN-*.md` specs (25–28), and the
+> personal-memory index `~/.claude/projects/-Users-mahmoud-src-ai-simba/memory/MEMORY.md`
 > (key entries: `hierarchical-recall-dilution-measured`, `gh-pr-checks-watch-exit-vs-conclusion`,
 > `pi-harness-support-spec23`, `sota-levers-graduate-to-default-on`).
 >
 > Context: this session shipped specs 25–28 + the `max_content_length` single source of
 > truth + CI hardening, all behind **default-OFF** levers (byte-identical hook output with
 > defaults). Hierarchical recall (spec 26) was **measured** as a situational lever (stays
-> default-OFF; enabled for proj). Conventions: pure Python under `src/simba/` (the one TS
-> file is the pi bridge `simba.ts`); all config via `@configurable`; default-OFF for
-> unmeasured/situational levers; **byte-identical Claude/Codex output is the load-bearing
-> invariant** for hook changes; tests must mock daemon/LLM/model (a real model load flaked
-> CI on HF — now globally guarded); **end every response with `[✓ rules]`**; **no Claude
-> attribution in commits/PRs**; `gh pr create` needs `gh auth switch --user mahmoudimus`;
-> push over SSH; **verify the check CONCLUSION (not the `--watch` exit) before merging**.
+> default-OFF). Conventions: pure Python under `src/simba/` (the one TS file is the pi
+> bridge `simba.ts`); all config via `@configurable`; default-OFF for unmeasured/situational
+> levers; **byte-identical Claude/Codex output is the load-bearing invariant** for hook
+> changes; tests must mock daemon/LLM/model (a real model load flaked CI on HF — now
+> globally guarded); **end every response with `[✓ rules]`**; **no Claude attribution in
+> commits/PRs**; **never put private project names / local paths in this public repo**;
+> `gh pr create` needs `gh auth switch --user mahmoudimus`; push over SSH; **verify the
+> check CONCLUSION (not the `--watch` exit) before merging**.
 >
 > Top priority: **activate + de-risk spec 27** — (1) restart the daemon so daemon-served
 > paths load the new code, (2) **verify the pi `context` re-injection (spec 27 M2)** — the
 > bridge appends an unregistered custom-role message that pi's `convertToLlm` may drop (a
 > silent no-op); confirm against the pi runtime and switch to a converted/user-role shape
 > if needed. Then: optionally measure the spec-25/27/28 levers for graduation, build the
-> deferred proj PR-review *affordance* skill, and polish the `🦁☑ top 0.00` → `idle` case.
+> deferred PR-review *affordance* skill, and polish the `🦁☑ top 0.00` → `idle` case.
 > See HANDOFF §4–6 for the full open list. Confirm you've read the handoff + memories,
 > then propose the plan before writing code.

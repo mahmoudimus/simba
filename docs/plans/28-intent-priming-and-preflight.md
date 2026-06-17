@@ -4,7 +4,7 @@
 **Status:** TODO (design; not started)
 **Branch:** TBD off `main`
 **Builds on:** spec 27 (the `🦁☑` marker, `signal_flag`, Stop/SubagentStop verify),
-the proj/acme gates (the doctrine this primes), spec 26 (project-scoped recall).
+the per-project doctrine gates (the doctrine this primes), spec 26 (project-scoped recall).
 
 ## Why
 
@@ -77,18 +77,18 @@ fake "the agent provably engaged simba before reasoning" by mandating a prefligh
 
 A redirect-deny gate enumerates the *wrong* commands and blocks them. A cleaner
 model for workflows that have a known "right way" is **affordance**: package the
-right workflow as a **skill / plugin command** (e.g. `simba pr-review <N>` that does
-the `pr_reviews/proj-pr-<N>` worktree dance; `simba db-regen` that runs the docker
-init-schema regen with `COMPOSE_PROJECT_NAME` set) and **steer the agent to it via
+right workflow as a **skill / plugin command** (e.g. a `simba pr-review <N>` that
+does the PR-review worktree dance; a `simba db-regen` that runs a project's
+generated-schema regen with the right env set) and **steer the agent to it via
 intent-priming** — give it the paved path instead of fencing off the cliffs.
 
-This likely subsumes several deny-gates: the **proj PR-review** case (review-in-place
-via `git show pr-N:` → use the worktree skill) and the **drizzle/init-schema** case
-(hand-edit → use the regen skill). Worth exploring how simba can *register* such
+This likely subsumes several deny-gates: the **PR-review** case (review-in-place
+via `git show pr-N:` → use the worktree skill) and the **generated-schema hand-edit**
+case (→ use the regen skill). Worth exploring how simba can *register* such
 skills/commands (it's already a plugin) and whether `message_end` / preflight
 (specs 27/28) can verify the agent took the affordance vs. hand-rolling.
 
-**Decision (2026-06-16):** the proj PR-review gate is **deferred** — don't ship a
+**Decision (2026-06-16):** the PR-review gate is **deferred** — don't ship a
 redirect-deny now; revisit it through this affordance lens once the 27/28 machinery
 (intent-prime → preflight → verify) exists.
 
