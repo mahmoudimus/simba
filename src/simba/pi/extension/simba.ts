@@ -202,6 +202,12 @@ export default function (pi: ExtensionAPI) {
   // engagement_marker_enabled); off → empty, we return nothing. We append the
   // ledger as a custom message so it converts into the LLM context, keeping the
   // existing list intact. Payload is minimal (this fires per call → latency).
+  //
+  // ⚠️ UNVERIFIED (spec-27 review M2): an UNREGISTERED `custom`-role message may be
+  // dropped by pi's `convertToLlm` — if so this re-injection is a SILENT NO-OP and
+  // the LLM never sees the ledger. MUST verify against the pi runtime before
+  // trusting this tier (and switch to a converted/user-role shape if dropped).
+  // The lever is default-OFF, so this is staged, not live.
   pi.on("context", async (e: ContextEvent, ctx: ExtensionContext) => {
     const r = await callSimba("context", {
       messages_text: recentMessagesText(e.messages),
@@ -237,6 +243,10 @@ export default function (pi: ExtensionAPI) {
       cwd: ctx.cwd,
     });
     if (!r.block_reason) return; // no violation — leave the message as-is
+    // Defensive: today's pi types guarantee AssistantMessage.content is an array,
+    // but a future/non-Anthropic provider could surface a string. Spreading a
+    // string would shatter it into chars — bail (no-op) rather than corrupt it.
+    if (!Array.isArray(msg.content)) return;
     note("doctrine violation — annotated finalized message");
     const correction = { type: "text" as const, text: `\n\n${r.block_reason}` };
     // Keep the original role; append the correction to the assistant content.
