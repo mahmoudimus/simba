@@ -13,7 +13,13 @@ import type {
   AgentEndEvent,
   ToolCallEvent,
   ToolCallEventResult,
+  ContextEvent,
 } from "@earendil-works/pi-coding-agent";
+// NOTE: pi (v0.76.0) re-exports `ContextEvent` from its package index but NOT
+// `ContextEventResult`, `MessageEndEvent`, or `MessageEndEventResult` (they live
+// in the internal extensions/types module). The `pi.on(...)` overloads still type
+// the handler param + return fully, so we let TS INFER those from the overload
+// rather than importing the un-exported names.
 
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
 
@@ -72,6 +78,21 @@ function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>
     return messageText(m.content);
   }
   return "";
+}
+
+// Flatten the last few messages to a compact text blob for the daemon's recall.
+// Kept small (the `context` event fires per LLM call → latency); we only need a
+// query, not the whole transcript. Ignores non-text blocks via messageText.
+function recentMessagesText(
+  messages: Array<{ role?: string; content?: unknown }>,
+  limit = 4,
+): string {
+  return messages
+    .slice(-limit)
+    .map((m) => messageText(m?.content))
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 2000);
 }
 
 // The agent's most recent reasoning, pulled from the live session branch (pi has
@@ -173,6 +194,54 @@ export default function (pi: ExtensionAPI) {
       return { block: true, reason };
     }
     // No gate fired — allow with the original input (context injections dropped).
+  });
+
+  // Tier-2 (pi-only): re-inject doctrine/recall before EVERY LLM call so the
+  // rules ride the whole reasoning chain (no mid-reasoning drift — the gap
+  // Claude/Codex cannot reach). The daemon decides what to inject (gated by
+  // engagement_marker_enabled); off → empty, we return nothing. We append the
+  // ledger as a custom message so it converts into the LLM context, keeping the
+  // existing list intact. Payload is minimal (this fires per call → latency).
+  pi.on("context", async (e: ContextEvent, ctx: ExtensionContext) => {
+    const r = await callSimba("context", {
+      messages_text: recentMessagesText(e.messages),
+      cwd: ctx.cwd,
+    });
+    const inject = r.additional_context;
+    if (!inject) return; // lever off / nothing to inject — leave messages untouched
+    note(`re-injected ledger (${r.memory_count ?? 0} recalled)`);
+    return {
+      messages: [
+        ...e.messages,
+        {
+          role: "custom" as const,
+          customType: "simba-context",
+          content: inject,
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+  });
+
+  // Tier-2 (pi-only): doctrine-verify the FINALIZED assistant message — the
+  // tools-free-output catch (a wrong conclusion stated in prose has no tool to
+  // gate). The daemon returns a correction (block_reason) on a violation; we
+  // annotate the message IN PLACE (keeping the role, as pi requires) so the
+  // correction rides with it. Off (default) → daemon returns no block, no-op.
+  pi.on("message_end", async (e, ctx: ExtensionContext) => {
+    const msg = e.message;
+    if (!msg || msg.role !== "assistant") return; // only verify assistant output
+    const r = await callSimba("message_end", {
+      message_text: messageText(msg.content),
+      cwd: ctx.cwd,
+    });
+    if (!r.block_reason) return; // no violation — leave the message as-is
+    note("doctrine violation — annotated finalized message");
+    const correction = { type: "text" as const, text: `\n\n${r.block_reason}` };
+    // Keep the original role; append the correction to the assistant content.
+    const content = [...msg.content, correction];
+    return { message: { ...msg, content } };
   });
 
   pi.on("agent_end", async (e: AgentEndEvent, ctx: ExtensionContext) => {
