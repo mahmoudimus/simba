@@ -15,8 +15,14 @@ lint() {
 }
 
 run_tests() {
-    echo "→ pytest -q"
-    uv run pytest -q
+    # --timeout guards against a hung test: fail any single test after 120s
+    # instead of letting it stall the whole run (a transient pytest hang on PR
+    # #80 burned ~2h of CI). The thread method also catches hangs inside native
+    # code (llama_cpp / lancedb), and prints a traceback of where it stuck. The
+    # job-level timeout-minutes in ci.yml is the outer guard for a whole-runner
+    # stall the in-process timeout can't catch.
+    echo "→ pytest -q (per-test timeout 120s)"
+    uv run pytest -q --timeout=120 --timeout-method=thread
 }
 
 case "${1:-all}" in

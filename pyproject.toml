@@ -64,6 +64,7 @@ dev = [
     "llama-cpp-python>=0.3",
     "huggingface-hub>=0.26",
     "spacy>=3.8.14",
+    "pytest-timeout>=2.3",
 ]
 
 [tool.ruff]
