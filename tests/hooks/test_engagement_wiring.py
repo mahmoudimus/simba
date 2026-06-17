@@ -26,8 +26,18 @@ class _MarkerCfg:
 
 
 class TestUserPromptSubmitMarker:
-    def test_off_by_default_no_marker(self, tmp_path) -> None:
-        # Characterization: lever OFF (default) → no 🦁☑ in the output.
+    def test_off_by_default_no_marker(self, tmp_path, monkeypatch) -> None:
+        # Characterization: lever OFF (default) → no 🦁☑. Pin _cfg to the real
+        # default so an ambient (dogfood) .simba/config.toml enabling the marker
+        # can't leak in (the hook loads config from the process cwd, not payload cwd).
+        import simba.hooks.config
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit,
+            "_cfg",
+            lambda: simba.hooks.config.HooksConfig(),
+            raising=False,
+        )
         with unittest.mock.patch(
             "simba.hooks._memory_client.recall_memories", return_value=[]
         ):

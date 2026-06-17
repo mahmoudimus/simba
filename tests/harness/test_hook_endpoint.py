@@ -76,8 +76,19 @@ def test_hook_endpoint_pre_tool_returns_canonical_fields():
     assert body["escalated_block"] is None
 
 
-def test_hook_endpoint_context_returns_canonical_fields():
+def test_hook_endpoint_context_returns_canonical_fields(monkeypatch):
     # pi-only context re-injection (spec 27). Off by default → empty context, 200.
+    # Pin the cfg to the real default so an ambient dogfood .simba/config.toml that
+    # enables engagement_marker can't make this endpoint return a ledger.
+    import simba.hooks.config
+    import simba.hooks.context
+
+    monkeypatch.setattr(
+        simba.hooks.context,
+        "_hooks_cfg",
+        lambda: simba.hooks.config.HooksConfig(),
+        raising=False,
+    )
     resp = _client().post(
         "/hook/context",
         json={"messages_text": "let me edit the schema", "cwd": "/tmp"},

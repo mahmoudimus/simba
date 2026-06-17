@@ -23,8 +23,17 @@ class TestStopEchoVerify:
         # Characterization: lever OFF (default) → byte-identical to today. Even with
         # a recorded engagement, no echo nudge is emitted.
         import simba.guardian.engagement_flag as ef
+        import simba.hooks.config
 
         monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        # Pin the cfg to the real default (both spec-27 levers off) so an ambient
+        # dogfood .simba/config.toml can't flip on the echo-verify / block path.
+        monkeypatch.setattr(
+            simba.hooks.stop,
+            "_hooks_cfg",
+            lambda: simba.hooks.config.HooksConfig(),
+            raising=False,
+        )
         ef.record_engagement("sess-off", ledger="🦁☑ recalled 2 (top 0.5)")
         out = simba.hooks.stop.main(
             {

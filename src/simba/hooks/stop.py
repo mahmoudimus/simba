@@ -83,14 +83,16 @@ def run(hook_input: dict) -> CanonicalResult:
     #     check the finalized message against stored doctrine and BLOCK-to-reconsider
     #     on a violation (the adapter maps a Stop block_reason to decision:block).
     #     Default-OFF → None (Stop stays observe-only, byte-identical). Fail-open.
+    #     Compute the decision but DON'T early-return: the capture steps below
+    #     (signal flag, tailor, continuous) must still run on a blocked turn, or the
+    #     blocked response's transcript window is silently dropped.
+    block_reason: str | None = None
     if getattr(cfg, "reasoning_verify_enabled", False) and response:
         from simba.hooks import reasoning_verify
 
-        block = reasoning_verify.verify(response, cwd_str, cfg)
-        if block:
-            return CanonicalResult(block_reason=block)
+        block_reason = reasoning_verify.verify(response, cwd_str, cfg) or None
 
-    # 1b. Record the per-session signal flag so UserPromptSubmit can gate CORE
+    # 1c. Record the per-session signal flag so UserPromptSubmit can gate CORE
     #     re-injection next turn (spec 25, guardian_signal_gated). Fail-soft —
     #     the reader fail-opens to inject when the flag is missing/unreadable.
     if session_id:
@@ -112,8 +114,11 @@ def run(hook_input: dict) -> CanonicalResult:
         )
 
     # Stop hooks don't support hookSpecificOutput — only top-level fields.
-    # The tailor error capture writes to disk as a side effect.
-    return CanonicalResult(additional_context="\n\n".join(parts))
+    # The tailor error capture writes to disk as a side effect. A non-None
+    # block_reason renders as {"decision":"block","reason":…} (reconsider).
+    return CanonicalResult(
+        additional_context="\n\n".join(parts), block_reason=block_reason
+    )
 
 
 def main(hook_input: dict) -> str:
