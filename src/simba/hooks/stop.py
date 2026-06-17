@@ -18,6 +18,44 @@ import simba.tailor.hook
 from simba.harness.core import CanonicalResult
 
 
+def _hooks_cfg():
+    """Load the hooks config section (registers it on first access)."""
+    import simba.hooks.config
+
+    _ = simba.hooks.config  # ensure the "hooks" section is registered
+    return simba.config.load("hooks")
+
+
+def _verify_engagement_echo(response: str, session_id: str, cfg) -> str:
+    """Tier-1 echo-verify (spec 27, Phase B): flag a marker-missing turn.
+
+    simba EMITTED a ``🦁☑`` ledger this turn (recorded per session at
+    UserPromptSubmit/PreToolUse) and the agent was asked to echo it. If simba
+    surfaced activity but the response carries no marker, return a nudge naming the
+    ledger the agent should have echoed. Reads then ages out the per-turn record.
+    Default-OFF → "" (byte-identical to today). Fail-soft (advisory)."""
+    if not getattr(cfg, "engagement_marker_enabled", False) or not session_id:
+        return ""
+    try:
+        import simba.guardian.engagement_flag as ef
+        import simba.hooks.engagement as eng
+
+        if not ef.engaged(session_id):
+            return ""  # simba did not surface activity → nothing to verify
+        ledger = ef.last_ledger(session_id)
+        echoed = eng.has_marker(response)
+        ef.reset_engagement(session_id)  # per-turn record ages out
+        if echoed:
+            return ""
+        return (
+            "⚠️ ENGAGEMENT: simba surfaced activity this turn but your "
+            "response did not echo the marker. Echo this ledger so the interaction "
+            f"is auditable:\n{ledger}"
+        )
+    except Exception:
+        return ""
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the Stop hook pipeline. Returns a CanonicalResult."""
     cwd_str = hook_input.get("cwd")
@@ -26,12 +64,31 @@ def run(hook_input: dict) -> CanonicalResult:
 
     parts: list[str] = []
 
+    cfg = _hooks_cfg()
+
     # 1. Guardian: check for [✓ rules] signal in response
     response = hook_input.get("response", "")
     if response:
         signal_result = simba.guardian.check_signal.main(response=response, cwd=cwd)
         if signal_result:
             parts.append(signal_result)
+
+    # 1a. Engagement echo-verify (spec 27, Phase B): flag a turn that surfaced
+    #     simba activity but did not echo the 🦁☑ marker. Default-OFF → "".
+    echo_nudge = _verify_engagement_echo(response, session_id, cfg)
+    if echo_nudge:
+        parts.append(echo_nudge)
+
+    # 1b. Tier-2 doctrine-verify (spec 27, Phase E): when reasoning_verify is on,
+    #     check the finalized message against stored doctrine and BLOCK-to-reconsider
+    #     on a violation (the adapter maps a Stop block_reason to decision:block).
+    #     Default-OFF → None (Stop stays observe-only, byte-identical). Fail-open.
+    if getattr(cfg, "reasoning_verify_enabled", False) and response:
+        from simba.hooks import reasoning_verify
+
+        block = reasoning_verify.verify(response, cwd_str, cfg)
+        if block:
+            return CanonicalResult(block_reason=block)
 
     # 1b. Record the per-session signal flag so UserPromptSubmit can gate CORE
     #     re-injection next turn (spec 25, guardian_signal_gated). Fail-soft —

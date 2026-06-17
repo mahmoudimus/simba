@@ -19,6 +19,7 @@ NATIVE_TO_CANONICAL = {
     "SessionStart": "session_start",
     "UserPromptSubmit": "prompt_submit",
     "Stop": "stop",
+    "SubagentStop": "subagent_stop",
     "PreCompact": "pre_compact",
     "PreToolUse": "pre_tool",
     # v2: "PostToolUse": "post_tool",
@@ -50,7 +51,9 @@ def render(event: str, result: CanonicalResult) -> str:
         if result.suppress_output:
             return json.dumps({"suppressOutput": True})
         return simba.hooks._io.context("PreCompact", result.additional_context)
-    if event == "Stop":
+    if event in ("Stop", "SubagentStop"):
+        # block_reason is handled by the generic short-circuit above (→
+        # {"decision":"block","reason":…}). Otherwise stopReason / empty object.
         if result.additional_context:
             return json.dumps({"stopReason": result.additional_context})
         return json.dumps({})

@@ -63,6 +63,9 @@ _HOOK_EVENTS = {
     "PostToolUse": "simba.hooks.post_tool_use",
     "PreCompact": "simba.hooks.pre_compact",
     "Stop": "simba.hooks.stop",
+    # SubagentStop: verify-before-report doctrine check (spec 27). Observe-only /
+    # empty unless hooks.reasoning_verify_enabled; harmless to register otherwise.
+    "SubagentStop": "simba.hooks.subagent_stop",
     # Codex-only: emitted just before Codex prompts for approval.
     # Claude Code never invokes this event, so registering it here is
     # harmless for Claude installs.
@@ -76,6 +79,7 @@ _HOOK_TIMEOUTS = {
     "PostToolUse": 5000,
     "PreCompact": 5000,
     "Stop": 5000,
+    "SubagentStop": 5000,
     "PermissionRequest": 3000,
 }
 
@@ -88,6 +92,7 @@ _CLAUDE_HOOK_EVENTS = (
     "PostToolUse",
     "PreCompact",
     "Stop",
+    "SubagentStop",
 )
 
 # Subset that Codex understands.  Codex has no PreCompact event.
@@ -97,6 +102,7 @@ _CODEX_HOOK_EVENTS = (
     "PreToolUse",
     "PostToolUse",
     "Stop",
+    "SubagentStop",
     "PermissionRequest",
 )
 
