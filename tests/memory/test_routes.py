@@ -366,9 +366,17 @@ class TestHealthEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
+        assert data["ready"] is True
+        assert data["degraded"] is False
         assert "uptime" in data
         assert "memoryCount" in data
         assert data["embeddingModel"] == "bge-large-en-v1.5"
+        assert data["embeddingDims"] == 1024
+        assert "requestId" in data
+        assert data["components"]["vector"]["ready"] is True
+        assert data["components"]["fts"]["ready"] is True
+        assert data["components"]["embedder"]["ready"] is True
+        assert "x-simba-request-id" in resp.headers
 
 
 class TestMetricsEndpoint:

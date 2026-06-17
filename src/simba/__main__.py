@@ -839,6 +839,43 @@ def _cmd_codex_status(args: list[str]) -> int:
                 f"(count={data.get('memoryCount', 0)}, "
                 f"model={data.get('embeddingModel', 'unknown')})"
             )
+            components = data.get("components") or {}
+            if "ready" in data or components:
+                print(
+                    "[codex] readiness: "
+                    f"status={data.get('status', 'unknown')} "
+                    f"ready={data.get('ready', 'unknown')} "
+                    f"degraded={data.get('degraded', 'unknown')}"
+                )
+            vector = components.get("vector") or {}
+            fts = components.get("fts") or {}
+            if vector or fts:
+                print(
+                    "[codex] storage: "
+                    f"db={data.get('dbPath') or vector.get('path') or 'unknown'} "
+                    f"table={vector.get('table') or 'unknown'} "
+                    f"fts={data.get('ftsPath') or fts.get('path') or 'unknown'}"
+                )
+            embedder = components.get("embedder") or {}
+            reranker = components.get("reranker") or {}
+            if embedder or reranker:
+                embedding_dims = data.get("embeddingDims") or embedder.get(
+                    "dims", "unknown"
+                )
+                print(
+                    "[codex] retrieval: "
+                    f"embedding_dims={embedding_dims} "
+                    f"provider={embedder.get('provider', 'unknown')} "
+                    f"reranker={reranker.get('mode', 'unknown')}"
+                )
+            if data.get("lastError"):
+                err = data["lastError"]
+                print(
+                    "[codex] last error: "
+                    f"{err.get('type', 'unknown')} "
+                    f"endpoint={err.get('endpoint', 'unknown')} "
+                    f"request={err.get('request_id', data.get('requestId', 'unknown'))}"
+                )
             # Mirror Claude SessionStart behavior: trigger one sync cycle.
             with contextlib.suppress(httpx.HTTPError, ValueError):
                 httpx.post(f"{url}/sync", timeout=1.0)
@@ -2906,16 +2943,31 @@ def _eval_bench(args: list[str]) -> int:
             temporal_codegen=bcfg.temporal_codegen,
         )
 
+    git_sha = bench_results.current_git_sha()
+    config_snap = bench_results.config_snapshot(
+        mcfg,
+        bcfg,
+        llm_cfg=bench_llm._cfg,
+        judge_cfg=judge_client._cfg if run_qa_flag else None,
+    )
+    excluded_count = int((qa_report or {}).get("n_skipped", 0))
+    abstained_count = int(((qa_report or {}).get("abstention") or {}).get("n", 0))
     record = {
         "timestamp": time.time(),
-        "git_sha": bench_results.current_git_sha(),
+        "git_sha": git_sha,
         "dataset": dataset_name,
         "split": split_arg or None,
-        "config": bench_results.config_snapshot(
-            mcfg,
-            bcfg,
-            llm_cfg=bench_llm._cfg,
+        "config": config_snap,
+        "provenance": bench_results.build_provenance(
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            split=split_arg or None,
+            config=config_snap,
+            git_sha=git_sha,
+            answerer_cfg=bench_llm._cfg,
             judge_cfg=judge_client._cfg if run_qa_flag else None,
+            excluded_count=excluded_count,
+            abstained_count=abstained_count,
         ),
         "recall": recall_report,
         "qa": qa_report,
@@ -3067,13 +3119,25 @@ def _eval_halumem(args: list[str]) -> int:
         k=k or bcfg.default_k,
     )
 
+    git_sha = bench_results.current_git_sha()
+    config_snap = bench_results.config_snapshot(
+        mcfg, bcfg, llm_cfg=answerer._cfg, judge_cfg=judge_client._cfg
+    )
     record = {
         "timestamp": time.time(),
-        "git_sha": bench_results.current_git_sha(),
+        "git_sha": git_sha,
         "dataset": "halumem",
         "split": None,
-        "config": bench_results.config_snapshot(
-            mcfg, bcfg, llm_cfg=answerer._cfg, judge_cfg=judge_client._cfg
+        "config": config_snap,
+        "provenance": bench_results.build_provenance(
+            dataset_name="halumem",
+            dataset_path=dataset_path,
+            split=None,
+            config=config_snap,
+            git_sha=git_sha,
+            answerer_cfg=answerer._cfg,
+            judge_cfg=judge_client._cfg,
+            excluded_count=int(report.get("n_skipped", 0)),
         ),
         "halumem": report,
     }

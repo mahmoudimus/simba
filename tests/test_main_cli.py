@@ -346,6 +346,63 @@ def test_cmd_codex_status_auto_extracts_and_marks_ledger(
     assert "extraction status: extracted" in out
 
 
+def test_cmd_codex_status_prints_rich_health(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    _write_codex_session(codex_home, text="health detail")
+
+    class _HealthResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": "degraded",
+                "ready": True,
+                "degraded": True,
+                "memoryCount": 10,
+                "embeddingModel": "test-model",
+                "embeddingDims": 1024,
+                "dbPath": "/tmp/memories.lance",
+                "ftsPath": "/tmp/memory_fts.db",
+                "components": {
+                    "vector": {"table": "memories", "path": "/tmp/memories.lance"},
+                    "fts": {"path": "/tmp/memory_fts.db"},
+                    "embedder": {"provider": "gguf", "dims": 1024},
+                    "reranker": {"mode": "cross-encoder"},
+                },
+                "lastError": {
+                    "type": "RuntimeError",
+                    "endpoint": "/recall",
+                    "request_id": "req1",
+                },
+            }
+
+    class _PostResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "ok"}
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _HealthResp())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _PostResp())
+
+    rc = cli._cmd_codex_status(["--no-auto-extract"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "readiness: status=degraded ready=True degraded=True" in out
+    assert "storage: db=/tmp/memories.lance table=memories" in out
+    assert "retrieval: embedding_dims=1024 provider=gguf reranker=cross-encoder" in out
+    assert "last error: RuntimeError endpoint=/recall request=req1" in out
+
+
 def test_cmd_codex_extract_run_skips_already_extracted_transcript(
     tmp_path: pathlib.Path,
     monkeypatch,

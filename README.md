@@ -148,6 +148,10 @@ simba codex-finalize          # Run end-of-task signal/error checks
 simba codex-automation        # Print a suggested Codex automation directive
 ```
 
+`simba codex-status` renders the daemon's readiness payload when the running
+daemon supports it: ready/degraded state, LanceDB and FTS paths, embedding
+dimension/provider, reranker mode, and the latest daemon request error id.
+
 Codex `PreCompact` runs the same Simba transcript export path as Claude Code:
 the active JSONL transcript is converted to
 `~/.claude/transcripts/{sessionId}/transcript.md`, marked
@@ -590,7 +594,7 @@ simba eval leaderboard                          # render BENCHMARKS.md from resu
 - **HaluMem** measures *not surfacing wrong/stale memories* (correct / hallucination / omission + boundary abstention) — the inverse of recall@k, the eval where forgetting / supersession can finally show value. It feeds a recency-annotated context (mirroring what the daemon injects); the decisive lever for the temporal categories is recency-aware retrieval, not forgetting.
 - **Eval LLM serving is config-driven** and can run on a remote GPU box — `mlx-server` / `llama-server` / `openai-http`; see [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). The answerer and judge are separate models (no self-grading) and recorded in each result.
 - **Multi-hop instruments (default-OFF, measured)**: entity-bridge (`memory.entity_bridge_enabled`, the one mechanism with a positive external signal) and Track B retrieval-time GraphRAG (`memory.kg_ppr_enabled`, a measured negative kept as an instrument). Both fold a third graph arm into recall before rescore; off until a proven in-repo delta.
-- Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.
+- Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model, plus a compact provenance block with dataset hash, config hash, model identities, and excluded/abstained/contaminated counts) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.
 
 ### Where simba stands — measured, on one axis (not a leaderboard SoTA claim)
 

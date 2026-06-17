@@ -152,3 +152,7 @@ def test_smoke_bench_cmd_end_to_end(monkeypatch, tmp_path) -> None:
     assert len(records) == 1
     assert records[0]["dataset"] == "locomo"
     assert records[0]["recall"]["overall"]["recall@1"] == 1.0
+    assert records[0]["provenance"]["dataset"]["name"] == "locomo"
+    assert records[0]["provenance"]["dataset"]["exists"] is True
+    assert len(records[0]["provenance"]["dataset"]["sha256"]) == 64
+    assert len(records[0]["provenance"]["config_hash"]) == 64

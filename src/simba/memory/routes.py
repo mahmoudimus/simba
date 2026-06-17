@@ -109,8 +109,16 @@ class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
         ],
     ) -> starlette.responses.Response:
         diag = getattr(request.app.state, "diagnostics", None)
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+        request.state.request_id = request_id
         t0 = time.monotonic()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            if diag is not None:
+                diag.record_error(request.url.path, exc, request_id)
+            raise
+        response.headers["x-simba-request-id"] = request_id
         if diag is not None:
             diag.record_request(request.url.path)
             diag.record_latency(request.url.path, (time.monotonic() - t0) * 1000)
@@ -573,28 +581,112 @@ async def preflight(body: PreflightRequest, request: fastapi.Request) -> dict:
 
 @router.get("/health")
 async def health(request: fastapi.Request) -> dict:
-
-    table = request.app.state.table
+    table = getattr(request.app.state, "table", None)
     config = request.app.state.config
     start_time = request.app.state.start_time
+    request_id = getattr(request.state, "request_id", "")
+    diag = getattr(request.app.state, "diagnostics", None)
 
-    memory_count = await simba.memory.vector_db.count_rows(table)
+    memory_count = 0
+    vector_ready = table is not None
+    vector_error = ""
+    if vector_ready:
+        try:
+            memory_count = await simba.memory.vector_db.count_rows(table)
+        except Exception as exc:
+            vector_ready = False
+            vector_error = f"{type(exc).__name__}: {exc}"
+            if diag is not None:
+                diag.record_error("/health", exc, request_id)
 
     db_size = "unknown"
-    db_path = request.app.state.db_path
+    db_path = getattr(request.app.state, "db_path", None)
     if db_path and pathlib.Path(db_path).is_dir():
         total = sum(
-            f.stat().st_size for f in pathlib.Path(db_path).iterdir() if f.is_file()
+            f.stat().st_size
+            for f in pathlib.Path(db_path).rglob("*")
+            if f.is_file()
         )
         db_size = f"{total / 1024 / 1024:.2f}MB"
 
+    fts_path = getattr(request.app.state, "fts_path", None)
+    fts_exists = bool(fts_path and pathlib.Path(fts_path).exists())
+    fts_count: int | None = None
+    if fts_exists:
+        try:
+            fts_count = await asyncio.to_thread(
+                _fts_count, fts_path, config.fts_tokenize
+            )
+        except Exception as exc:
+            fts_exists = False
+            if diag is not None:
+                diag.record_error("/health", exc, request_id)
+
+    embed_ready = bool(
+        getattr(request.app.state, "embed", None)
+        or getattr(request.app.state, "embed_query", None)
+    )
+    sync_scheduler = getattr(request.app.state, "sync_scheduler", None)
+    components = {
+        "vector": {
+            "ready": vector_ready,
+            "table": "memories" if table is not None else "",
+            "path": str(db_path or ""),
+            "count": memory_count,
+            "size": db_size,
+            "error": vector_error,
+        },
+        "fts": {
+            "ready": fts_exists,
+            "path": str(fts_path or ""),
+            "count": fts_count,
+            "tokenize": config.fts_tokenize,
+        },
+        "embedder": {
+            "ready": embed_ready,
+            "model": config.embedding_model,
+            "dims": config.embedding_dims,
+            "provider": config.embed_provider,
+            "mode": "http" if config.embed_url else config.embed_provider,
+        },
+        "reranker": {
+            "mode": (
+                config.reranker_mode if config.llm_rerank_enabled else "none"
+            ),
+            "intent_gating": config.rerank_intent_gating,
+            "async_mode": config.llm_rerank_mode,
+        },
+        "sync": {
+            "enabled": config.sync_interval > 0,
+            "running": sync_scheduler is not None,
+            "pending": False,
+        },
+    }
+    ready = bool(vector_ready and embed_ready)
+    degraded = not all(bool(c.get("ready", True)) for c in components.values())
+    last_error = diag.last_error if diag is not None else None
+
     return {
-        "status": "ok",
+        "status": "ok" if ready and not degraded else "degraded",
+        "ready": ready,
+        "degraded": degraded,
+        "requestId": request_id,
         "uptime": int(time.time() - start_time),
+        "uptimeSeconds": int(time.time() - start_time),
         "memoryCount": memory_count,
         "embeddingModel": config.embedding_model,
+        "embeddingDims": config.embedding_dims,
         "vectorDbSize": db_size,
+        "dbPath": str(db_path or ""),
+        "ftsPath": str(fts_path or ""),
+        "components": components,
+        "lastError": last_error,
     }
+
+
+def _fts_count(fts_path: str, tokenize: str) -> int:
+    with simba.memory.fts.connect(fts_path, tokenize=tokenize):
+        return simba.memory.fts.count()
 
 
 @router.get("/metrics")

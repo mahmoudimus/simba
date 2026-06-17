@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 import simba.memory.config
+import simba.memory.fts
 import simba.memory.server
 
 # The real-GGUF-load block is now a GLOBAL autouse fixture in tests/conftest.py
@@ -64,13 +65,16 @@ async def mock_embed():
 
 
 @pytest_asyncio.fixture
-async def async_client(memory_config, lance_table, mock_embed):
+async def async_client(tmp_path, memory_config, lance_table, mock_embed):
     """Async HTTP client backed by a real LanceDB table."""
     app = simba.memory.server.create_app(memory_config)
     app.state.table = lance_table
     app.state.embed = mock_embed
     app.state.embed_query = mock_embed
     app.state.db_path = None
+    fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
+    simba.memory.fts.init(fts_path, tokenize=memory_config.fts_tokenize)
+    app.state.fts_path = str(fts_path)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

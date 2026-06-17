@@ -22,6 +22,7 @@ class DiagnosticsTracker:
         self.report_interval = report_interval
         self._total_requests = 0
         self._reservoir_size = reservoir_size
+        self.last_error: dict[str, str] | None = None
         self._latency_samples: dict[str, list[float]] = collections.defaultdict(list)
         self._reset()
 
@@ -46,6 +47,15 @@ class DiagnosticsTracker:
         if len(buf) >= self._reservoir_size:
             buf.pop(0)
         buf.append(latency_ms)
+
+    def record_error(self, endpoint: str, exc: BaseException, request_id: str) -> None:
+        """Remember the latest request failure for readiness diagnostics."""
+        self.last_error = {
+            "endpoint": endpoint,
+            "request_id": request_id,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
 
     def latency_percentiles(self, endpoint: str) -> dict[str, float]:
         """Return ``{"p50": float, "p95": float, "n": int}`` for one endpoint."""
