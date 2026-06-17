@@ -408,6 +408,52 @@ def _check_pitfall(thinking: str, cwd_str: str | None) -> str | None:
     return directive or None
 
 
+def _is_mutating_tool(tool_name: str, cfg) -> bool:
+    """Whether ``tool_name`` is a state-changing tool the preflight gate guards."""
+    tools = {
+        t.strip()
+        for t in getattr(cfg, "preflight_mandate_tools", "Edit,Write,Bash").split(",")
+        if t.strip()
+    }
+    return tool_name in tools
+
+
+def _check_preflight_gate(tool_name: str, session_id: str) -> str | None:
+    """Block a mutating tool that ran with no ``simba preflight`` this turn (spec 28).
+
+    The teeth of intent-priming: "consult before acting" becomes a precondition.
+    Returns a deny reason when the gate is armed (per config + risk-tier) AND the
+    tool mutates AND no preflight has fired this turn; otherwise ``None``. Read-only
+    tools are never gated. Fail-open: any error returns ``None`` (advisory degrades
+    to off, never a spurious block). Off by default → byte-identical to today.
+    """
+    cfg = _hooks_cfg()
+    if not getattr(cfg, "preflight_mandate_enabled", False):
+        return None
+    if not _is_mutating_tool(tool_name, cfg):
+        return None  # read-only / non-mutating tools are unaffected
+    try:
+        import simba.guardian.preflight_flag as preflight_flag
+
+        # risk_only (default): the gate is armed only after a risk-tier doctrine
+        # was primed this turn (the over-fire guard). When off, every mutating
+        # tool requires a preflight.
+        if getattr(cfg, "preflight_mandate_risk_only", True) and not (
+            preflight_flag.mandate_armed(session_id)
+        ):
+            return None
+        if preflight_flag.preflight_ran(session_id):
+            return None  # a preflight cleared the gate this turn
+    except Exception:
+        return None
+
+    return (
+        'simba preflight required: run `simba preflight "<your task>"` before a '
+        "mutating tool this turn so the right doctrine + applicable rules are "
+        "surfaced first (intent-priming gate). Then retry this action."
+    )
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the PreToolUse hook pipeline. Returns a CanonicalResult.
 
@@ -444,6 +490,13 @@ def run(hook_input: dict) -> CanonicalResult:
                     }
                 )
             return CanonicalResult(block_reason=decision.reason)
+
+    # --- Mandated-preflight gate (spec 28): block a mutating tool that ran with
+    # no `simba preflight` this turn. Off by default → byte-identical to today. ---
+    session_id = hook_input.get("session_id", "")
+    preflight_block = _check_preflight_gate(tool_name, session_id)
+    if preflight_block is not None:
+        return CanonicalResult(block_reason=preflight_block)
 
     parts: list[str] = []
     escalated_block: str | None = None

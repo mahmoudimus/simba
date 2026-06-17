@@ -90,6 +90,119 @@ class TestUserPromptSubmitHook:
         # Default-OFF preserves today's behavior (CORE block every prompt).
         assert simba.hooks.config.HooksConfig().guardian_signal_gated is False
 
+
+class TestIntentPriming:
+    """Spec 28 Phase B: intent-primed injection at UserPromptSubmit."""
+
+    def test_off_by_default_no_priming(self, tmp_path):
+        # intent_priming_enabled defaults OFF → no <intent-priming> block, and the
+        # priming machinery is never invoked (byte-identical to today).
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=[]
+            ),
+            unittest.mock.patch("simba.doctrine.store.list_doctrines") as mock_list,
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"prompt": "please review PR #42", "cwd": str(tmp_path)}
+                )
+            )
+        ctx = result["hookSpecificOutput"].get("additionalContext", "")
+        assert "intent-priming" not in ctx
+        mock_list.assert_not_called()  # off → not even loaded
+
+    def test_on_injects_matched_doctrine(self, tmp_path, monkeypatch):
+        import simba.doctrine.store as store
+
+        class _Cfg:
+            prompt_min_similarity = 0.45
+            prompt_min_length = 10
+            guardian_signal_gated = False
+            intent_priming_enabled = True
+            intent_priming_min_similarity = 0.55
+            intent_priming_max_doctrines = 3
+            preflight_mandate_enabled = False
+            preflight_mandate_risk_only = True
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Cfg(), raising=False
+        )
+        doc = store.Doctrine(
+            id="pr",
+            doctrine="Use the worktree skill for PR review.",
+            triggers=["review PR"],
+            trigger_embeddings=[[1.0, 0.0]],
+            risk_tier=True,
+            applicable_rules=["redirect: git show pr-N -> worktree"],
+            project_path=str(tmp_path),
+        )
+        monkeypatch.setattr("simba.doctrine.store.list_doctrines", lambda **kw: [doc])
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.embed_text", lambda _t: [1.0, 0.0]
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"prompt": "please review PR #42", "cwd": str(tmp_path)}
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "intent-priming" in ctx
+        assert "Use the worktree skill" in ctx
+
+    def test_risk_prime_arms_mandate_and_injects_instruction(
+        self, tmp_path, monkeypatch
+    ):
+        import simba.doctrine.store as store
+        import simba.guardian.preflight_flag as pf
+
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+
+        class _Cfg:
+            prompt_min_similarity = 0.45
+            prompt_min_length = 10
+            guardian_signal_gated = False
+            intent_priming_enabled = True
+            intent_priming_min_similarity = 0.55
+            intent_priming_max_doctrines = 3
+            preflight_mandate_enabled = True
+            preflight_mandate_risk_only = True
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Cfg(), raising=False
+        )
+        doc = store.Doctrine(
+            id="pr",
+            doctrine="Use the worktree skill for PR review.",
+            triggers=["review PR"],
+            trigger_embeddings=[[1.0, 0.0]],
+            risk_tier=True,
+            applicable_rules=[],
+            project_path=str(tmp_path),
+        )
+        monkeypatch.setattr("simba.doctrine.store.list_doctrines", lambda **kw: [doc])
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.embed_text", lambda _t: [1.0, 0.0]
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {
+                        "prompt": "please review PR #42",
+                        "cwd": str(tmp_path),
+                        "session_id": "sess-P",
+                    }
+                )
+            )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "simba preflight" in ctx  # the mandate instruction
+        assert pf.mandate_armed("sess-P") is True  # gate armed for the turn
+
     def test_recall_floor_comes_from_config(self, tmp_path, monkeypatch):
         class _Stub:
             prompt_min_similarity = 0.6

@@ -146,6 +146,13 @@ class _NonViolatingLLM:
 class TestPitfallGate:
     def test_disabled_by_default_no_fire(self, tmp_path, monkeypatch):
         # Default config has the gate OFF — even a strong doctrine match stays silent.
+        # Pin the dataclass default so the assertion holds regardless of any ambient
+        # .simba/config.toml (e.g. a parent repo enabling the gate); the rest of this
+        # class uses the same _hooks_cfg pin.
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=False
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
         transcript = _thinking_transcript(tmp_path, "I'll revert and xfail the test")
         hit = [
             {
@@ -544,3 +551,123 @@ class TestCheckContextLow:
         )
         ctx = result["hookSpecificOutput"].get("additionalContext", "")
         assert "context-low-warning" in ctx
+
+
+class TestPreflightGate:
+    """PreToolUse blocks a mutating tool with no preflight this turn (spec 28)."""
+
+    @staticmethod
+    def _cfg(monkeypatch, **over):
+        import simba.guardian.preflight_flag as pf
+
+        cfg = dataclasses.replace(simba.hooks.config.HooksConfig(), **over)
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        return cfg, pf
+
+    def test_disabled_by_default_no_block(self, tmp_path, monkeypatch):
+        # Gate OFF (default) → a mutating tool with no preflight is NOT blocked
+        # (byte-identical to today: no preflight machinery on the path).
+        _, pf = self._cfg(monkeypatch)
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        result = simba.hooks.pre_tool_use.run(
+            {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/x"},
+                "session_id": "s",
+            }
+        )
+        assert result.block_reason is None
+
+    def test_mutating_tool_without_preflight_blocks(self, tmp_path, monkeypatch):
+        _, pf = self._cfg(
+            monkeypatch,
+            preflight_mandate_enabled=True,
+            preflight_mandate_risk_only=False,
+        )
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        result = simba.hooks.pre_tool_use.run(
+            {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/x"},
+                "session_id": "s",
+            }
+        )
+        assert result.block_reason is not None
+        assert "preflight" in result.block_reason.lower()
+
+    def test_read_only_tool_allowed_without_preflight(self, tmp_path, monkeypatch):
+        _, pf = self._cfg(
+            monkeypatch,
+            preflight_mandate_enabled=True,
+            preflight_mandate_risk_only=False,
+        )
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": "/x"},
+                    "session_id": "s",
+                }
+            )
+        assert result.block_reason is None  # read-only never gated
+
+    def test_preflight_clears_the_gate(self, tmp_path, monkeypatch):
+        _, pf = self._cfg(
+            monkeypatch,
+            preflight_mandate_enabled=True,
+            preflight_mandate_risk_only=False,
+        )
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        pf.set_preflight("s", task="edit the file")  # preflight ran this turn
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "/x"},
+                    "session_id": "s",
+                }
+            )
+        assert result.block_reason is None
+
+    def test_risk_only_not_armed_without_risk_prime(self, tmp_path, monkeypatch):
+        # risk_only=True (default) and no risk-tier prime this turn → gate is NOT
+        # armed, so a mutating tool with no preflight is allowed.
+        _, pf = self._cfg(
+            monkeypatch,
+            preflight_mandate_enabled=True,
+            preflight_mandate_risk_only=True,
+        )
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "/x"},
+                    "session_id": "s",
+                }
+            )
+        assert result.block_reason is None
+
+    def test_risk_only_armed_blocks_without_preflight(self, tmp_path, monkeypatch):
+        _, pf = self._cfg(
+            monkeypatch,
+            preflight_mandate_enabled=True,
+            preflight_mandate_risk_only=True,
+        )
+        monkeypatch.setattr(pf, "_TMP_DIR", tmp_path)
+        pf.arm_mandate("s")  # a risk-tier doctrine was primed this turn
+        result = simba.hooks.pre_tool_use.run(
+            {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/x"},
+                "session_id": "s",
+            }
+        )
+        assert result.block_reason is not None

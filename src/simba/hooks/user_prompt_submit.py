@@ -57,6 +57,77 @@ def _cfg():
     return simba.config.load("hooks")
 
 
+def _intent_prime(prompt: str, cwd_str: str | None, cfg, session_id: str) -> str:
+    """Intent-primed doctrine injection (spec 28 Phase B). Default-OFF → "".
+
+    When ``hooks.intent_priming_enabled`` is on, classify the prompt against the
+    project's doctrine triggers (cheap embedding match via the daemon's loaded
+    embedder — no LLM on the hot path) and return an ``<intent-priming>`` block
+    naming the matched doctrine + applicable gates. A matched risk-tier doctrine
+    additionally arms the preflight mandate for the turn (so the PreToolUse gate
+    fires) and appends the mandate instruction. Fail-open: any error returns ""
+    (priming is advisory). OFF → byte-identical to today (no doctrine load).
+    """
+    if not getattr(cfg, "intent_priming_enabled", False):
+        return ""
+    if not prompt or not cwd_str:
+        return ""
+    try:
+        import simba.doctrine.priming
+        import simba.doctrine.store
+        import simba.hooks._memory_client
+
+        doctrines = simba.doctrine.store.list_doctrines(
+            project_path=cwd_str, cwd=pathlib.Path(cwd_str)
+        )
+        if not doctrines:
+            return ""
+        result = simba.doctrine.priming.prime(
+            prompt,
+            doctrines=doctrines,
+            embed_fn=simba.hooks._memory_client.embed_text,
+            min_similarity=getattr(cfg, "intent_priming_min_similarity", 0.55),
+            max_doctrines=getattr(cfg, "intent_priming_max_doctrines", 3),
+        )
+    except Exception:
+        return ""
+    if not result.text:
+        return ""
+
+    parts = [result.text]
+    # MANDATE: when a risk-tier doctrine was primed and the mandate is on, arm the
+    # gate for this turn and tell the agent its first action is `simba preflight`.
+    if result.risk_primed and getattr(cfg, "preflight_mandate_enabled", False):
+        with contextlib.suppress(Exception):
+            import simba.guardian.preflight_flag
+
+            simba.guardian.preflight_flag.arm_mandate(session_id)
+        sid = f" --session {session_id}" if session_id else ""
+        parts.append(
+            "<preflight-mandate>\n"
+            f"Your first action this turn is `simba preflight{sid} "
+            '"<your task>"` — it surfaces the doctrine + applicable rules and is '
+            "required before any mutating tool (the gate blocks otherwise).\n"
+            "</preflight-mandate>"
+        )
+    return "\n\n".join(parts)
+
+
+def _reset_turn_flags(session_id: str) -> None:
+    """Clear the per-turn preflight + mandate flags at the turn boundary (spec 28).
+
+    UserPromptSubmit is the start of a turn, so any preflight/arm flag from the
+    previous turn is stale. Fail-soft (best-effort tempfile unlinks).
+    """
+    if not session_id:
+        return
+    with contextlib.suppress(Exception):
+        import simba.guardian.preflight_flag
+
+        simba.guardian.preflight_flag.reset_preflight(session_id)
+        simba.guardian.preflight_flag.reset_mandate(session_id)
+
+
 def _should_inject_core(cfg, session_id: str) -> bool:
     """Decide whether to (re)inject the CORE block this prompt (spec 25).
 
@@ -86,6 +157,14 @@ def run(hook_input: dict) -> CanonicalResult:
     cfg = _cfg()
     parts: list[str] = []
 
+    # 0. Turn boundary (spec 28): clear last turn's per-turn preflight/mandate flags
+    #    so this turn starts un-armed. No-op (and no output change) unless either
+    #    intent-priming or the mandate is enabled.
+    if getattr(cfg, "intent_priming_enabled", False) or getattr(
+        cfg, "preflight_mandate_enabled", False
+    ):
+        _reset_turn_flags(session_id)
+
     # 1. Guardian: extract CORE blocks from CLAUDE.md.
     #    Only when the payload carried a cwd — extract_core.main(cwd=None) falls
     #    back to Path.cwd(), which inside the daemon is the wrong project.
@@ -110,6 +189,12 @@ def run(hook_input: dict) -> CanonicalResult:
         )
         if formatted:
             parts.append(formatted)
+
+    # 2b. Intent priming (spec 28): prime matched doctrine + applicable gates from
+    #     the stated intent. Default-OFF → "" (byte-identical to today).
+    prime_ctx = _intent_prime(prompt, cwd_str, cfg, session_id)
+    if prime_ctx:
+        parts.append(prime_ctx)
 
     # 3. Search: project memory + QMD context
     if cwd is not None and prompt and len(prompt) >= cfg.prompt_min_length:
