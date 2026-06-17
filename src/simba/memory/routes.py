@@ -490,6 +490,87 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     return {"memories": results, "queryTimeMs": query_time_ms}
 
 
+class EmbedRequest(pydantic.BaseModel):
+    text: str
+
+
+@router.post("/embed")
+async def embed_text(body: EmbedRequest, request: fastapi.Request) -> dict:
+    """Return the query embedding for ``text`` (spec 28 intent classifier).
+
+    Exposes the already-loaded embedder so the cheap, no-LLM intent classifier can
+    embed the prompt once on the hot path and cosine-match it against precomputed
+    doctrine-trigger embeddings. Fail-soft: an embed error returns an empty vector.
+    """
+    embed_query = request.app.state.embed_query
+    try:
+        vector = await embed_query(body.text)
+    except Exception as e:
+        logger.warning("[embed] failed: %s", e)
+        return {"embedding": [], "error": "embedding_failed"}
+    return {"embedding": vector}
+
+
+class PreflightRequest(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(populate_by_name=True)
+
+    task: str
+    project_path: str | None = pydantic.Field(default=None, alias="projectPath")
+    session_id: str = pydantic.Field(default="", alias="sessionId")
+
+
+@router.post("/preflight")
+async def preflight(body: PreflightRequest, request: fastapi.Request) -> dict:
+    """Intent-keyed preflight (spec 28): doctrine + applicable rules + a brief.
+
+    The warm-path equivalent of ``simba preflight``: recalls the intent-relevant
+    doctrine (project-scoped) + the project's TOOL_RULEs, builds the ``🦁☑`` brief,
+    and sets the per-turn preflight flag (host-local tempfile) so the PreToolUse
+    gate clears. The flag set is best-effort (a missing session id is a no-op).
+    """
+    import simba.doctrine.preflight as dpreflight
+    import simba.guardian.preflight_flag as preflight_flag
+
+    task = (body.task or "").strip()
+    if not task:
+        raise fastapi.HTTPException(status_code=400, detail="task is required")
+
+    async def _recall(types: list[str] | None) -> list[dict]:
+        filters: dict[str, typing.Any] = {}
+        if types:
+            filters["types"] = types
+        rr = RecallRequest(
+            query=task,
+            projectPath=body.project_path,
+            filters=filters,
+        )
+        out = await recall_memories(rr, request)
+        return out.get("memories", [])
+
+    doctrine_mems = await _recall(None)
+    doctrine_lines = [
+        (m.get("content") or "").strip()
+        for m in doctrine_mems
+        if (m.get("content") or "").strip() and m.get("type") != "TOOL_RULE"
+    ]
+    tool_rule_mems = await _recall(["TOOL_RULE"])
+    tool_rules = dpreflight.tool_rule_lines(tool_rule_mems)
+
+    brief = dpreflight.build_brief(
+        task=task,
+        doctrine_lines=doctrine_lines,
+        tool_rules=tool_rules,
+        redirects=[],
+    )
+    preflight_flag.set_preflight(body.session_id, task=task)
+    return {
+        "brief": brief,
+        "doctrine": doctrine_lines,
+        "tool_rules": tool_rules,
+        "redirects": [],
+    }
+
+
 @router.get("/health")
 async def health(request: fastapi.Request) -> dict:
 

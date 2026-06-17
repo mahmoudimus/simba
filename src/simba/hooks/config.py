@@ -150,3 +150,32 @@ class HooksConfig:
     pitfall_gate_max_results: int = (
         5  # candidate pool recalled (top candidates checked)
     )
+
+    # Intent-primed doctrine + mandated preflight (spec 28). UserPromptSubmit is the
+    # only hook that sees the user's intent BEFORE any action — the cheapest, earliest
+    # prevention point. These levers front-load the right approach from stated intent.
+    #
+    # PRIME: classify the prompt CHEAPLY (embedding-match against doctrine triggers —
+    # no LLM on the hot path) and inject the matched doctrine + which TOOL_RULEs /
+    # redirects apply to this project. Default-OFF (UNMEASURED false-prime rate); OFF
+    # ⇒ byte-identical to today (recall + CORE only).
+    intent_priming_enabled: bool = False
+    # Cosine floor for a doctrine trigger to count as a match (stricter than recall's
+    # min_similarity — a primed doctrine steers the agent, so it must be a real match).
+    intent_priming_min_similarity: float = 0.55
+    # Cap on primed doctrines injected per prompt (keep the injection small).
+    intent_priming_max_doctrines: int = 3
+    # MANDATE + ENFORCE: the teeth. When on, PreToolUse BLOCKS any mutating tool that
+    # runs without a `simba preflight` having fired this turn (per-turn flag, reuses
+    # the spec-25 signal-flag plumbing). Read-only tools are unaffected; a preflight
+    # clears the gate. Without this half, priming is merely advisory. Default-OFF.
+    preflight_mandate_enabled: bool = False
+    # Mandate preflight only for RISK-TIER intents (a matched risk-tier doctrine
+    # trigger), not every task — the over-fire guard. When True (default) the gate
+    # is armed only after a risk-tier prime this turn; when False it is armed for
+    # every turn (mutating tools always require a preflight). No effect unless
+    # ``preflight_mandate_enabled`` is on.
+    preflight_mandate_risk_only: bool = True
+    # Mutating tools the preflight gate fires before (read-only tools are allowed
+    # without a preflight). Comma-separated; mirrors the pitfall gate's tool set.
+    preflight_mandate_tools: str = "Edit,Write,Bash"

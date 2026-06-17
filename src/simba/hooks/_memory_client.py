@@ -120,6 +120,26 @@ def recall_memories(
     return []
 
 
+def embed_text(text: str) -> list[float]:
+    """Return the daemon's query embedding for ``text`` (spec 28 intent classify).
+
+    Used by the cheap, no-LLM intent classifier to embed the prompt once. Returns
+    ``[]`` on any failure (the caller fail-opens to no priming).
+    """
+    if not text:
+        return []
+    cfg = _get_cfg()
+    url = f"{daemon_url()}/embed"
+    try:
+        resp = httpx.post(url, json={"text": text}, timeout=cfg.default_timeout)
+        if resp.status_code == 200:
+            vec = resp.json().get("embedding", [])
+            return vec if isinstance(vec, list) else []
+    except (httpx.HTTPError, ValueError):
+        pass
+    return []
+
+
 def count_memories(
     *,
     memory_type: str,
