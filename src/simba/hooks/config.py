@@ -179,3 +179,30 @@ class HooksConfig:
     # Mutating tools the preflight gate fires before (read-only tools are allowed
     # without a preflight). Comma-separated; mirrors the pitfall gate's tool set.
     preflight_mandate_tools: str = "Edit,Write,Bash"
+
+    # Reasoning-layer verification (spec 27). Two tiers of "did simba engage, and
+    # did the agent respect what it surfaced".
+    #
+    # TIER 1 — the 🦁☑ ENGAGEMENT MARKER (all harnesses). simba's hooks EMIT a
+    # one-line ledger of what they did this turn into additional_context —
+    # `UserPromptSubmit` anchors it every turn (`🦁☑ recalled N (top sim)` /
+    # `🦁☑ idle`), `PreToolUse` appends the gate action (rule-warned/rewrote/
+    # blocked). The CORE block instructs the agent to ECHO it; `Stop` verifies the
+    # echo (reuses guardian.check_signal + the per-turn engagement record). The
+    # marker is simba-EMITTED, not agent-invented — presence reflects a real
+    # interaction. UNMEASURED observability lever → DEFAULT-OFF (OFF ⇒
+    # byte-identical to today: no ledger emitted, no echo verified). Enable:
+    # `simba config set hooks.engagement_marker_enabled 1`.
+    engagement_marker_enabled: bool = False
+    # TIER 2 — REASONING-VERIFY (the doctrine check that can block-to-reconsider).
+    # On Claude/Codex: promotes `Stop`/`SubagentStop` from observe-only to an
+    # optional doctrine-verify that, on a violation, sets a block_reason → the
+    # adapter maps it to Claude's `{"decision":"block","reason":…}` (force a
+    # reconsider before the agent finishes). On pi: `message_end` doctrine-verifies
+    # the finalized assistant message and `context` re-injects the ledger/doctrine
+    # before every LLM call. Reuses the pitfall machinery (`pitfall_gate_*` +
+    # `pitfall_gate_types`) for the check, so it costs an LLM judgment. UNMEASURED +
+    # an LLM cost on the finish path → DEFAULT-OFF (OFF ⇒ byte-identical: `Stop`
+    # stays observe-only, `SubagentStop`/pi hooks no-op). Enable:
+    # `simba config set hooks.reasoning_verify_enabled 1`.
+    reasoning_verify_enabled: bool = False

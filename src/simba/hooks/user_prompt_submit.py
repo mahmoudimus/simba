@@ -128,6 +128,40 @@ def _reset_turn_flags(session_id: str) -> None:
         simba.guardian.preflight_flag.reset_mandate(session_id)
 
 
+def _engagement_marker(cfg, memories: list[dict], session_id: str) -> str:
+    """Tier-1 engagement ledger (spec 27): the simba-EMITTED ``🦁☑`` line.
+
+    Built deterministically from THIS turn's recall (count + top similarity), so
+    even a zero-recall turn emits ``🦁☑ idle``. Records the ledger for the Stop
+    echo-verify. Default-OFF → "" (byte-identical to today). Fail-soft.
+    """
+    if not getattr(cfg, "engagement_marker_enabled", False):
+        return ""
+    try:
+        import simba.hooks.engagement
+
+        top = float(memories[0].get("similarity", 0.0)) if memories else 0.0
+        ledger = simba.hooks.engagement.prompt_ledger(
+            memory_count=len(memories), top_similarity=top
+        )
+    except Exception:
+        return ""
+    with contextlib.suppress(Exception):
+        import simba.guardian.engagement_flag
+
+        simba.guardian.engagement_flag.reset_engagement(session_id)
+        simba.guardian.engagement_flag.record_engagement(session_id, ledger=ledger)
+    # The echo contract rides with the marker (config-gated, so off ⇒ byte-
+    # identical). The bare ``ledger`` line is what Stop verifies the echo of.
+    return (
+        "<engagement-marker>\n"
+        f"{ledger}\n"
+        "Echo the 🦁☑ line above verbatim in your response so this simba "
+        "interaction is auditable.\n"
+        "</engagement-marker>"
+    )
+
+
 def _should_inject_core(cfg, session_id: str) -> bool:
     """Decide whether to (re)inject the CORE block this prompt (spec 25).
 
@@ -211,6 +245,13 @@ def run(hook_input: dict) -> CanonicalResult:
             rlm_ctx = _rlm_pointer_context(memories, cwd_str)
             if rlm_ctx:
                 parts.append(rlm_ctx)
+
+    # 5. Engagement marker (spec 27): the simba-EMITTED 🦁☑ ledger of what this
+    #    turn surfaced. Leads the injected context so it is the glanceable first
+    #    line. Default-OFF → "" (byte-identical to today).
+    marker = _engagement_marker(cfg, memories, session_id)
+    if marker:
+        parts.insert(0, marker)
 
     combined = "\n\n".join(parts)
     if combined:
