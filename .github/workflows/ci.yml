@@ -21,6 +21,11 @@ concurrency:
 jobs:
     test:
         runs-on: ubuntu-24.04
+        # Outer guard: bound the whole job so a hung test or a stalled runner
+        # fails fast instead of running to the 6h Actions ceiling (a transient
+        # pytest stall on PR #80 burned ~2h). scripts/checks.sh adds a per-test
+        # --timeout for granular catching + a traceback of where it stuck.
+        timeout-minutes: 20
         steps:
             - name: "Checkout ${{ github.ref }} ( ${{ github.sha }} )"
               uses: actions/checkout@v4
