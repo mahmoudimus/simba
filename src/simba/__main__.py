@@ -1269,13 +1269,19 @@ def _memory_store(args: list[str]) -> int:
     import httpx
 
     import simba.hooks._memory_client
+    import simba.memory.vector_db
 
     mtype = _parse_opt_value(args, "--type")
     content = _parse_opt_value(args, "--content")
     context = _parse_opt_value(args, "--context") or ""
     confidence_raw = _parse_opt_value(args, "--confidence")
     session_source = _parse_opt_value(args, "--session-source") or ""
-    project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+    # Normalize the scope path to an absolute, symlink-resolved path (spec 26) so
+    # it matches the client's resolved ancestor chain on recall (the daemon also
+    # normalizes on store; doing it here keeps the CLI path consistent).
+    project_path = simba.memory.vector_db.normalize_project_path(
+        _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+    )
 
     if not mtype:
         print("Error: --type is required", file=sys.stderr)

@@ -104,6 +104,22 @@ class MemoryConfig:
     # (extraction stays at PreCompact).
     continuous_extraction_enabled: bool = False
     continuous_extraction_max_bytes: int = 2_000_000  # per-turn window cap (bytes)
+    # Hierarchical (ancestor-prefix) project recall (spec 26). Today recall is a
+    # STRICT exact-match on projectPath: a memory scoped to /repo/api never recalls
+    # from the /repo root, and a project filter excludes global memories entirely.
+    # When on, recall at cwd C returns memories scoped to C plus every ancestor of C
+    # up to the git root plus global — root facts inherit DOWN to packages, package
+    # facts stay put (don't leak to siblings). The CLIENT computes the chain (it owns
+    # the filesystem; the daemon stays path-agnostic, string-membership only) and
+    # sends it as ``project_scopes``. Both retrieval arms (vector + FTS/BM25) honor
+    # the same set. DEFAULT-OFF: unmeasured — widening the candidate pool can dilute
+    # precision; graduate to ON only after a measured no-regression on recall@k.
+    hierarchical_recall: bool = False
+    # Treat global (empty-path) memories as the root of the tree: include them in a
+    # project-scoped recall (fixes the "global excluded under a project filter"
+    # quirk). Separate lever so it can be measured independently. No effect unless
+    # ``hierarchical_recall`` is also on.
+    hierarchical_recall_include_global: bool = True
     # Hybrid recall (L3): a BM25 keyword arm fused with the vector arm via RRF.
     hybrid_enabled: bool = True
     # RRF rank constant; lower = sharper top-rank weighting. Swept 2026-06-06:

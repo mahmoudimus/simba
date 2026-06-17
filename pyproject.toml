@@ -54,6 +54,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=6.0",
     "pytest-asyncio>=0.25",
+    "pytest-timeout>=2.3",
     "ruff>=0.9",
     "pyrefly>=0.15",
     "pre-commit>=4.0",

@@ -28,6 +28,46 @@ def daemon_url() -> str:
     return f"http://{cfg.daemon_host}:{cfg.daemon_port}"
 
 
+def project_scope_chain(cwd: str) -> list[str]:
+    """Resolved ancestor-prefix scope chain for ``cwd`` (spec 26).
+
+    Returns ``[cwd-resolved, …ancestors…, git-root-resolved]`` — the resolved cwd
+    first, then each parent directory up to (and including) the git root found by
+    ``simba.db.find_repo_root``. When no git root is found, the chain is just the
+    resolved cwd (bounded — never climbs to the filesystem root across repos).
+    Both the stored paths and this chain are ``.resolve()``-d so symlinks (kira's
+    symlinked MEMORY.md) don't break ancestry.
+    """
+    import pathlib
+
+    import simba.db
+
+    base = pathlib.Path(cwd).resolve()
+    root = simba.db.find_repo_root(base)
+    chain: list[str] = [str(base)]
+    if root is None:
+        return chain
+    root = root.resolve()
+    current = base
+    while current != root:
+        parent = current.parent
+        if parent == current:  # reached the filesystem root without hitting `root`
+            break
+        current = parent
+        chain.append(str(current))
+        if current == root:
+            break
+    return chain
+
+
+def _hierarchical_enabled() -> bool:
+    """Whether ``memory.hierarchical_recall`` is on (fail-soft → off)."""
+    try:
+        return bool(getattr(_memory_cfg(), "hierarchical_recall", False))
+    except Exception:
+        return False
+
+
 def recall_memories(
     query: str,
     project_path: str | None = None,
@@ -36,7 +76,13 @@ def recall_memories(
     max_results: int | None = None,
     filters: dict | None = None,
 ) -> list[dict]:
-    """Query the memory daemon for relevant memories."""
+    """Query the memory daemon for relevant memories.
+
+    When ``memory.hierarchical_recall`` is on and ``project_path`` is an existing
+    directory (a real cwd, not an opaque project id), the client-computed
+    ancestor-prefix chain is attached as ``projectScopes`` so ancestor/root facts
+    inherit down (spec 26). Off → the legacy single-path payload, byte-identical.
+    """
     cfg = _get_cfg()
     if max_results is None:
         max_results = cfg.default_max_results
@@ -52,6 +98,16 @@ def recall_memories(
         payload["minSimilarity"] = min_similarity
     if project_path:
         payload["projectPath"] = project_path
+        # Hierarchical recall (spec 26): only for a real filesystem cwd — the
+        # TOOL_RULE path scopes by an opaque project_id (resolve_project_id),
+        # which is not a directory, so no chain is computed there.
+        if _hierarchical_enabled():
+            import contextlib
+            import pathlib
+
+            with contextlib.suppress(OSError, ValueError):
+                if pathlib.Path(project_path).is_dir():
+                    payload["projectScopes"] = project_scope_chain(project_path)
     if filters:
         payload["filters"] = filters
 

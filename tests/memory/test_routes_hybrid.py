@@ -32,7 +32,7 @@ def _mirror_count(fts_path: str) -> int:
         return fts.count()
 
 
-async def _store(ac, content, *, project="proj-1", mtype="GOTCHA"):
+async def _store(ac, content, *, project="/proj-1", mtype="GOTCHA"):
     resp = await ac.post(
         "/store",
         json={"type": mtype, "content": content, "projectPath": project},
@@ -48,7 +48,7 @@ class TestStoreSync:
         await _store(ac, "ruff lints the python source tree")
         assert _mirror_count(fts_path) == 1
         with fts.connect(fts_path):
-            hits = fts.search("lints", project_path="proj-1")
+            hits = fts.search("lints", project_path="/proj-1")
             assert len(hits) == 1
 
 
@@ -65,7 +65,7 @@ class TestRecallHybrid:
             "/recall",
             json={
                 "query": "unique_zeta_marker",
-                "projectPath": "proj-1",
+                "projectPath": "/proj-1",
                 "minSimilarity": 1.1,
             },
         )
@@ -317,7 +317,7 @@ class TestSupersede:
         first = await _store(ac, "ruff is the linter", mtype="PATTERN")
         resp = await ac.post(
             "/store",
-            json={"type": "PATTERN", "content": "ruff lints", "projectPath": "proj-1"},
+            json={"type": "PATTERN", "content": "ruff lints", "projectPath": "/proj-1"},
         )
         body = resp.json()
         assert body["status"] == "superseded"
@@ -334,7 +334,7 @@ class TestSupersede:
         await _store(ac, "alpha", mtype="PATTERN")
         resp = await ac.post(
             "/store",
-            json={"type": "PATTERN", "content": "beta", "projectPath": "proj-1"},
+            json={"type": "PATTERN", "content": "beta", "projectPath": "/proj-1"},
         )
         assert resp.json()["status"] == "stored"
         assert _mirror_count(fts_path) == 2
@@ -349,7 +349,7 @@ class TestSupersede:
         await _store(ac, "alpha", mtype="GOTCHA")
         resp = await ac.post(
             "/store",
-            json={"type": "PATTERN", "content": "beta", "projectPath": "proj-1"},
+            json={"type": "PATTERN", "content": "beta", "projectPath": "/proj-1"},
         )
         # Different type -> no supersession; both remain.
         assert resp.json()["status"] == "stored"
@@ -371,12 +371,14 @@ class TestPatchSync:
     @pytest.mark.asyncio
     async def test_patch_moves_project_in_mirror(self, hybrid_client) -> None:
         ac, fts_path, _ = hybrid_client
-        stored = await _store(ac, "movable lambda memory content", project="proj-1")
-        resp = await ac.patch(f"/memory/{stored['id']}", json={"projectPath": "proj-2"})
+        stored = await _store(ac, "movable lambda memory content", project="/proj-1")
+        resp = await ac.patch(
+            f"/memory/{stored['id']}", json={"projectPath": "/proj-2"}
+        )
         assert resp.status_code == 200
         with fts.connect(fts_path):
-            assert fts.search("lambda", project_path="proj-1") == []
-            moved = fts.search("lambda", project_path="proj-2")
+            assert fts.search("lambda", project_path="/proj-1") == []
+            moved = fts.search("lambda", project_path="/proj-2")
             assert [m["memory_id"] for m in moved] == [stored["id"]]
 
 
@@ -388,7 +390,7 @@ class TestHybridDisabled:
         await _store(ac, "vector only mu memory content")
         # Constant mock embeddings -> cosine 1.0 -> vector arm returns the row.
         resp = await ac.post(
-            "/recall", json={"query": "anything", "projectPath": "proj-1"}
+            "/recall", json={"query": "anything", "projectPath": "/proj-1"}
         )
         assert resp.status_code == 200
         assert len(resp.json()["memories"]) >= 1
