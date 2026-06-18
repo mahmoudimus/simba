@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Raw session indexing and active task continuity.** Added a rebuildable
+  SQLite/FTS session-message sidecar (`simba sessions index/search`) for exact
+  transcript recovery without hook-context bloat, plus append-only active task
+  snapshots (`simba task snapshot save|show|clear`) that UserPromptSubmit can
+  inject as one compact lane.
+
+- **Default-off retrieval triage.** `hooks.recall_triage_enabled` adds a
+  conservative no-LLM UserPromptSubmit classifier that skips recall/RAG only for
+  narrow self-contained prompts; `simba eval triage` provides a re-runnable
+  zero-false-negative gate.
+
 ## [0.11.0] — 2026-06-17
 
 Every new lever in this release defaults **OFF** (backward-compatible): with the

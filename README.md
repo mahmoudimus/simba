@@ -146,6 +146,11 @@ simba codex-extract --run     # Run the conservative heuristic extractor now
 simba codex-recall "<query>"  # Query semantic memory via /recall
 simba codex-finalize          # Run end-of-task signal/error checks
 simba codex-automation        # Print a suggested Codex automation directive
+simba sessions index --latest # Index newest raw transcript messages
+simba sessions search "error text"
+                              # Search raw message sidecar without hook context
+simba task snapshot save --task "..." --next-step "..."
+                              # Save compact current-work state
 ```
 
 `simba codex-status` renders the daemon's readiness payload when the running
@@ -375,6 +380,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ✅ | Tool-rule warnings | `hooks.rule_check_enabled` | PreToolUse: warn when a tool call matches a learned failure. |
 | ✅ | Tool-call redirect | `hooks.redirect_enabled` (`redirect_mode=deny`) | Steer bare commands to better tooling (`python`→`uv run`, …). |
 | ✅ | Auto-learn from failures | `hooks.auto_learn_from_failures` | PostToolUse: record tool failures as rules (probe/reader/exit-code guards on). |
+| ⬜ | Retrieval triage | `hooks.recall_triage_enabled` | Default-off UserPromptSubmit classifier that skips recall/RAG only for narrow self-contained prompts; uncertain still retrieves. |
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
 | ⬜ | Codex raw-transcript fallback | `codex.auto_extract_on_status` | Optional `codex-status` fallback stores learnings from pending Codex JSONL transcripts and records an append-only extraction ledger. |
 | ✅ | Guardian | `guardian.core_injection_mode` | Re-inject `SIMBA:core` rule blocks every prompt / after compaction; `capsule` mode injects a compact compiled reminder. |
@@ -979,7 +985,18 @@ memory store:
    `sessionSource`; the autonomous engine can digest full transcripts in the
    background while the MCP tools let the active agent inspect exact transcript
    slices.
-5. **Episodic consolidation** rolls a session's stored memories into a coarser
+5. **Raw message sidecar indexing** is available on demand:
+   `simba sessions index --latest` or `simba sessions index --path <file>`
+   populates `.simba/simba.db`, and `simba sessions search "exact error text"`
+   recovers the source session/message/file references without adding raw
+   transcript text to ordinary hook context.
+6. **Active task snapshots** preserve compact current-work state separately
+   from semantic memory. `simba task snapshot save --task "..." --next-step "..."`
+   appends task, summary, branch/worktree, files, blockers, and next step;
+   `show` reads the latest active row and `clear` appends a cleared row. The
+   UserPromptSubmit hook can inject the latest same-project snapshot as one tiny
+   `<active-task-snapshot>` block.
+7. **Episodic consolidation** rolls a session's stored memories into a coarser
    `EPISODE` memory once enough facts exist, so the next recall can retrieve
    both specific memories and a session-level summary.
 
@@ -1081,6 +1098,11 @@ simba codex-extract --run     Run conservative heuristic extraction now
 simba codex-recall <query>    Query semantic memory via /recall
 simba codex-finalize          Run end-of-task signal/error checks
 simba codex-automation        Print a suggested Codex automation directive
+simba sessions index --latest Index newest raw transcript messages
+simba sessions search <query> Search raw message sidecar
+simba task snapshot save      Save compact current-work state
+simba task snapshot show      Show latest active task snapshot
+simba task snapshot clear     Clear active task snapshot append-only
 simba pi-install              Install the pi bridge extension (~/.pi/agent)
 simba pi-install --remove     Remove the pi bridge extension
 simba server [opts]           Start memory daemon
@@ -1190,9 +1212,10 @@ simba config show                              # Dump full effective config
 | Section | Config Class | Key Fields |
 |---------|-------------|------------|
 | `memory` | `MemoryConfig` | port, min_similarity, max_results, sync_interval, ... |
-| `hooks` | `HooksConfig` | health_timeout, daemon_port, context_low_bytes, permission_deny_similarity, ... |
+| `hooks` | `HooksConfig` | health_timeout, daemon_port, context_low_bytes, task_snapshot_injection_enabled, ... |
 | `sync` | `SyncConfig` | daemon_url, batch_limit, retry_count, default_interval, ... |
 | `search` | `SearchConfig` | max_context_tokens, min_query_length, memory_token_budget, ... |
+| `sessions` | `SessionsConfig` | search_limit |
 
 New config sections can be added by decorating a dataclass with `@simba.config.configurable("section_name")`.
 

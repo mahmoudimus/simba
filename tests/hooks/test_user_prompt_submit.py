@@ -62,6 +62,52 @@ class TestUserPromptSubmitHook:
         ctx = result["hookSpecificOutput"]["additionalContext"]
         assert "Important rule" in ctx
 
+    def test_context_lanes_cap_recall_but_keep_core(self, tmp_path, monkeypatch):
+        class _Cfg:
+            prompt_min_length = 1
+            prompt_min_similarity = 0.45
+            intent_priming_enabled = False
+            preflight_mandate_enabled = False
+            guardian_signal_gated = False
+            engagement_marker_enabled = False
+            context_lanes_enabled = True
+            context_lane_guardian_chars = 10
+            context_lane_recall_chars = 120
+            context_lane_doctrine_chars = 120
+            context_lane_rag_chars = 120
+            context_lane_rlm_chars = 120
+            context_lane_diagnostics_chars = 120
+
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text(
+            "<!-- BEGIN SIMBA:core -->\n"
+            "Protected rule survives\n"
+            "<!-- END SIMBA:core -->\n"
+        )
+        memories = [
+            {
+                "type": "GOTCHA",
+                "content": "x" * 500,
+                "similarity": 0.8,
+            }
+        ]
+        monkeypatch.setattr(simba.hooks.user_prompt_submit, "_cfg", lambda: _Cfg())
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories", lambda *a, **k: memories
+        )
+        monkeypatch.setattr(
+            "simba.search.rag_context.build_context", lambda *a, **k: ""
+        )
+
+        result = json.loads(
+            simba.hooks.user_prompt_submit.main(
+                {"prompt": "long enough", "cwd": str(tmp_path)}
+            )
+        )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "Protected rule survives" in ctx
+        assert "[simba lane truncated]" in ctx
+
     def test_passes_project_path_to_recall(self, tmp_path):
         with unittest.mock.patch(
             "simba.hooks._memory_client.recall_memories",
@@ -77,12 +123,66 @@ class TestUserPromptSubmitHook:
         _, kwargs = mock_recall.call_args
         assert kwargs["project_path"] == str(tmp_path)
 
+    def test_injects_active_task_snapshot(self, tmp_path, monkeypatch):
+        import simba.db
+        import simba.task_snapshot as snapshots
+
+        class _Cfg:
+            prompt_min_length = 1
+            prompt_min_similarity = 0.45
+            intent_priming_enabled = False
+            preflight_mandate_enabled = False
+            guardian_signal_gated = False
+            engagement_marker_enabled = False
+            task_snapshot_injection_enabled = True
+            context_lanes_enabled = True
+            context_lane_guardian_chars = 12000
+            context_lane_recall_chars = 4000
+            context_lane_task_chars = 800
+            context_lane_doctrine_chars = 2000
+            context_lane_rag_chars = 2500
+            context_lane_rlm_chars = 1500
+            context_lane_diagnostics_chars = 800
+
+        with simba.db.connect(tmp_path):
+            snapshots.save(
+                project_path=str(tmp_path.resolve()),
+                session_id="sess-1",
+                task="finish active task snapshot",
+                summary="compact current work",
+                files=["src/simba/task_snapshot.py"],
+                next_step="run validation",
+                now=100.0,
+            )
+        monkeypatch.setattr(simba.hooks.user_prompt_submit, "_cfg", lambda: _Cfg())
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.recall_memories", lambda *a, **k: []
+        )
+        monkeypatch.setattr(
+            "simba.search.rag_context.build_context", lambda *a, **k: ""
+        )
+
+        result = json.loads(
+            simba.hooks.user_prompt_submit.main(
+                {
+                    "prompt": "continue the implementation",
+                    "cwd": str(tmp_path),
+                    "session_id": "sess-1",
+                }
+            )
+        )
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "<active-task-snapshot>" in ctx
+        assert "finish active task snapshot" in ctx
+        assert "next_step: run validation" in ctx
+
     def test_hooks_config_exposes_prompt_floor(self):
         import simba.hooks.config
 
         cfg = simba.hooks.config.HooksConfig()
         assert cfg.prompt_min_similarity == 0.45
         assert cfg.prompt_min_length == 10
+        assert cfg.recall_triage_enabled is False
 
     def test_guardian_signal_gated_defaults_off(self):
         import simba.hooks.config
@@ -269,6 +369,73 @@ class TestIntentPriming:
         ):
             result = json.loads(simba.hooks.user_prompt_submit.main({}))
         assert "hookSpecificOutput" in result
+
+    def test_recall_triage_default_off_preserves_recall(self, tmp_path, monkeypatch):
+        class _Stub:
+            prompt_min_similarity = 0.45
+            prompt_min_length = 1
+            recall_triage_enabled = False
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Stub(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ) as mock_recall:
+            simba.hooks.user_prompt_submit.main(
+                {"prompt": "thanks", "cwd": str(tmp_path)}
+            )
+
+        mock_recall.assert_called_once()
+
+    def test_recall_triage_skip_suppresses_recall_and_search(
+        self, tmp_path, monkeypatch
+    ):
+        class _Stub:
+            prompt_min_similarity = 0.45
+            prompt_min_length = 1
+            recall_triage_enabled = True
+            recall_triage_emit_diagnostics = True
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Stub(), raising=False
+        )
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories"
+            ) as mock_recall,
+            unittest.mock.patch("simba.search.rag_context.build_context") as mock_rag,
+        ):
+            result = json.loads(
+                simba.hooks.user_prompt_submit.main(
+                    {"prompt": "thanks", "cwd": str(tmp_path)}
+                )
+            )
+
+        mock_recall.assert_not_called()
+        mock_rag.assert_not_called()
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert "<recall-triage>" in ctx
+        assert "decision: skip" in ctx
+
+    def test_recall_triage_uncertain_still_retrieves(self, tmp_path, monkeypatch):
+        class _Stub:
+            prompt_min_similarity = 0.45
+            prompt_min_length = 1
+            recall_triage_enabled = True
+            recall_triage_emit_diagnostics = False
+
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _Stub(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ) as mock_recall:
+            simba.hooks.user_prompt_submit.main(
+                {"prompt": "please think carefully about this", "cwd": str(tmp_path)}
+            )
+
+        mock_recall.assert_called_once()
 
 
 class TestNoHardcodedThresholds:

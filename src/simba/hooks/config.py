@@ -27,6 +27,22 @@ class HooksConfig:
     # User-prompt-submit recall
     prompt_min_length: int = 10  # skip recall for prompts shorter than this
     prompt_min_similarity: float = 0.45  # stricter floor than the daemon default
+    # Cheap UserPromptSubmit retrieval triage. Default-OFF: every prompt that
+    # passes prompt_min_length still retrieves as before. When enabled, only
+    # narrow self-contained prompts skip memory/RAG; uncertain still retrieves.
+    recall_triage_enabled: bool = False
+    recall_triage_emit_diagnostics: bool = False
+    # Context lane allocator (docs/plans/29): UserPromptSubmit still emits a single
+    # additionalContext string, but internally each source has a named budget so
+    # verbose recall/RAG/RLM diagnostics cannot crowd out protected rules.
+    context_lanes_enabled: bool = False
+    context_lane_guardian_chars: int = 12000
+    context_lane_recall_chars: int = 4000
+    context_lane_task_chars: int = 800
+    context_lane_doctrine_chars: int = 2000
+    context_lane_rag_chars: int = 2500
+    context_lane_rlm_chars: int = 1500
+    context_lane_diagnostics_chars: int = 800
 
     # Guardian CORE re-injection (spec 25). The CLAUDE.md guardian re-injects the
     # SIMBA:core block on EVERY UserPromptSubmit (~2k tokens of per-turn overhead
@@ -40,6 +56,13 @@ class HooksConfig:
     # is byte-identical to today (block injected every prompt). Enable:
     # `simba config set hooks.guardian_signal_gated 1`.
     guardian_signal_gated: bool = False
+
+    # Active task snapshot injection. When on, UserPromptSubmit looks for the
+    # newest append-only task snapshot for this project/session and injects one
+    # compact block before ordinary recall/RAG. This is intentionally tiny: it
+    # carries current task, blockers, files, and next step, not a transcript
+    # briefing. Disable with `simba config set hooks.task_snapshot_injection_enabled 0`.
+    task_snapshot_injection_enabled: bool = True
 
     # Pre-tool-use. General thinking-block recall defers to the daemon's
     # intent-aware floor (memory.min_similarity / min_similarity_broad), so

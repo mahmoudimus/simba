@@ -902,6 +902,67 @@ def test_latest_transcript_metadata_prefers_codex_sessions(
     assert meta["transcript_path"] == str(codex_jsonl)
 
 
+def test_cmd_sessions_index_latest_and_search_json(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    transcript = _write_codex_session(
+        codex_home,
+        session_id="codex-session-2",
+        cwd="/tmp/codex-project",
+        text="Exact recovery marker: RuntimeError bad state in src/session.py:12",
+    )
+
+    rc = cli._cmd_sessions(["index", "--latest", "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["session_id"] == "codex-session-2"
+    assert payload["transcript_path"] == str(transcript)
+    assert payload["message_count"] == 1
+
+    rc = cli._cmd_sessions(
+        ["search", "RuntimeError", "bad", "state", "src/session.py:12", "--json"]
+    )
+
+    assert rc == 0
+    hits = json.loads(capsys.readouterr().out)
+    assert hits[0]["session_id"] == "codex-session-2"
+    assert hits[0]["message_span"] == [0, 0]
+    assert "src/session.py:12" in hits[0]["file_refs"]
+
+
+def test_cmd_sessions_path_search_respects_project_filter(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "s1", "cwd": "/repo/a"}})
+        + "\n"
+        + json.dumps({"message": {"role": "user", "content": "FILTER_TOKEN"}})
+        + "\n"
+    )
+
+    assert cli._cmd_sessions(["index", "--path", str(transcript)]) == 0
+    capsys.readouterr()
+
+    assert (
+        cli._cmd_sessions(
+            ["search", "FILTER_TOKEN", "--project-path", "/repo/other", "--json"]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == []
+
+
 def test_codex_extract_does_not_fallback_to_claude_metadata(
     tmp_path: pathlib.Path,
     monkeypatch,

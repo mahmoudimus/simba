@@ -37,6 +37,8 @@ Usage:
     simba rule <cmd>       Manage tool rules (auto-learned + manual)
     simba rlm <cmd>        RLM autonomous engine commands (digest)
     simba episodes <cmd>   Episodic consolidation control (complete)
+    simba sessions <cmd>   Index/search raw transcript messages
+    simba task <cmd>       Active task snapshot operations
     simba db <subcmd>      Inspect or migrate the shared database
     simba hook <event>     Run a hook (called by Claude Code, not users)
     simba hook-canonical <event>
@@ -51,6 +53,7 @@ import os
 import pathlib
 import re
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -2606,6 +2609,8 @@ def _cmd_eval(args: list[str]) -> int:
         return _eval_bench(args[1:])
     if args and args[0] == "halumem":
         return _eval_halumem(args[1:])
+    if args and args[0] == "triage":
+        return _eval_triage(args[1:])
     if args and args[0] == "leaderboard":
         return _eval_leaderboard(args[1:])
     if args and args[0] == "build":
@@ -2678,6 +2683,49 @@ def _cmd_eval(args: list[str]) -> int:
     else:
         print(report.format_report(rep, top_n_worst=5))
     return 0
+
+
+def _eval_triage(args: list[str]) -> int:
+    """Run the built-in retrieval-triage fixture."""
+    import json as _json
+
+    import simba.eval.recall_triage as recall_triage_eval
+
+    path = _parse_opt_value(args, "--path")
+    as_json = "--json" in args
+    allowed = {"--path", "--json"}
+    i = 0
+    while i < len(args):
+        if args[i] == "--path" and i + 1 < len(args):
+            i += 2
+            continue
+        if args[i] in allowed:
+            i += 1
+            continue
+        print(f"eval triage: unknown option {args[i]!r}", file=sys.stderr)
+        print("Usage: simba eval triage [--path CASES.jsonl] [--json]")
+        return 1
+
+    cases = recall_triage_eval.load_cases(pathlib.Path(path) if path else None)
+    result = recall_triage_eval.evaluate(cases)
+    if as_json:
+        print(_json.dumps(result, indent=2))
+    else:
+        print(
+            "recall-triage eval: "
+            f"n={result['n']} accuracy={result['accuracy']:.3f} "
+            f"false_negatives={result['false_negatives']} "
+            f"false_positives={result['false_positives']} "
+            f"gate={result['gate']}"
+        )
+        for row in result["cases"]:
+            if not row["ok"]:
+                print(
+                    "  miss: "
+                    f"expected={row['expected']} actual={row['actual']} "
+                    f"reason={row['reason']} prompt={row['prompt']!r}"
+                )
+    return 0 if result["gate"] == "pass" else 1
 
 
 def _eval_build(args: list[str]) -> int:
@@ -3385,6 +3433,298 @@ def _cmd_transcript(args: list[str]) -> int:
     return 1
 
 
+def _free_arg_text(
+    args: list[str],
+    *,
+    value_options: set[str],
+    flag_options: set[str] | None = None,
+) -> str:
+    flag_options = flag_options or set()
+    skip_next = False
+    parts: list[str] = []
+    for tok in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in value_options:
+            skip_next = True
+            continue
+        if tok in flag_options:
+            continue
+        if tok.startswith("--"):
+            continue
+        parts.append(tok)
+    return " ".join(parts).strip()
+
+
+def _sessions_usage() -> str:
+    return (
+        "usage: simba sessions index (--latest | --path PATH) "
+        "[--project-path P] [--session-id SID] [--source SRC] [--json]\n"
+        "       simba sessions search <query> "
+        "[--limit N] [--project-path P] [--json]"
+    )
+
+
+def _cmd_sessions(args: list[str]) -> int:
+    """Index and search raw transcript messages."""
+    import simba.sessions.messages as session_messages
+
+    sub = args[0] if args else ""
+    if sub == "index":
+        latest = "--latest" in args
+        path_arg = _parse_opt_value(args, "--path")
+        if latest == bool(path_arg):
+            print(_sessions_usage(), file=sys.stderr)
+            return 1
+
+        project_path = _parse_opt_value(args, "--project-path") or ""
+        session_id = _parse_opt_value(args, "--session-id") or ""
+        source = _parse_opt_value(args, "--source") or ""
+        if latest:
+            meta = _latest_transcript_metadata()
+            if not meta:
+                print("No latest transcript metadata found.", file=sys.stderr)
+                return 1
+            path_arg = str(meta.get("transcript_path") or "")
+            project_path = project_path or str(meta.get("project_path") or "")
+            session_id = session_id or str(meta.get("session_id") or "")
+            source = source or str(meta.get("source") or "")
+
+        if not path_arg:
+            print(_sessions_usage(), file=sys.stderr)
+            return 1
+        transcript_path = pathlib.Path(path_arg).expanduser()
+        if not transcript_path.is_file():
+            print(f"Transcript not found: {transcript_path}", file=sys.stderr)
+            return 1
+        project_path = project_path or str(pathlib.Path.cwd())
+
+        result = session_messages.index_transcript(
+            transcript_path,
+            project_path=project_path,
+            session_id=session_id,
+            source=source,
+            cwd=pathlib.Path.cwd(),
+        )
+        payload = {
+            "session_id": result.session_id,
+            "project_path": result.project_path,
+            "transcript_path": result.transcript_path,
+            "source": result.source,
+            "message_count": result.message_count,
+        }
+        if "--json" in args:
+            print(json.dumps(payload))
+        else:
+            print(
+                "indexed "
+                f"{result.message_count} messages: "
+                f"session={result.session_id} transcript={result.transcript_path}"
+            )
+        return 0
+
+    if sub == "search":
+        query = _free_arg_text(
+            args[1:],
+            value_options={"--limit", "--project-path"},
+            flag_options={"--json"},
+        )
+        if not query:
+            print(_sessions_usage(), file=sys.stderr)
+            return 1
+        limit_raw = _parse_opt_value(args, "--limit")
+        try:
+            limit = (
+                int(limit_raw)
+                if limit_raw is not None
+                else session_messages.default_search_limit(cwd=pathlib.Path.cwd())
+            )
+        except ValueError:
+            print(f"Invalid --limit value: {limit_raw}", file=sys.stderr)
+            return 1
+        project_path = _parse_opt_value(args, "--project-path") or ""
+
+        rows = session_messages.search(
+            query,
+            project_path=project_path,
+            limit=limit,
+            cwd=pathlib.Path.cwd(),
+        )
+        if "--json" in args:
+            print(json.dumps(rows))
+            return 0
+        if not rows:
+            print("No indexed session messages matched.")
+            return 0
+        for row in rows:
+            text = re.sub(r"\s+", " ", str(row.get("text", ""))).strip()
+            if len(text) > 220:
+                text = text[:217].rstrip() + "..."
+            span = row.get("message_span") or [
+                row.get("message_index", 0),
+                row.get("message_index", 0),
+            ]
+            print(
+                f"{row.get('session_id', '')}:{span[0]}-{span[1]} "
+                f"[{row.get('role', '')}] {text}"
+            )
+            if row.get("file_refs"):
+                print(f"  files: {', '.join(row['file_refs'])}")
+            print(f"  transcript: {row.get('transcript_path', '')}")
+        return 0
+
+    print(_sessions_usage(), file=sys.stderr)
+    return 1
+
+
+def _values_for(args: list[str], key: str) -> list[str]:
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == key and i + 1 < len(args):
+            out.append(args[i + 1])
+            i += 2
+            continue
+        i += 1
+    return out
+
+
+def _split_values(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        for part in value.split(","):
+            part = part.strip()
+            if part:
+                out.append(part)
+    return out
+
+
+def _git_branch(cwd: pathlib.Path) -> str:
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=cwd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return proc.stdout.strip()
+
+
+def _task_usage() -> str:
+    return (
+        "usage: simba task snapshot save --task TEXT [--summary TEXT] "
+        "[--next-step TEXT] [--file PATH] [--blocker TEXT]\n"
+        "       simba task snapshot show [--project-path P] [--session SID] [--json]\n"
+        "       simba task snapshot clear [--reason TEXT] "
+        "[--project-path P] [--session SID]"
+    )
+
+
+def _task_project(args: list[str]) -> str:
+    return _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd().resolve())
+
+
+def _cmd_task(args: list[str]) -> int:
+    """Manage compact active task snapshots."""
+    if len(args) < 2 or args[0] != "snapshot":
+        print(_task_usage(), file=sys.stderr)
+        return 1
+
+    import simba.db
+    import simba.task_snapshot as snapshots
+
+    sub = args[1]
+    rest = args[2:]
+    project_path = _task_project(rest)
+    session_id = _parse_opt_value(rest, "--session") or ""
+    cwd = pathlib.Path.cwd()
+
+    if sub == "save":
+        task = _parse_opt_value(rest, "--task") or _free_arg_text(
+            rest,
+            value_options={
+                "--task",
+                "--summary",
+                "--next-step",
+                "--branch",
+                "--worktree",
+                "--project-path",
+                "--session",
+                "--file",
+                "--files",
+                "--blocker",
+                "--blockers",
+            },
+        )
+        if not task:
+            print(_task_usage(), file=sys.stderr)
+            return 1
+        files = _split_values(_values_for(rest, "--file"))
+        files += _split_values(_values_for(rest, "--files"))
+        blockers = _split_values(_values_for(rest, "--blocker"))
+        blockers += _split_values(_values_for(rest, "--blockers"))
+        with simba.db.connect(cwd):
+            row = snapshots.save(
+                project_path=project_path,
+                session_id=session_id,
+                task=task,
+                summary=_parse_opt_value(rest, "--summary") or "",
+                branch=_parse_opt_value(rest, "--branch") or _git_branch(cwd),
+                worktree=_parse_opt_value(rest, "--worktree") or str(cwd.resolve()),
+                files=files,
+                blockers=blockers,
+                next_step=_parse_opt_value(rest, "--next-step") or "",
+                now=time.time(),
+            )
+        if "--json" in rest:
+            print(json.dumps(snapshots.to_dict(row)))
+        else:
+            print(f"saved task snapshot: {row.id}")
+        return 0
+
+    if sub == "show":
+        with simba.db.connect(cwd):
+            row = snapshots.latest(project_path=project_path, session_id=session_id)
+            payload = snapshots.to_dict(row) if row is not None else {}
+            rendered = snapshots.render(row) if row is not None else ""
+        if "--json" in rest:
+            print(json.dumps(payload))
+        elif rendered:
+            print(rendered)
+        else:
+            print(f"No active task snapshot for {project_path}")
+        return 0 if row is not None else 1
+
+    if sub == "clear":
+        reason = _parse_opt_value(rest, "--reason") or _free_arg_text(
+            rest,
+            value_options={"--reason", "--project-path", "--session"},
+            flag_options={"--json"},
+        )
+        with simba.db.connect(cwd):
+            row = snapshots.clear(
+                project_path=project_path,
+                session_id=session_id,
+                reason=reason,
+                now=time.time(),
+            )
+        if "--json" in rest:
+            print(json.dumps(snapshots.to_dict(row)))
+        else:
+            print(f"cleared task snapshot: {row.id}")
+        return 0
+
+    print(_task_usage(), file=sys.stderr)
+    return 1
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -3444,6 +3784,10 @@ def main() -> None:
         sys.exit(_cmd_episodes(rest))
     elif cmd == "db":
         sys.exit(_cmd_db(rest))
+    elif cmd == "sessions":
+        sys.exit(_cmd_sessions(rest))
+    elif cmd == "task":
+        sys.exit(_cmd_task(rest))
     elif cmd == "transcript":
         sys.exit(_cmd_transcript(rest))
     else:

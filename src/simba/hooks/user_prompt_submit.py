@@ -12,6 +12,8 @@ import sys
 
 import simba.guardian.extract_core
 import simba.hooks._memory_client
+import simba.hooks.context_lanes
+import simba.hooks.recall_triage
 import simba.search.rag_context
 from simba.harness.core import CanonicalResult
 
@@ -113,6 +115,27 @@ def _intent_prime(prompt: str, cwd_str: str | None, cfg, session_id: str) -> str
     return "\n\n".join(parts)
 
 
+def _task_snapshot_context(cwd_str: str | None, cfg, session_id: str) -> str:
+    """Return the compact active task snapshot for this project/session."""
+    if not getattr(cfg, "task_snapshot_injection_enabled", True):
+        return ""
+    if not cwd_str:
+        return ""
+    try:
+        import simba.db
+        import simba.task_snapshot as snapshots
+
+        cwd = pathlib.Path(cwd_str)
+        project_path = str(cwd.resolve())
+        with simba.db.connect(cwd):
+            row = snapshots.latest(project_path=project_path, session_id=session_id)
+            if row is None and session_id:
+                row = snapshots.latest(project_path=project_path)
+            return snapshots.render(row) if row is not None else ""
+    except Exception:
+        return ""
+
+
 def _reset_turn_flags(session_id: str) -> None:
     """Clear the per-turn preflight + mandate flags at the turn boundary (spec 28).
 
@@ -189,7 +212,7 @@ def run(hook_input: dict) -> CanonicalResult:
     cwd = pathlib.Path(cwd_str) if cwd_str else None
 
     cfg = _cfg()
-    parts: list[str] = []
+    lanes: list[simba.hooks.context_lanes.ContextLane] = []
 
     # 0. Turn boundary (spec 28): clear last turn's per-turn preflight/mandate flags
     #    so this turn starts un-armed. No-op (and no output change) unless either
@@ -209,11 +232,44 @@ def run(hook_input: dict) -> CanonicalResult:
     if cwd is not None and _should_inject_core(cfg, session_id):
         core_blocks = simba.guardian.extract_core.main(cwd=cwd)
     if core_blocks:
-        parts.append(core_blocks)
+        lanes.append(
+            simba.hooks.context_lanes.ContextLane(
+                "guardian",
+                core_blocks,
+                getattr(cfg, "context_lane_guardian_chars", 12000),
+                protected=True,
+            )
+        )
+
+    task_ctx = _task_snapshot_context(cwd_str, cfg, session_id)
+    if task_ctx:
+        lanes.append(
+            simba.hooks.context_lanes.ContextLane(
+                "task",
+                task_ctx,
+                getattr(cfg, "context_lane_task_chars", 800),
+            )
+        )
+
+    triage = None
+    retrieval_allowed = True
+    if prompt and len(prompt) >= cfg.prompt_min_length and getattr(
+        cfg, "recall_triage_enabled", False
+    ):
+        triage = simba.hooks.recall_triage.classify(prompt)
+        retrieval_allowed = triage.should_retrieve
+        if getattr(cfg, "recall_triage_emit_diagnostics", False):
+            lanes.append(
+                simba.hooks.context_lanes.ContextLane(
+                    "diagnostics",
+                    simba.hooks.recall_triage.render(triage),
+                    getattr(cfg, "context_lane_diagnostics_chars", 800),
+                )
+            )
 
     # 2. Memory: recall relevant memories using prompt
     memories: list[dict] = []
-    if prompt and len(prompt) >= cfg.prompt_min_length:
+    if retrieval_allowed and prompt and len(prompt) >= cfg.prompt_min_length:
         project_path = str(cwd) if cwd_str else None
         memories = simba.hooks._memory_client.recall_memories(
             prompt, project_path=project_path, min_similarity=cfg.prompt_min_similarity
@@ -222,20 +278,43 @@ def run(hook_input: dict) -> CanonicalResult:
             memories, source="user-prompt", query=prompt
         )
         if formatted:
-            parts.append(formatted)
+            lanes.append(
+                simba.hooks.context_lanes.ContextLane(
+                    "recall",
+                    formatted,
+                    getattr(cfg, "context_lane_recall_chars", 4000),
+                )
+            )
 
     # 2b. Intent priming (spec 28): prime matched doctrine + applicable gates from
     #     the stated intent. Default-OFF → "" (byte-identical to today).
     prime_ctx = _intent_prime(prompt, cwd_str, cfg, session_id)
     if prime_ctx:
-        parts.append(prime_ctx)
+        lanes.append(
+            simba.hooks.context_lanes.ContextLane(
+                "doctrine",
+                prime_ctx,
+                getattr(cfg, "context_lane_doctrine_chars", 2000),
+            )
+        )
 
     # 3. Search: project memory + QMD context
-    if cwd is not None and prompt and len(prompt) >= cfg.prompt_min_length:
+    if (
+        retrieval_allowed
+        and cwd is not None
+        and prompt
+        and len(prompt) >= cfg.prompt_min_length
+    ):
         try:
             search_ctx = simba.search.rag_context.build_context(prompt, cwd)
             if search_ctx:
-                parts.append(search_ctx)
+                lanes.append(
+                    simba.hooks.context_lanes.ContextLane(
+                        "rag",
+                        search_ctx,
+                        getattr(cfg, "context_lane_rag_chars", 2500),
+                    )
+                )
         except Exception:
             pass
 
@@ -244,16 +323,33 @@ def run(hook_input: dict) -> CanonicalResult:
         with contextlib.suppress(Exception):
             rlm_ctx = _rlm_pointer_context(memories, cwd_str)
             if rlm_ctx:
-                parts.append(rlm_ctx)
+                lanes.append(
+                    simba.hooks.context_lanes.ContextLane(
+                        "rlm",
+                        rlm_ctx,
+                        getattr(cfg, "context_lane_rlm_chars", 1500),
+                    )
+                )
 
     # 5. Engagement marker (spec 27): the simba-EMITTED 🦁☑ ledger of what this
     #    turn surfaced. Leads the injected context so it is the glanceable first
     #    line. Default-OFF → "" (byte-identical to today).
     marker = _engagement_marker(cfg, memories, session_id)
     if marker:
-        parts.insert(0, marker)
+        lanes.insert(
+            0,
+            simba.hooks.context_lanes.ContextLane(
+                "diagnostics",
+                marker,
+                getattr(cfg, "context_lane_diagnostics_chars", 800),
+                protected=True,
+            ),
+        )
 
-    combined = "\n\n".join(parts)
+    rendered = simba.hooks.context_lanes.render(
+        lanes, enabled=getattr(cfg, "context_lanes_enabled", False)
+    )
+    combined = rendered.text
     if combined:
         tokens = len(combined) // 4
         tags = f"~{tokens} tokens"

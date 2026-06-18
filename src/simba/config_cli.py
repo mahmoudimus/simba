@@ -39,6 +39,7 @@ def _ensure_registry() -> None:
     import simba.reflection.config  # registers the "reflection" section
     import simba.rlm.config  # registers the "rlm" section
     import simba.search.config
+    import simba.sessions.messages  # registers the "sessions" section
     import simba.sync.config
     import simba.workflow.config  # noqa: F401 — registers the "workflow" section
 
