@@ -91,6 +91,7 @@ def _from_vector(item: dict[str, typing.Any]) -> dict[str, typing.Any]:
         "similarity": item.get("similarity", 0.0),
         "confidence": item.get("confidence", 0.0),
         "createdAt": item.get("createdAt"),
+        "tags": item.get("tags", "[]"),
         "projectPath": item.get("projectPath", ""),
         "sessionSource": item.get("sessionSource", ""),
     }

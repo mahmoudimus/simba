@@ -21,11 +21,17 @@ import starlette.requests
 import starlette.responses
 
 import simba.harness.core
+import simba.memory.anticipated
+import simba.memory.conflict
+import simba.memory.conflict_store
 import simba.memory.dimensions
 import simba.memory.fts
 import simba.memory.hybrid
+import simba.memory.provenance
+import simba.memory.query_filters
 import simba.memory.recall_plan
 import simba.memory.scoring
+import simba.memory.supersession
 import simba.memory.vector_db
 
 logger = logging.getLogger("simba.memory")
@@ -91,10 +97,305 @@ async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> N
             with simba.db.connect(cwd):
                 for mid in memory_ids:
                     simba.memory.usage.bump_access(mid, now)
+                    simba.memory.usage.bump_quality(mid, now, match=1, inject=1)
         except Exception:
             logger.debug("[recall] usage bump failed", exc_info=True)
 
     await asyncio.to_thread(_sync)
+
+
+async def _bump_quality(
+    memory_id: str,
+    now: float,
+    cwd: pathlib.Path,
+    *,
+    use: int = 0,
+    noise: int = 0,
+    save: int = 0,
+) -> None:
+    """Bump explicit quality counters. Fire-and-forget safe."""
+    import simba.db
+    import simba.memory.usage
+
+    def _sync() -> None:
+        with simba.db.connect(cwd):
+            simba.memory.usage.bump_quality(
+                memory_id, now, use=use, noise=noise, save=save
+            )
+
+    await asyncio.to_thread(_sync)
+
+
+async def _append_provenance_event(
+    *,
+    memory_id: str,
+    occurred_at: str,
+    observed_at: str,
+    source_file: str,
+    source_span: str,
+    source_url: str,
+    extraction_agent: str,
+    extraction_version: str,
+    source_session: str,
+    trust_source: str,
+    capture_origin: str,
+    trust_score: float,
+    cwd: pathlib.Path,
+    now: float,
+) -> None:
+    import simba.db
+
+    def _sync() -> None:
+        with simba.db.connect(cwd):
+            simba.memory.provenance.append_event(
+                memory_id=memory_id,
+                occurred_at=occurred_at,
+                observed_at=observed_at,
+                source_file=source_file,
+                source_span=source_span,
+                source_url=source_url,
+                extraction_agent=extraction_agent,
+                extraction_version=extraction_version,
+                source_session=source_session,
+                trust_source=trust_source,
+                capture_origin=capture_origin,
+                trust_score=trust_score,
+                now=now,
+            )
+
+    await asyncio.to_thread(_sync)
+
+
+async def _append_anticipated_queries(
+    *,
+    memory_id: str,
+    queries: list[str],
+    source: str,
+    cwd: pathlib.Path,
+    now: float,
+    limit: int,
+) -> None:
+    import simba.db
+
+    def _sync() -> None:
+        with simba.db.connect(cwd):
+            simba.memory.anticipated.append_queries(
+                memory_id=memory_id,
+                queries=queries,
+                source=source,
+                now=now,
+                limit=limit,
+            )
+
+    await asyncio.to_thread(_sync)
+
+
+async def _append_supersession_event(
+    *,
+    old_id: str,
+    new_id: str,
+    project_path: str,
+    memory_type: str,
+    similarity: float,
+    session_source: str,
+    status: str,
+    old_trust_score: float,
+    new_trust_score: float,
+    cwd: pathlib.Path,
+    now: float,
+) -> typing.Any:
+    """Append one supersession audit event. Recall remains fail-open."""
+    import simba.db
+
+    provenance = json.dumps(
+        {
+            "source": "store",
+            "sessionSource": session_source,
+            "oldTrustScore": old_trust_score,
+            "newTrustScore": new_trust_score,
+        },
+        sort_keys=True,
+    )
+
+    def _sync() -> typing.Any:
+        with simba.db.connect(cwd):
+            return simba.memory.supersession.append_event(
+                old_id=old_id,
+                new_id=new_id,
+                project_path=project_path,
+                memory_type=memory_type,
+                similarity=similarity,
+                reason="near_duplicate_same_type",
+                provenance=provenance,
+                status=status,
+                old_trust_score=old_trust_score,
+                new_trust_score=new_trust_score,
+                now=now,
+            )
+
+    return await asyncio.to_thread(_sync)
+
+
+async def _detect_and_record_write_conflicts(
+    *,
+    table: typing.Any,
+    embedding: list[float],
+    memory_id: str,
+    memory_text: str,
+    project_path: str,
+    config: typing.Any,
+    request: fastapi.Request,
+    cwd: pathlib.Path,
+    now: float,
+) -> None:
+    """Default-off write-time conflict detection with replayable judge logging."""
+    if not getattr(config, "conflict_detect_on_write", False):
+        return
+
+    llm_client = getattr(request.app.state, "llm_client", None)
+    if llm_client is None:
+        try:
+            from simba.llm.client import get_client as _get_llm_client
+
+            llm_client = _get_llm_client()
+        except Exception:
+            return
+    if llm_client is None:
+        return
+
+    max_neighbors = max(1, int(getattr(config, "conflict_write_max_neighbors", 5)))
+    try:
+        candidates = await simba.memory.vector_db.search_memories(
+            table,
+            embedding,
+            0.0,
+            max_neighbors + 5,
+            {"projectPath": project_path},
+        )
+    except Exception:
+        logger.debug("[store] write-conflict neighbor search failed", exc_info=True)
+        return
+    neighbors: list[tuple[str, str]] = []
+    for candidate in candidates:
+        cid = str(candidate.get("id") or "")
+        if not cid or cid == memory_id:
+            continue
+        text = str(candidate.get("content") or "")
+        ctx = str(candidate.get("context") or "")
+        if ctx:
+            text = f"{text} {ctx}".strip()
+        if text:
+            neighbors.append((cid, text))
+        if len(neighbors) >= max_neighbors:
+            break
+    if not neighbors:
+        return
+
+    def _sync() -> None:
+        import simba.db
+
+        with simba.db.connect(cwd):
+            conflicts = simba.memory.conflict.detect_conflicts_on_write_logged(
+                memory_id,
+                memory_text,
+                neighbors,
+                llm_client=llm_client,
+                project_path=project_path,
+                max_neighbors=max_neighbors,
+                generous=bool(getattr(config, "conflict_recall_recheck", False)),
+                now=now,
+            )
+            for neighbor_id, description in conflicts:
+                simba.memory.conflict_store.record_conflict(
+                    memory_id,
+                    neighbor_id,
+                    description,
+                    project_path=project_path,
+                    now=now,
+                )
+
+    try:
+        await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[store] write-conflict detection failed", exc_info=True)
+
+
+async def _stored_memory_trust_score(
+    memory: dict[str, typing.Any],
+    cwd: pathlib.Path,
+) -> float:
+    """Compute current trust score for an existing memory row."""
+    import simba.db
+    import simba.memory.usage
+
+    mid = str(memory.get("id") or "")
+    if not mid:
+        return 0.0
+
+    def _sync() -> float:
+        with simba.db.connect(cwd):
+            prov = simba.memory.provenance.latest_for([mid]).get(mid)
+            usage = simba.memory.usage.get_many([mid]).get(mid)
+        trust_source = prov.trust_source if prov is not None else "agent_suggested"
+        capture_origin = prov.capture_origin if prov is not None else "store"
+        return simba.memory.provenance.compute_trust_score(
+            trust_source=trust_source,
+            capture_origin=capture_origin,
+            confidence=float(memory.get("confidence", 0.0) or 0.0),
+            memory_type=str(memory.get("type", "")),
+            usage=usage,
+        )
+
+    return await asyncio.to_thread(_sync)
+
+
+async def _mark_superseded(
+    memories: list[dict[str, typing.Any]], cwd: pathlib.Path
+) -> list[dict[str, typing.Any]]:
+    """Annotate and demote superseded recall hits using the append-only audit."""
+    if not memories:
+        return memories
+    import simba.db
+
+    ids = [str(m.get("id", "")) for m in memories if m.get("id")]
+
+    def _sync() -> tuple[dict[str, str], dict[str, tuple[str, int]]]:
+        with simba.db.connect(cwd):
+            active_rows = simba.memory.supersession.latest_successors(ids)
+            pending_rows = simba.memory.supersession.latest_pending(ids)
+            return (
+                {old_id: row.new_id for old_id, row in active_rows.items()},
+                {
+                    old_id: (row.new_id, int(row.id))
+                    for old_id, row in pending_rows.items()
+                },
+            )
+
+    try:
+        successors, pending = await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[recall] supersession lookup failed", exc_info=True)
+        return memories
+    if not successors and not pending:
+        return memories
+
+    out: list[tuple[bool, int, dict[str, typing.Any]]] = []
+    for idx, mem in enumerate(memories):
+        mid = str(mem.get("id", ""))
+        if mid in successors:
+            mem = dict(mem)
+            mem["supersededBy"] = successors[mid]
+            out.append((True, idx, mem))
+        elif mid in pending:
+            mem = dict(mem)
+            replacement_id, event_id = pending[mid]
+            mem["pendingSupersededBy"] = replacement_id
+            mem["pendingSupersessionId"] = event_id
+            out.append((False, idx, mem))
+        else:
+            out.append((False, idx, mem))
+    out.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in out]
 
 
 class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
@@ -154,6 +455,18 @@ class StoreRequest(pydantic.BaseModel):
     confidence: float = 0.85
     session_source: str = pydantic.Field(default="", alias="sessionSource")
     project_path: str = pydantic.Field(default="", alias="projectPath")
+    occurred_at: str = pydantic.Field(default="", alias="occurredAt")
+    observed_at: str = pydantic.Field(default="", alias="observedAt")
+    source_file: str = pydantic.Field(default="", alias="sourceFile")
+    source_span: str = pydantic.Field(default="", alias="sourceSpan")
+    source_url: str = pydantic.Field(default="", alias="sourceUrl")
+    extraction_agent: str = pydantic.Field(default="", alias="extractionAgent")
+    extraction_version: str = pydantic.Field(default="", alias="extractionVersion")
+    trust_source: str = pydantic.Field(default="agent_suggested", alias="trustSource")
+    capture_origin: str = pydantic.Field(default="store", alias="captureOrigin")
+    anticipated_queries: list[str] = pydantic.Field(
+        default_factory=list, alias="anticipatedQueries"
+    )
 
 
 class RecallRequest(pydantic.BaseModel):
@@ -229,8 +542,25 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
         }
 
     # Supersession (opt-in): if a same-type memory sits just below the duplicate
-    # threshold, replace it with this fresher one instead of appending a near-dup.
+    # threshold, append a lineage audit event and demote the older row at recall.
     superseded_id: str | None = None
+    superseded_similarity = 0.0
+    supersession_status = simba.memory.supersession.STATUS_ACTIVE
+    pending_supersession_id: int | None = None
+    old_trust_score = 0.0
+    normalized_trust_source = simba.memory.provenance.normalize_trust_source(
+        body.trust_source
+    )
+    normalized_capture_origin = simba.memory.provenance.normalize_capture_origin(
+        body.capture_origin
+    )
+    new_trust_score = simba.memory.provenance.compute_trust_score(
+        trust_source=normalized_trust_source,
+        capture_origin=normalized_capture_origin,
+        confidence=body.confidence,
+        memory_type=body.type,
+    )
+    cwd_path = pathlib.Path(getattr(request.app.state, "cwd", "."))
     if config.supersede_enabled:
         candidates = await simba.memory.vector_db.search_memories(
             table,
@@ -241,10 +571,21 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
         )
         if candidates:
             superseded_id = candidates[0]["id"]
-            await table.delete(f"id = '{superseded_id}'")
+            superseded_similarity = float(candidates[0].get("similarity", 0.0) or 0.0)
+            if getattr(config, "supersede_trust_gate_enabled", True):
+                old_trust_score = await _stored_memory_trust_score(
+                    candidates[0],
+                    cwd_path,
+                )
+                margin = float(getattr(config, "supersede_trust_margin", 0.05))
+                if new_trust_score + margin < old_trust_score:
+                    supersession_status = (
+                        simba.memory.supersession.STATUS_PENDING
+                    )
 
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    now_epoch = time.time()
 
     # Dimensional tagging (off by default): append a parseable time/keyword blob to
     # context so aggregation can filter by field later. Embedding is computed above
@@ -301,20 +642,118 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             )
         except Exception:
             logger.debug("[store] fts mirror upsert failed", exc_info=True)
-        if superseded_id:
-            try:
-                await asyncio.to_thread(_fts_delete, fts_path, superseded_id)
-            except Exception:
-                logger.debug("[store] fts supersede-delete failed", exc_info=True)
+
+    if superseded_id:
+        try:
+            row = await _append_supersession_event(
+                old_id=superseded_id,
+                new_id=memory_id,
+                project_path=project_path,
+                memory_type=body.type,
+                similarity=superseded_similarity,
+                session_source=body.session_source,
+                status=supersession_status,
+                old_trust_score=old_trust_score,
+                new_trust_score=new_trust_score,
+                cwd=cwd_path,
+                now=now_epoch,
+            )
+            pending_supersession_id = (
+                int(row.id)
+                if row.status == simba.memory.supersession.STATUS_PENDING
+                else None
+            )
+        except Exception:
+            logger.debug("[store] supersession audit append failed", exc_info=True)
+
+    try:
+        await _bump_quality(
+            memory_id,
+            now_epoch,
+            cwd_path,
+            save=1,
+        )
+    except Exception:
+        logger.debug("[store] quality counter bump failed", exc_info=True)
+
+    try:
+        await _append_provenance_event(
+            memory_id=memory_id,
+            occurred_at=body.occurred_at,
+            observed_at=body.observed_at or now,
+            source_file=body.source_file,
+            source_span=body.source_span,
+            source_url=body.source_url,
+            extraction_agent=body.extraction_agent,
+            extraction_version=body.extraction_version,
+            source_session=body.session_source,
+            trust_source=normalized_trust_source,
+            capture_origin=normalized_capture_origin,
+            trust_score=new_trust_score,
+            cwd=cwd_path,
+            now=now_epoch,
+        )
+    except Exception:
+        logger.debug("[store] provenance append failed", exc_info=True)
+
+    if body.anticipated_queries:
+        try:
+            await _append_anticipated_queries(
+                memory_id=memory_id,
+                queries=body.anticipated_queries,
+                source=normalized_capture_origin,
+                cwd=cwd_path,
+                now=now_epoch,
+                limit=int(getattr(config, "anticipated_query_max_per_memory", 5)),
+            )
+        except Exception:
+            logger.debug("[store] anticipated-query append failed", exc_info=True)
+
+    try:
+        memory_text = body.content + (f" {stored_context}" if stored_context else "")
+        await _detect_and_record_write_conflicts(
+            table=table,
+            embedding=embedding,
+            memory_id=memory_id,
+            memory_text=memory_text,
+            project_path=project_path,
+            config=config,
+            request=request,
+            cwd=cwd_path,
+            now=now_epoch,
+        )
+    except Exception:
+        logger.debug("[store] write-conflict hook failed", exc_info=True)
 
     diag = getattr(request.app.state, "diagnostics", None)
     if diag is not None:
         diag.record_store(body.type, duplicate=False)
 
     return {
-        "status": "superseded" if superseded_id else "stored",
+        "status": (
+            "pending_confirmation"
+            if pending_supersession_id is not None
+            else "superseded"
+            if superseded_id
+            else "stored"
+        ),
         "id": memory_id,
-        **({"supersededId": superseded_id} if superseded_id else {}),
+        **(
+            {"pendingSupersessionId": pending_supersession_id}
+            if pending_supersession_id is not None
+            else {}
+        ),
+        **(
+            {"supersededId": superseded_id}
+            if superseded_id and pending_supersession_id is None
+            else {}
+        ),
+        **(
+            {"supersededCandidateId": superseded_id}
+            if superseded_id and pending_supersession_id is not None
+            else {}
+        ),
+        "trustScore": new_trust_score,
         "embedding_dims": len(embedding),
     }
 
@@ -325,10 +764,12 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     table = request.app.state.table
     config = request.app.state.config
     embed_query = request.app.state.embed_query
+    parsed_query = simba.memory.query_filters.parse(body.query)
+    recall_query = parsed_query.query
 
     start_time = time.time()
     try:
-        embedding = await embed_query(body.query)
+        embedding = await embed_query(recall_query)
     except Exception as e:
         logger.warning("[recall] Embedding failed: %s", e)
         return {"memories": [], "queryTimeMs": 0, "error": "embedding_failed"}
@@ -353,7 +794,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     # Intent-aware floor + broad-query widening + HyDE text selection, all
     # derived by the shared planner (the eval harness uses the same logic).
     plan = simba.memory.recall_plan.plan_recall(
-        body.query,
+        recall_query,
         config,
         min_similarity=body.min_similarity,
         max_results=body.max_results,
@@ -366,6 +807,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     mode = plan.mode
 
     filters = dict(body.filters)
+    filters.update(parsed_query.route_filters)
     if body.project_path:
         filters["projectPath"] = body.project_path
 
@@ -415,7 +857,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             table,
             fts_path,
             embedding,
-            body.query,
+            recall_query,
             min_similarity=min_sim,
             max_results=max_res,
             filters=filters,
@@ -443,6 +885,8 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         enabled=getattr(config, "recall_reject_enabled", False),
         threshold=getattr(config, "recall_reject_threshold", 0.0),
     )
+    memories = simba.memory.query_filters.apply(memories, parsed_query.post_filters)
+    memories = await _mark_superseded(memories, recall_cwd)
 
     results = [
         {
@@ -455,6 +899,17 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             "createdAt": m.get("createdAt"),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
             **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
+            **({"supersededBy": m["supersededBy"]} if m.get("supersededBy") else {}),
+            **(
+                {"pendingSupersededBy": m["pendingSupersededBy"]}
+                if m.get("pendingSupersededBy")
+                else {}
+            ),
+            **(
+                {"pendingSupersessionId": m["pendingSupersessionId"]}
+                if m.get("pendingSupersessionId")
+                else {}
+            ),
         }
         for m in memories
     ]
@@ -467,7 +922,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         body.project_path or "(global)",
         mode,
         min_sim,
-        body.query[:50],
+        recall_query[:50],
         len(results),
         query_time_ms,
         top_sim,
@@ -925,6 +1380,12 @@ async def memory_feedback(
     def _apply() -> float:
         with simba.db.connect(cwd):
             simba.memory.usage.apply_feedback(memory_id, delta, now=now)
+            simba.memory.usage.bump_quality(
+                memory_id,
+                now,
+                use=1 if body.signal == "good" else 0,
+                noise=1 if body.signal == "bad" else 0,
+            )
             rows = simba.memory.usage.get_many([memory_id])
             return rows[memory_id].feedback_score if memory_id in rows else 0.0
 

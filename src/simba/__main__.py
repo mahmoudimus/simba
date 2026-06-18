@@ -1325,6 +1325,7 @@ Subcommands:
     reembed  Re-embed the whole corpus with the current model (after a swap)
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
+    supersession Inspect append-only supersession lineage for one memory
 
 store options:
     --type TYPE            Memory type: WORKING_SOLUTION, GOTCHA, PATTERN,
@@ -1335,6 +1336,17 @@ store options:
     --confidence FLOAT     Confidence score 0.0-1.0 (default: 0.85)
     --session-source ID    Session ID this came from
     --project-path PATH    Project path for scoping (default: cwd)
+    --occurred-at TEXT     Event/belief time for provenance metadata
+    --observed-at TEXT     Observation time for provenance metadata
+    --source-file PATH     Source file for provenance metadata
+    --source-span TEXT     Source line/span for provenance metadata
+    --source-url URL       Source URL for provenance metadata
+    --extraction-agent ID  Extractor/agent name for provenance metadata
+    --extraction-version V Extractor/agent version for provenance metadata
+    --anticipated-query Q  Future query phrasing for this memory (repeatable)
+    --trust-source SOURCE  user_stated, agreed_upon, agent_suggested,
+                           llm_extracted, hook_auto_learned, external
+    --capture-origin ID    store origin for trust scoring (cli, hook, etc.)
 
 recall options:
     --limit N              Max results to return (default: 5)
@@ -1358,6 +1370,10 @@ update:
 
 feedback:
     simba memory feedback <memory_id> good|bad [--weight 0.3]
+
+supersession:
+    simba memory supersession <memory_id>
+    simba memory supersession confirm|reject <audit_id>
 """
 
 _VALID_MEMORY_TYPES = {
@@ -1412,6 +1428,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_consolidate(rest)
     elif subcmd == "feedback":
         return _memory_feedback(rest)
+    elif subcmd == "supersession":
+        return _memory_supersession(rest)
     else:
         print(f"Unknown memory subcommand: {subcmd}")
         print(_MEMORY_USAGE)
@@ -1481,6 +1499,17 @@ def _memory_store(args: list[str]) -> int:
     context = _parse_opt_value(args, "--context") or ""
     confidence_raw = _parse_opt_value(args, "--confidence")
     session_source = _parse_opt_value(args, "--session-source") or ""
+    occurred_at = _parse_opt_value(args, "--occurred-at") or ""
+    observed_at = _parse_opt_value(args, "--observed-at") or ""
+    source_file = _parse_opt_value(args, "--source-file") or ""
+    source_span = _parse_opt_value(args, "--source-span") or ""
+    source_url = _parse_opt_value(args, "--source-url") or ""
+    extraction_agent = _parse_opt_value(args, "--extraction-agent") or ""
+    extraction_version = _parse_opt_value(args, "--extraction-version") or ""
+    trust_source = _parse_opt_value(args, "--trust-source") or ""
+    capture_origin = _parse_opt_value(args, "--capture-origin") or ""
+    anticipated_queries = _split_values(_values_for(args, "--anticipated-query"))
+    anticipated_queries += _split_values(_values_for(args, "--anticipated-queries"))
     # Normalize the scope path to an absolute, symlink-resolved path (spec 26) so
     # it matches the client's resolved ancestor chain on recall (the daemon also
     # normalizes on store; doing it here keeps the CLI path consistent).
@@ -1525,6 +1554,26 @@ def _memory_store(args: list[str]) -> int:
     }
     if session_source:
         payload["sessionSource"] = session_source
+    if occurred_at:
+        payload["occurredAt"] = occurred_at
+    if observed_at:
+        payload["observedAt"] = observed_at
+    if source_file:
+        payload["sourceFile"] = source_file
+    if source_span:
+        payload["sourceSpan"] = source_span
+    if source_url:
+        payload["sourceUrl"] = source_url
+    if extraction_agent:
+        payload["extractionAgent"] = extraction_agent
+    if extraction_version:
+        payload["extractionVersion"] = extraction_version
+    if trust_source:
+        payload["trustSource"] = trust_source
+    if capture_origin:
+        payload["captureOrigin"] = capture_origin
+    if anticipated_queries:
+        payload["anticipatedQueries"] = anticipated_queries
 
     url = simba.hooks._memory_client.daemon_url()
     try:
@@ -1541,6 +1590,17 @@ def _memory_store(args: list[str]) -> int:
     status = body.get("status", "unknown")
     if status == "stored":
         print(f"stored: {body.get('id', '?')}")
+    elif status == "superseded":
+        print(
+            f"superseded: old={body.get('supersededId', '?')} "
+            f"new={body.get('id', '?')}"
+        )
+    elif status == "pending_confirmation":
+        print(
+            f"pending supersession: audit={body.get('pendingSupersessionId', '?')} "
+            f"old={body.get('supersededCandidateId', '?')} "
+            f"new={body.get('id', '?')}"
+        )
     elif status == "duplicate":
         print(
             f"duplicate: existing={body.get('existing_id', '?')} "
@@ -1735,6 +1795,90 @@ def _memory_feedback(args: list[str]) -> int:
         f"feedback recorded: {body.get('id', memory_id)} "
         f"-> feedback_score={body.get('feedback_score', 0.0)}"
     )
+    return 0
+
+
+def _memory_supersession(args: list[str]) -> int:
+    """Inspect the append-only supersession chain for a memory."""
+    if not args or args[0].startswith("--"):
+        print(
+            "Usage: simba memory supersession <memory_id>|confirm|reject <audit_id>",
+            file=sys.stderr,
+        )
+        return 1
+
+    import time
+
+    import simba.db
+    import simba.memory.supersession
+
+    if args[0] in {"confirm", "reject"}:
+        if len(args) != 2:
+            print(
+                f"Usage: simba memory supersession {args[0]} <audit_id>",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            audit_id = int(args[1])
+        except ValueError:
+            print(
+                f"Error: audit_id must be an integer, got {args[1]!r}",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            with simba.db.connect(pathlib.Path.cwd()):
+                if args[0] == "confirm":
+                    row = simba.memory.supersession.confirm(
+                        audit_id, now=time.time()
+                    )
+                else:
+                    row = simba.memory.supersession.reject(audit_id, now=time.time())
+        except (KeyError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(
+            f"{args[0]}ed supersession: audit={audit_id} "
+            f"decision={row.id} status={row.status} old={row.old_id} new={row.new_id}"
+        )
+        return 0
+
+    if len(args) != 1:
+        print(
+            "Usage: simba memory supersession <memory_id>|confirm|reject <audit_id>",
+            file=sys.stderr,
+        )
+        return 1
+
+    memory_id = args[0]
+    with simba.db.connect(pathlib.Path.cwd()):
+        rows = simba.memory.supersession.chain(memory_id)
+        events = simba.memory.supersession.events_for(memory_id)
+    if not rows and not events:
+        print(f"no supersession chain for {memory_id}")
+        return 0
+
+    if rows:
+        print(f"active supersession chain for {memory_id}:")
+        current = memory_id
+        for row in rows:
+            print(
+                f"  {current} -> {row.new_id} "
+                f"[{row.memory_type}] sim={row.similarity:.3f} "
+                f"reason={row.reason} at={row.created_at_iso}"
+            )
+            current = row.new_id
+    if events:
+        print(f"supersession events for {memory_id}:")
+        for row in events:
+            print(
+                f"  audit={row.id} status={row.status} "
+                f"{row.old_id} -> {row.new_id} "
+                f"oldTrust={row.old_trust_score:.3f} "
+                f"newTrust={row.new_trust_score:.3f} "
+                f"reason={row.reason} at={row.created_at_iso}"
+            )
     return 0
 
 

@@ -586,10 +586,34 @@ def test_memory_store_allows_content_above_200_when_under_config_limit(
             "ctx",
             "--confidence",
             "0.9",
+            "--occurred-at",
+            "2026-06-01",
+            "--source-file",
+            "src/a.py",
+            "--source-span",
+            "10-12",
+            "--extraction-agent",
+            "test-agent",
+            "--extraction-version",
+            "1",
+            "--anticipated-query",
+            "How should this be found later?",
+            "--anticipated-queries",
+            "alternate phrase,second phrase",
         ]
     )
     assert rc == 0
     assert captured["json"]["content"] == long_content
+    assert captured["json"]["occurredAt"] == "2026-06-01"
+    assert captured["json"]["sourceFile"] == "src/a.py"
+    assert captured["json"]["sourceSpan"] == "10-12"
+    assert captured["json"]["extractionAgent"] == "test-agent"
+    assert captured["json"]["extractionVersion"] == "1"
+    assert captured["json"]["anticipatedQueries"] == [
+        "How should this be found later?",
+        "alternate phrase",
+        "second phrase",
+    ]
     out = capsys.readouterr().out
     assert "stored:" in out
 
@@ -859,6 +883,96 @@ def test_memory_prune_max_confidence_filter(monkeypatch, capsys) -> None:
     assert rc == 0
     assert len(deleted) == 1
     assert "mem_lo" in deleted[0]
+
+
+def test_memory_supersession_prints_chain(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import simba.db
+    import simba.memory.supersession as supersession
+
+    monkeypatch.chdir(tmp_path)
+    with simba.db.connect(tmp_path):
+        supersession.append_event(
+            old_id="mem_old",
+            new_id="mem_new",
+            project_path="/repo",
+            memory_type="PATTERN",
+            similarity=0.91,
+            reason="near_duplicate_same_type",
+            provenance="{}",
+            now=1000.0,
+        )
+
+    rc = cli._memory_supersession(["mem_old"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "mem_old -> mem_new" in out
+    assert "sim=0.910" in out
+
+
+def test_memory_supersession_confirm_pending(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import simba.db
+    import simba.memory.supersession as supersession
+
+    monkeypatch.chdir(tmp_path)
+    with simba.db.connect(tmp_path):
+        pending = supersession.append_event(
+            old_id="mem_old",
+            new_id="mem_new",
+            project_path="/repo",
+            memory_type="PATTERN",
+            similarity=0.91,
+            reason="near_duplicate_same_type",
+            provenance="{}",
+            status=supersession.STATUS_PENDING,
+            old_trust_score=1.2,
+            new_trust_score=0.6,
+            now=1000.0,
+        )
+
+    rc = cli._memory_supersession(["confirm", str(pending.id)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "confirmed supersession" in out
+    with simba.db.connect(tmp_path):
+        assert supersession.latest_successors(["mem_old"])["mem_old"].new_id == (
+            "mem_new"
+        )
+
+
+def test_memory_supersession_reject_pending(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import simba.db
+    import simba.memory.supersession as supersession
+
+    monkeypatch.chdir(tmp_path)
+    with simba.db.connect(tmp_path):
+        pending = supersession.append_event(
+            old_id="mem_old",
+            new_id="mem_new",
+            project_path="/repo",
+            memory_type="PATTERN",
+            similarity=0.91,
+            reason="near_duplicate_same_type",
+            provenance="{}",
+            status=supersession.STATUS_PENDING,
+            old_trust_score=1.2,
+            new_trust_score=0.6,
+            now=1000.0,
+        )
+
+    rc = cli._memory_supersession(["reject", str(pending.id)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "rejected supersession" in out
+    with simba.db.connect(tmp_path):
+        assert supersession.latest_successors(["mem_old"]) == {}
 
 
 def test_latest_transcript_metadata_prefers_codex_sessions(

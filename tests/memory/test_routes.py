@@ -7,10 +7,15 @@ import time
 
 import pytest
 
+import simba.db
+import simba.memory.anticipated as anticipated
+import simba.memory.provenance as provenance
+import simba.memory.usage as usage
+
 
 class TestStoreEndpoint:
     @pytest.mark.asyncio
-    async def test_stores_memory(self, async_client):
+    async def test_stores_memory(self, async_client, tmp_path):
         resp = await async_client.post(
             "/store",
             json={"type": "GOTCHA", "content": "test memory"},
@@ -20,6 +25,63 @@ class TestStoreEndpoint:
         assert data["status"] == "stored"
         assert data["id"].startswith("mem_")
         assert data["embedding_dims"] == 768
+        with simba.db.connect(tmp_path):
+            row = usage.get_many([data["id"]])[data["id"]]
+        assert row.save_count == 1
+
+    @pytest.mark.asyncio
+    async def test_store_appends_provenance(self, async_client, tmp_path):
+        resp = await async_client.post(
+            "/store",
+            json={
+                "type": "GOTCHA",
+                "content": "provenance memory",
+                "sessionSource": "sess-1",
+                "occurredAt": "2026-06-01",
+                "sourceFile": "src/simba/example.py",
+                "sourceSpan": "10-12",
+                "extractionAgent": "test-agent",
+                "extractionVersion": "1",
+                "trustSource": "user_stated",
+                "captureOrigin": "cli",
+            },
+        )
+        memory_id = resp.json()["id"]
+        with simba.db.connect(tmp_path):
+            row = provenance.latest_for([memory_id])[memory_id]
+        assert row.occurred_at == "2026-06-01"
+        assert row.source_file == "src/simba/example.py"
+        assert row.source_span == "10-12"
+        assert row.extraction_agent == "test-agent"
+        assert row.extraction_version == "1"
+        assert row.source_session == "sess-1"
+        assert row.trust_source == "user_stated"
+        assert row.capture_origin == "cli"
+        assert row.trust_score > 0
+
+    @pytest.mark.asyncio
+    async def test_store_appends_anticipated_queries(self, async_client, tmp_path):
+        resp = await async_client.post(
+            "/store",
+            json={
+                "type": "PATTERN",
+                "content": "anticipated query memory",
+                "captureOrigin": "cli",
+                "anticipatedQueries": [
+                    "How do I query this later?",
+                    "how do i query this later?",
+                    "What should recall match?",
+                ],
+            },
+        )
+        memory_id = resp.json()["id"]
+        with simba.db.connect(tmp_path):
+            rows = anticipated.list_for(memory_id)
+        assert [row.query for row in rows] == [
+            "How do I query this later?",
+            "What should recall match?",
+        ]
+        assert rows[0].source == "cli"
 
     @pytest.mark.asyncio
     async def test_rejects_missing_type(self, async_client):
@@ -357,6 +419,48 @@ class TestRecallEndpoint:
     async def test_recall_requires_query(self, async_client):
         resp = await async_client.post("/recall", json={})
         assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_recall_supports_structured_tag_filter(
+        self, async_client, lance_table
+    ):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "mem_python",
+                    "type": "PATTERN",
+                    "content": "python memory",
+                    "context": "",
+                    "tags": '["python"]',
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+                {
+                    "id": "mem_ruby",
+                    "type": "PATTERN",
+                    "content": "ruby memory",
+                    "context": "",
+                    "tags": '["ruby"]',
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+            ]
+        )
+        resp = await async_client.post("/recall", json={"query": "memory tag:python"})
+        contents = [m["content"] for m in resp.json()["memories"]]
+        assert "python memory" in contents
+        assert "ruby memory" not in contents
 
 
 class TestHealthEndpoint:

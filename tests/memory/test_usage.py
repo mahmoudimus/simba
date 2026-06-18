@@ -16,6 +16,11 @@ def test_get_or_create_creates_row(tmp_path: pathlib.Path) -> None:
         assert row.strength == 1.0
         assert row.dormant is False
         assert row.feedback_score == 0.0
+        assert row.match_count == 0
+        assert row.inject_count == 0
+        assert row.use_count == 0
+        assert row.noise_count == 0
+        assert row.save_count == 0
 
 
 def test_get_or_create_is_idempotent(tmp_path: pathlib.Path) -> None:
@@ -42,6 +47,18 @@ def test_bump_access_upserts_missing_row(tmp_path: pathlib.Path) -> None:
         usage.bump_access("mem_new", now=50.0)
         row = usage.get_many(["mem_new"])["mem_new"]
         assert row.access_count == 1
+
+
+def test_bump_quality_counters(tmp_path: pathlib.Path) -> None:
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("mem_q", now=100.0, match=1, inject=1, save=1)
+        usage.bump_quality("mem_q", now=200.0, use=1, noise=1)
+        row = usage.get_many(["mem_q"])["mem_q"]
+        assert row.match_count == 1
+        assert row.inject_count == 1
+        assert row.save_count == 1
+        assert row.use_count == 1
+        assert row.noise_count == 1
 
 
 def test_set_dormant_true_false(tmp_path: pathlib.Path) -> None:

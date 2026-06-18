@@ -6,9 +6,13 @@ import httpx
 import pytest
 import pytest_asyncio
 
+import simba.db
 import simba.memory.config
+import simba.memory.conflict_store
 import simba.memory.fts as fts
+import simba.memory.judge_log
 import simba.memory.server
+import simba.memory.supersession
 
 
 @pytest_asyncio.fixture
@@ -22,6 +26,7 @@ async def hybrid_client(memory_config, lance_table, mock_embed, tmp_path):
     app.state.embed_query = mock_embed
     app.state.db_path = None
     app.state.fts_path = str(fts_path)
+    app.state.cwd = tmp_path
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac, str(fts_path), app
@@ -41,6 +46,16 @@ async def _store(ac, content, *, project="/proj-1", mtype="GOTCHA"):
     return resp.json()
 
 
+class FakeConflictJudge:
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = 0
+
+    def complete_json(self, prompt: str):
+        self.calls += 1
+        return self.reply
+
+
 class TestStoreSync:
     @pytest.mark.asyncio
     async def test_store_dual_writes_to_mirror(self, hybrid_client) -> None:
@@ -50,6 +65,33 @@ class TestStoreSync:
         with fts.connect(fts_path):
             hits = fts.search("lints", project_path="/proj-1")
             assert len(hits) == 1
+
+    @pytest.mark.asyncio
+    async def test_store_endpoint_records_logged_write_conflict(
+        self, hybrid_client
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_enabled = False
+        app.state.config.conflict_detect_on_write = True
+        app.state.llm_client = FakeConflictJudge(
+            {"conflict": True, "description": "Alice has two cities"}
+        )
+
+        first = await _store(ac, "Alice lives in Paris.")
+        second = await _store(ac, "Alice lives in Berlin.")
+
+        assert app.state.llm_client.calls == 1
+        with simba.db.connect(app.state.cwd):
+            rows = simba.memory.conflict_store.conflicts_among(
+                [first["id"], second["id"]],
+                project_path="/proj-1",
+            )
+            logs = simba.memory.judge_log.recent(project_path="/proj-1")
+        assert len(rows) == 1
+        assert rows[0].description == "Alice has two cities"
+        assert len(logs) == 1
+        assert logs[0].winner_id == second["id"]
 
 
 class TestRecallHybrid:
@@ -322,8 +364,149 @@ class TestSupersede:
         body = resp.json()
         assert body["status"] == "superseded"
         assert body["supersededId"] == first["id"]
-        # Old row gone, new row present -> mirror holds exactly one.
-        assert _mirror_count(fts_path) == 1
+        # Append-only: old and new rows remain in the rebuildable mirror.
+        assert _mirror_count(fts_path) == 2
+        with simba.db.connect(app.state.cwd):
+            chain = simba.memory.supersession.chain(first["id"])
+        assert len(chain) == 1
+        assert chain[0].old_id == first["id"]
+        assert chain[0].new_id == body["id"]
+        assert chain[0].project_path == "/proj-1"
+
+    @pytest.mark.asyncio
+    async def test_superseded_recall_hit_is_demoted_and_annotated(
+        self, hybrid_client
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+
+        first = await _store(ac, "ruff is the linter", mtype="PATTERN")
+        second_resp = await ac.post(
+            "/store",
+            json={"type": "PATTERN", "content": "ruff lints", "projectPath": "/proj-1"},
+        )
+        second = second_resp.json()
+
+        recall = await ac.post(
+            "/recall",
+            json={"query": "ruff", "projectPath": "/proj-1", "maxResults": 5},
+        )
+        memories = recall.json()["memories"]
+        ids = [m["id"] for m in memories]
+        assert ids.index(second["id"]) < ids.index(first["id"])
+        old = next(m for m in memories if m["id"] == first["id"])
+        assert old["supersededBy"] == second["id"]
+
+    @pytest.mark.asyncio
+    async def test_low_trust_replacement_is_pending_until_confirmed(
+        self, hybrid_client
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+        app.state.config.supersede_trust_gate_enabled = True
+
+        first_resp = await ac.post(
+            "/store",
+            json={
+                "type": "PREFERENCE",
+                "content": "use ruff for linting",
+                "projectPath": "/proj-1",
+                "confidence": 1.0,
+                "trustSource": "user_stated",
+                "captureOrigin": "cli",
+            },
+        )
+        first = first_resp.json()
+        second_resp = await ac.post(
+            "/store",
+            json={
+                "type": "PREFERENCE",
+                "content": "use pyflakes for linting",
+                "projectPath": "/proj-1",
+                "confidence": 1.0,
+                "trustSource": "llm_extracted",
+                "captureOrigin": "hook",
+            },
+        )
+        second = second_resp.json()
+
+        assert second["status"] == "pending_confirmation"
+        assert second["supersededCandidateId"] == first["id"]
+        audit_id = second["pendingSupersessionId"]
+
+        recall = await ac.post(
+            "/recall",
+            json={"query": "linting", "projectPath": "/proj-1", "maxResults": 5},
+        )
+        old = next(m for m in recall.json()["memories"] if m["id"] == first["id"])
+        assert "supersededBy" not in old
+        assert old["pendingSupersededBy"] == second["id"]
+        assert old["pendingSupersessionId"] == audit_id
+
+        with simba.db.connect(app.state.cwd):
+            decision = simba.memory.supersession.confirm(audit_id, now=1001.0)
+        assert decision.status == simba.memory.supersession.STATUS_ACTIVE
+
+        recall = await ac.post(
+            "/recall",
+            json={"query": "linting", "projectPath": "/proj-1", "maxResults": 5},
+        )
+        old = next(m for m in recall.json()["memories"] if m["id"] == first["id"])
+        assert old["supersededBy"] == second["id"]
+        assert "pendingSupersededBy" not in old
+
+    @pytest.mark.asyncio
+    async def test_rejected_pending_replacement_stays_diagnostic_only(
+        self, hybrid_client
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+        app.state.config.supersede_trust_gate_enabled = True
+
+        first_resp = await ac.post(
+            "/store",
+            json={
+                "type": "PREFERENCE",
+                "content": "use ruff for linting",
+                "projectPath": "/proj-1",
+                "confidence": 1.0,
+                "trustSource": "user_stated",
+                "captureOrigin": "cli",
+            },
+        )
+        first = first_resp.json()
+        second_resp = await ac.post(
+            "/store",
+            json={
+                "type": "PREFERENCE",
+                "content": "use pyflakes for linting",
+                "projectPath": "/proj-1",
+                "confidence": 1.0,
+                "trustSource": "llm_extracted",
+                "captureOrigin": "hook",
+            },
+        )
+        second = second_resp.json()
+
+        with simba.db.connect(app.state.cwd):
+            decision = simba.memory.supersession.reject(
+                second["pendingSupersessionId"], now=1001.0
+            )
+        assert decision.status == simba.memory.supersession.STATUS_REJECTED
+
+        recall = await ac.post(
+            "/recall",
+            json={"query": "linting", "projectPath": "/proj-1", "maxResults": 5},
+        )
+        old = next(m for m in recall.json()["memories"] if m["id"] == first["id"])
+        assert "supersededBy" not in old
+        assert "pendingSupersededBy" not in old
 
     @pytest.mark.asyncio
     async def test_disabled_keeps_both(self, hybrid_client) -> None:

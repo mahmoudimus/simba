@@ -356,7 +356,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 
 | | Capability | Key | What it does |
 |---|---|---|---|
-| ✅ | Supersession | `supersede_enabled` | On store, replace an older same-type near-duplicate (0.85–0.92). |
+| ✅ | Supersession | `supersede_enabled` | Append lineage for same-type near-duplicates; trust gate can require confirmation. |
 | ✅ | Decay + reinforcement + feedback | `decay_enabled` | Strength decays over time; access reinforces; outcome feedback nudges. |
 | ✅ | Dormant filter | `dormant_filter_enabled` | Exclude decayed-out memories from recall. |
 | ✅ | TOOL_RULE hygiene | `hygiene_scheduler_enabled` | Expire stale tool-rule memories (`tool_rule_max_age_days=30`). |
@@ -369,7 +369,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | | Capability | Key | What it does |
 |---|---|---|---|
 | ✅ | Conflict surfacing | `memory.conflict_surfacing_enabled` | Detect a real contradiction among recalled memories → emit a name-it directive (pairwise). |
-| ⬜ | Write-time conflict engine | `memory.conflict_detect_on_write` | Detect conflicts at store-time, persist, read at recall. *Exposed for measurement.* |
+| ✅ | Write-time conflict engine | `memory.conflict_detect_on_write` | Detect conflicts at store-time, persist with replayable judge-log decisions, read at recall. Default-off for measurement. |
 | ⬜ | Recall re-check | `memory.conflict_recall_recheck` | Query-aware precision filter over stored candidate conflicts. |
 | ⬜ | Pitfall/doctrine gate | `hooks.pitfall_gate_enabled` | Fire a FAILURE/PREFERENCE/GOTCHA scar as a STOP directive when a pending move matches it. *Awaiting its behavioral A/B.* |
 
@@ -516,14 +516,18 @@ simba config set memory.expansion_enabled true      # 2nd HyDE vector arm (opt-i
 By default `/store` rejects an exact duplicate (cosine ≥ `duplicate_threshold`,
 0.92). With **`memory.supersede_enabled`** on, a *near*-duplicate of the **same
 type and project** — similarity in `[supersede_threshold, duplicate_threshold)` —
-**replaces** the older memory instead of appending another near-copy: the old row
-is deleted from both LanceDB and the keyword mirror and `/store` returns
-`{"status": "superseded", "supersededId": ...}`. This keeps the freshest version
-of an evolving note. On by default (experimental).
+appends a supersession audit event and demotes the older row at recall with
+`supersededBy`; the old LanceDB/FTS rows remain inspectable. The trust gate
+prevents weak automatic evidence from silently replacing stronger
+`user_stated` / `agreed_upon` knowledge: low-trust replacements return
+`{"status": "pending_confirmation", "pendingSupersessionId": ...}` and show only
+as pending diagnostics until confirmed.
 
 ```bash
 simba config set memory.supersede_enabled false   # keep every near-dupe instead
 simba config set memory.supersede_threshold 0.85  # band floor (below duplicate_threshold)
+simba memory supersession confirm 123             # activate pending replacement
+simba memory supersession reject 123              # keep older memory active
 ```
 
 ### Composite scoring (recency + importance)
@@ -544,6 +548,7 @@ Measured with the eval harness (live embedder): on the time-sensitive `simba-tem
 Simba can call an LLM for two memory tasks via a small **CLI-backed client** (`simba.llm`) — no SDK dependency, fully `simba config`-driven, and **fail-open** (any error degrades to the non-LLM path):
 
 - **Reranker** (`memory.llm_rerank_enabled`) — the cross-encoder's role: after RRF + composite scoring, the LLM re-orders the candidate pool by relevance before truncation. Measured on `simba-seed` with `claude`/haiku it lifts **recall@1 0.71 → 0.90** and **MRR 0.90 → 1.00**, fixing exactly the confusable cases dense recall missed. **Non-blocking in the daemon:** reranking can't be precomputed like sync (it's query-specific), so recall serves the fast RRF+composite order *immediately* and reranks **off the hot path**, caching the result by (query, candidate-set) — a recurring query/candidate-set is then served the reranked order with no LLM call. So novel queries pay no latency (and get the fast order); recurring ones get the rerank for free. Set **`memory.llm_rerank_mode=sync`** to instead block on the rerank every recall (useful for testing/measuring a model live — at the cost of latency on every hook). The eval harness / explicit CLI recall always use the **synchronous** path (no cache) so they measure the rerank ceiling.
+- **Write-time conflict detection** (`memory.conflict_detect_on_write`, default off) — on `/store`, the new memory is compared with nearest neighbors, judge decisions are appended to `.simba/simba.db` in `memory_judge_log`, and confirmed conflicts are persisted in `memory_conflicts` for read-time surfacing. The judge log records input memory ids, strategy, winner/loser ids, judge/model identity, prompt/config hashes, and time; retries reuse the logged decision instead of asking the judge again.
 - **Extraction** (`sync.extract_strategy`, default `llm+regex`) — the **primary KG feed**: for every new memory the LLM extracts typed `(subject, predicate, object)` triples (reusing the project's existing entity vocabulary), unioned with the regex heuristics and canonicalized via entity resolution on write. So the bitemporal / entity-res / multi-hop KG is richly fed instead of "schema ahead of data." Runs in the background sync pipeline (not the hot path), bounded by `sync.llm_extract_max_per_cycle` so the first backlog sweep stays cheap; degrades to regex-only when no provider. Set `extract_strategy` to `regex` or `llm` to change the mix.
 
 Providers (`llm.provider`): `claude-cli`, `llm-cli` (cloud); **100% local** `llama-cli` (llama.cpp) / `mlx-lm` (Apple MLX), set `llm.model_path`. Those CLIs **reload the model every call**, so for repeated calls (the reranker, LLM-judged eval) prefer a **persistent OpenAI-compatible server** that loads once: `mlx-server` (Apple Silicon, auto-spawned) / `llama-server` (llama.cpp, cross-platform/CUDA, auto-spawned) / `openai-http` (any running Ollama / llama.cpp / vLLM — local or a **remote GPU box**). All three set `llm.base_url`; drive any other server via `llm.serve_cmd`. See [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). A DeepSeek-style backend works via `llm.base_url` (claude-cli) or the `llm` CLI.
@@ -1000,6 +1005,15 @@ memory store:
    `EPISODE` memory once enough facts exist, so the next recall can retrieve
    both specific memories and a session-level summary.
 
+New writes also append sidecar metadata in `.simba/simba.db`: raw message
+indexes, task snapshots, supersession lineage, judge-log decisions, precomputed
+conflicts, provenance/temporal fields, trust source/origin, and quality counters.
+Superseded LanceDB rows are retained and demoted at recall with `supersededBy`;
+pending lower-trust replacements are shown as diagnostics until
+`simba memory supersession confirm|reject <audit_id>` records an append-only
+decision. Structured recall filters can be typed inline: `type:`, `project:`,
+`after:`, `before:`, `tag:`, `path:`, and `symbol:`.
+
 Memory types: `GOTCHA`, `WORKING_SOLUTION`, `PATTERN`, `DECISION`, `FAILURE`, `PREFERENCE`
 
 Extraction follows quality rules baked into the prompt (shared by the hook and
@@ -1236,11 +1250,15 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `embed_url` | `""` (in-process) | External embedding server URL |
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall (precise queries) |
 | `max_results` | 3 | Maximum memories returned per query (precise queries) |
+| `anticipated_query_max_per_memory` | 5 | Max future query phrasings stored per memory in the append-only anticipated-query sidecar |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
-| `supersede_enabled` | true | Replace a near-duplicate same-type memory on store |
+| `supersede_enabled` | true | Append supersession lineage for near-duplicate same-type memories and demote older rows on recall |
 | `supersede_threshold` | 0.85 | Supersede band floor (below `duplicate_threshold`) |
+| `supersede_trust_gate_enabled` | true | Require confirmation when a lower-trust near-duplicate would replace a stronger memory |
+| `supersede_trust_margin` | 0.05 | Minimum trust-score gap before supersession becomes `pending_confirmation` |
 | `max_content_length` | 200 | Max memory content length (chars). Single source of truth — enforced on storage **and** the cap every extraction/digest/episode/reflection prompt cites. Larger = richer facts but more tokens per memory (can surface fewer per turn under the recall budget). |
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
+| `outcome_quality_weight` | 0.0 | Default-off strength/decay contribution from `use_count` vs `noise_count` quality counters |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
 | `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |
 | `hybrid_enabled` | true | Fuse BM25 keyword arm with the vector arm (RRF) |

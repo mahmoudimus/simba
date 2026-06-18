@@ -60,6 +60,10 @@ class MemoryConfig:
     # 0 = off (use max_results). The top hit is always included.
     recall_token_budget: int = 0
     recall_chars_per_token: int = 4
+    # Store-time anticipated query metadata. This first slice records likely
+    # future query phrasings append-only; recall expansion remains separately
+    # measured before it can affect ranking.
+    anticipated_query_max_per_memory: int = 5
     # Entropy-gated exact-term boost. Trigram FTS collides high-information tokens
     # (50815 -> 508/081/815 overlaps other codes), so an exact error code / symbol /
     # path can rank #14 behind trigram-collision noise. When on, rare/identifier query
@@ -84,6 +88,11 @@ class MemoryConfig:
     # (experimental); set false to keep every near-duplicate.
     supersede_enabled: bool = True
     supersede_threshold: float = 0.85
+    # Trust gate for supersession: weak/automatic evidence may store as a new
+    # memory, but it cannot actively supersede stronger user/agreed knowledge
+    # without explicit confirmation.
+    supersede_trust_gate_enabled: bool = True
+    supersede_trust_margin: float = 0.05
     max_content_length: int = 200
     auto_start: bool = True
     diagnostics_after: int = 50
@@ -259,6 +268,10 @@ class MemoryConfig:
     # Weight applied to feedback_score when computing final strength:
     # final = base * (1 + feedback_weight * feedback_score), feedback ∈ [-1, 1].
     feedback_weight: float = 0.2
+    # Optional outcome-counter contribution to feedback before strength is
+    # computed. 0.0 is a no-op; when >0, use_count vs noise_count nudges
+    # effective feedback, enabling measured outcome-driven half-life.
+    outcome_quality_weight: float = 0.0
     # Memories whose strength falls below this after a decay pass become dormant.
     strength_dormancy_threshold: float = 0.1
     # Arousal-modulated decay (Phase 6.5): a multiplier applied to the time-decay

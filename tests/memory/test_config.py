@@ -33,6 +33,9 @@ class TestPhase0Defaults:
         # Experimental features ship on by default; the 2nd HyDE arm included.
         assert config.MemoryConfig().expansion_enabled is True
 
+    def test_anticipated_query_limit_default(self) -> None:
+        assert config.MemoryConfig().anticipated_query_max_per_memory == 5
+
 
 class TestEmbedderDefaults:
     def test_embed_provider_default_is_gguf(self) -> None:
@@ -63,6 +66,9 @@ class TestScoringDefaults:
     def test_llm_rerank_on_by_default(self) -> None:
         assert config.MemoryConfig().llm_rerank_enabled is True
 
+    def test_outcome_quality_weight_default_off(self) -> None:
+        assert config.MemoryConfig().outcome_quality_weight == 0.0
+
     def test_relevance_dominant_blend(self) -> None:
         # Enabling the flag should activate the measured-good blend: relevance
         # dominant, recency + importance as tie-breakers (never the sole signal).
@@ -81,6 +87,11 @@ class TestSupersedeDefaults:
         # The supersede band sits below the duplicate threshold.
         cfg = config.MemoryConfig()
         assert 0 < cfg.supersede_threshold < cfg.duplicate_threshold
+
+    def test_supersede_trust_gate_on_by_default(self) -> None:
+        cfg = config.MemoryConfig()
+        assert cfg.supersede_trust_gate_enabled is True
+        assert cfg.supersede_trust_margin > 0
 
 
 class TestHierarchicalRecallDefaults:

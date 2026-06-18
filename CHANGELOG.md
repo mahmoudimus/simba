@@ -10,10 +10,24 @@
   snapshots (`simba task snapshot save|show|clear`) that UserPromptSubmit can
   inject as one compact lane.
 
+- **Append-only memory audit sidecars.** General memories now record
+  provenance/trust metadata, trust-gated supersession lineage, replayable
+  write-time judge decisions, persisted conflicts, and explicit quality counters
+  (`match`, `inject`, `use`, `noise`, `save`) without mutating historical rows.
+
 - **Default-off retrieval triage.** `hooks.recall_triage_enabled` adds a
   conservative no-LLM UserPromptSubmit classifier that skips recall/RAG only for
   narrow self-contained prompts; `simba eval triage` provides a re-runnable
   zero-false-negative gate.
+
+- **Store-time anticipated queries.** Memories can carry append-only anticipated
+  future query phrasings via `/store` `anticipatedQueries` or
+  `simba memory store --anticipated-query`, capped by
+  `memory.anticipated_query_max_per_memory`.
+
+- **Outcome-quality decay lever.** `memory.outcome_quality_weight` is a
+  default-off strength/decay contribution from explicit `use_count` vs
+  `noise_count` quality counters.
 
 ## [0.11.0] — 2026-06-17
 

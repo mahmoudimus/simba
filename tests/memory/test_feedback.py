@@ -27,17 +27,25 @@ async def feedback_client(tmp_path: pathlib.Path):
 
 @pytest.mark.asyncio
 async def test_feedback_good_increments_score(feedback_client) -> None:
-    ac, _ = feedback_client
+    ac, tmp_path = feedback_client
     resp = await ac.post("/memory/mem_abc/feedback", json={"signal": "good"})
     assert resp.status_code == 200
     assert resp.json()["feedback_score"] == 0.3
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_abc"])["mem_abc"]
+    assert row.use_count == 1
+    assert row.noise_count == 0
 
 
 @pytest.mark.asyncio
 async def test_feedback_bad_decrements_score(feedback_client) -> None:
-    ac, _ = feedback_client
+    ac, tmp_path = feedback_client
     resp = await ac.post("/memory/mem_abc/feedback", json={"signal": "bad"})
     assert resp.json()["feedback_score"] == -0.3
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_abc"])["mem_abc"]
+    assert row.use_count == 0
+    assert row.noise_count == 1
 
 
 @pytest.mark.asyncio

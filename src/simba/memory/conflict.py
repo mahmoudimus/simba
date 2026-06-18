@@ -25,6 +25,7 @@ import dataclasses
 import typing
 
 import simba.memory.intent
+import simba.memory.judge_log
 
 
 @dataclasses.dataclass
@@ -325,6 +326,91 @@ def detect_conflicts_on_write(
             out.append((neighbor_id, description.strip()))
     except Exception:
         return []
+    return out
+
+
+def _judge_model_id(llm_client: typing.Any) -> str:
+    cfg = getattr(llm_client, "_cfg", None)
+    model = getattr(cfg, "model", None) if cfg is not None else None
+    return str(model or getattr(llm_client, "model", "") or "")
+
+
+def detect_conflicts_on_write_logged(
+    new_id: str,
+    new_text: str,
+    neighbors: list[tuple[str, str]],
+    *,
+    llm_client: typing.Any,
+    project_path: str,
+    max_neighbors: int = 5,
+    generous: bool = False,
+    now: float,
+) -> list[tuple[str, str]]:
+    """Write-time conflict detector with replayable judge decisions.
+
+    For each checked neighbor, first look for a logged decision. A hit reuses the
+    logged verdict with no judge call. A miss asks the judge and appends the
+    decision to ``memory_judge_log`` before returning it to the caller for
+    ``memory_conflicts`` persistence. Must run inside ``simba.db.connect()``.
+    Fail-open: any missing client, judge error, or log error skips the pair.
+    """
+    if not neighbors or llm_client is None:
+        return []
+    out: list[tuple[str, str]] = []
+    strategy = "write_conflict_pairwise_generous" if generous else (
+        "write_conflict_pairwise"
+    )
+    config_hash = simba.memory.judge_log.stable_hash(
+        {"max_neighbors": max_neighbors, "generous": generous}
+    )
+    judge_model = _judge_model_id(llm_client)
+    for neighbor_id, neighbor_text in neighbors[:max_neighbors]:
+        prompt = build_pair_detect_prompt(
+            new_text, neighbor_text, "", generous=generous
+        )
+        prompt_hash = simba.memory.judge_log.stable_hash(prompt)
+        decision_key = simba.memory.judge_log.write_conflict_key(
+            project_path=project_path,
+            new_id=new_id,
+            neighbor_id=neighbor_id,
+            prompt_hash=prompt_hash,
+            config_hash=config_hash,
+        )
+        try:
+            existing = simba.memory.judge_log.get(decision_key)
+            if existing is not None:
+                decision = simba.memory.judge_log.decision_payload(existing)
+                if decision.get("conflict"):
+                    desc = str(decision.get("description") or "").strip()
+                    out.append((neighbor_id, desc))
+                continue
+
+            verdict = llm_client.complete_json(prompt)
+            conflict = bool(isinstance(verdict, dict) and verdict.get("conflict"))
+            description = ""
+            if isinstance(verdict, dict) and isinstance(
+                verdict.get("description"), str
+            ):
+                description = verdict["description"].strip()
+            decision = {"conflict": conflict, "description": description}
+            simba.memory.judge_log.record(
+                decision_key=decision_key,
+                project_path=project_path,
+                strategy=strategy,
+                input_memory_ids=[new_id, neighbor_id],
+                winner_id=new_id if conflict else "",
+                loser_ids=[neighbor_id] if conflict else [],
+                judge_kind="llm",
+                judge_model=judge_model,
+                prompt_hash=prompt_hash,
+                config_hash=config_hash,
+                decision=decision,
+                now=now,
+            )
+            if conflict:
+                out.append((neighbor_id, description))
+        except Exception:
+            continue
     return out
 
 

@@ -61,6 +61,7 @@ def run_decay_pass(
     half_life = float(getattr(cfg, "decay_half_life_days", 30.0))
     scale = float(getattr(cfg, "reinforcement_scale", 0.5))
     fb_weight = float(getattr(cfg, "feedback_weight", 0.2))
+    outcome_weight = float(getattr(cfg, "outcome_quality_weight", 0.0))
     threshold = float(getattr(cfg, "strength_dormancy_threshold", 0.1))
     arousal_mult = float(getattr(cfg, "arousal_decay_multiplier", 1.0))
 
@@ -73,7 +74,7 @@ def run_decay_pass(
                     created_at_epoch=row.created_at,
                     now=now,
                     access_count=row.access_count,
-                    feedback_score=row.feedback_score,
+                    feedback_score=_effective_feedback(row, outcome_weight),
                     half_life=half_life,
                     reinforcement_scale=scale,
                     feedback_weight=fb_weight,
@@ -99,6 +100,21 @@ def run_decay_pass(
             logger.debug("[decay] capacity cap failed", exc_info=True)
 
     return result
+
+
+def _effective_feedback(row: typing.Any, outcome_weight: float) -> float:
+    """Blend explicit feedback with bounded use/noise outcome counters."""
+    feedback = float(getattr(row, "feedback_score", 0.0) or 0.0)
+    if outcome_weight <= 0:
+        return feedback
+    use_count = int(getattr(row, "use_count", 0) or 0)
+    noise_count = int(getattr(row, "noise_count", 0) or 0)
+    total = use_count + noise_count
+    if total <= 0:
+        return feedback
+    outcome = (use_count - noise_count) / total
+    blended = feedback + outcome_weight * outcome
+    return max(-1.0, min(1.0, blended))
 
 
 def _apply_capacity_cap(cfg: typing.Any, cwd: pathlib.Path) -> tuple[int, int]:

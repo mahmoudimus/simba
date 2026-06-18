@@ -38,8 +38,26 @@ def _init_index(conn: sqlite3.Connection) -> None:
         "strength REAL NOT NULL DEFAULT 1.0, "
         "dormant INTEGER NOT NULL DEFAULT 0, "
         "feedback_score REAL NOT NULL DEFAULT 0.0, "
-        "created_at REAL NOT NULL DEFAULT 0.0)"
+        "created_at REAL NOT NULL DEFAULT 0.0, "
+        "match_count INTEGER NOT NULL DEFAULT 0, "
+        "inject_count INTEGER NOT NULL DEFAULT 0, "
+        "use_count INTEGER NOT NULL DEFAULT 0, "
+        "noise_count INTEGER NOT NULL DEFAULT 0, "
+        "save_count INTEGER NOT NULL DEFAULT 0)"
     )
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(memory_usage)")}
+    for name in (
+        "match_count",
+        "inject_count",
+        "use_count",
+        "noise_count",
+        "save_count",
+    ):
+        if name not in existing:
+            conn.execute(
+                f"ALTER TABLE memory_usage ADD COLUMN {name} "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memory_usage_dormant "
         "ON memory_usage(dormant, strength)"
@@ -57,6 +75,11 @@ class MemoryUsage(simba.db.BaseModel):
     dormant = pw.BooleanField(default=False)
     feedback_score = pw.FloatField(default=0.0)
     created_at = pw.FloatField(default=0.0)
+    match_count = pw.IntegerField(default=0)
+    inject_count = pw.IntegerField(default=0)
+    use_count = pw.IntegerField(default=0)
+    noise_count = pw.IntegerField(default=0)
+    save_count = pw.IntegerField(default=0)
 
     class Meta:
         table_name = "memory_usage"
@@ -83,6 +106,27 @@ def bump_access(memory_id: str, now: float) -> None:
     MemoryUsage.update(
         access_count=MemoryUsage.access_count + 1,
         last_accessed=now,
+    ).where(MemoryUsage.memory_id == memory_id).execute()
+
+
+def bump_quality(
+    memory_id: str,
+    now: float,
+    *,
+    match: int = 0,
+    inject: int = 0,
+    use: int = 0,
+    noise: int = 0,
+    save: int = 0,
+) -> None:
+    """Increment explicit quality counters. Upserts when missing."""
+    get_or_create(memory_id, now)
+    MemoryUsage.update(
+        match_count=MemoryUsage.match_count + match,
+        inject_count=MemoryUsage.inject_count + inject,
+        use_count=MemoryUsage.use_count + use,
+        noise_count=MemoryUsage.noise_count + noise,
+        save_count=MemoryUsage.save_count + save,
     ).where(MemoryUsage.memory_id == memory_id).execute()
 
 

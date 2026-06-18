@@ -106,6 +106,7 @@ def create_app(
     app.state.embed = None
     app.state.embed_query = None
     app.state.embed_cache = None
+    app.state.llm_client = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
         reservoir_size=config.diagnostics_reservoir_size,

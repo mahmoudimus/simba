@@ -72,6 +72,7 @@ async def async_client(tmp_path, memory_config, lance_table, mock_embed):
     app.state.embed = mock_embed
     app.state.embed_query = mock_embed
     app.state.db_path = None
+    app.state.cwd = tmp_path
     fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
     simba.memory.fts.init(fts_path, tokenize=memory_config.fts_tokenize)
     app.state.fts_path = str(fts_path)

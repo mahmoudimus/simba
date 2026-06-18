@@ -19,6 +19,7 @@ def _cfg(**kw):
         decay_half_life_days=30.0,
         reinforcement_scale=0.5,
         feedback_weight=0.2,
+        outcome_quality_weight=0.0,
         strength_dormancy_threshold=0.1,
         decay_capacity_per_type=0,
         arousal_decay_multiplier=1.0,
@@ -137,3 +138,33 @@ def test_decay_pass_high_arousal_retains_longer(tmp_path: pathlib.Path) -> None:
     with simba.db.connect(arousal_dir):
         arousal_strength = usage.get_many(["mem_x"])["mem_x"].strength
     assert arousal_strength > base_strength
+
+
+def test_decay_pass_outcome_quality_weight_lifts_used_memory(
+    tmp_path: pathlib.Path,
+) -> None:
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_used", now=_NOW - 30 * _DAY)
+        usage.get_or_create("mem_neutral", now=_NOW - 30 * _DAY)
+        usage.bump_quality("mem_used", _NOW, use=3)
+
+    run_decay_pass(now=_NOW, cwd=tmp_path, cfg=_cfg(outcome_quality_weight=0.5))
+
+    with simba.db.connect(tmp_path):
+        rows = usage.get_many(["mem_used", "mem_neutral"])
+    assert rows["mem_used"].strength > rows["mem_neutral"].strength
+
+
+def test_decay_pass_outcome_quality_weight_demotes_noisy_memory(
+    tmp_path: pathlib.Path,
+) -> None:
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_noise", now=_NOW - 30 * _DAY)
+        usage.get_or_create("mem_neutral", now=_NOW - 30 * _DAY)
+        usage.bump_quality("mem_noise", _NOW, noise=3)
+
+    run_decay_pass(now=_NOW, cwd=tmp_path, cfg=_cfg(outcome_quality_weight=0.5))
+
+    with simba.db.connect(tmp_path):
+        rows = usage.get_many(["mem_noise", "mem_neutral"])
+    assert rows["mem_noise"].strength < rows["mem_neutral"].strength
