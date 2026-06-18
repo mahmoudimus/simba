@@ -12,6 +12,7 @@ import simba.eval.bench_config as bench_config
 import simba.eval.bench_results as bench_results
 import simba.eval.benchmarks.locomo as locomo
 import simba.eval.benchmarks.run as bench_run
+import simba.eval.benchmarks.subtlememory as subtlememory
 import simba.eval.run as run
 import simba.memory.embedding_cache as ec
 from simba.eval.bench_results import append_result, current_git_sha
@@ -208,6 +209,172 @@ def test_bench_passes_llm_client_to_run_recall(monkeypatch, tmp_path) -> None:
     rc = cli._eval_bench(["locomo"])
     assert rc == 0
     assert seen["llm_client"] is _SENTINEL_CLIENT
+
+
+def test_bench_compare_readback_is_subtlememory_only(monkeypatch, tmp_path) -> None:
+    _install_common_fakes(monkeypatch, tmp_path)
+    rc = cli._eval_bench(["locomo", "--compare-readback"])
+    assert rc == 1
+
+
+def test_bench_subtlememory_compare_readback_records_report(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    bcfg = _install_common_fakes(
+        monkeypatch, tmp_path, subtlememory_path="/fake/subtlememory"
+    )
+    dset = Dataset(
+        name="subtle",
+        corpus=[
+            Memory(id="m1", content="first", session_source="s1"),
+            Memory(id="m2", content="second", session_source="s1"),
+        ],
+        cases=[
+            EvalCase(
+                id="q1",
+                query="what happened?",
+                relevant_ids=["m1", "m2"],
+                intent="contradictory",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        subtlememory,
+        "load_subtlememory",
+        lambda path, *, persona_limit=0, persona_start=0: [dset],
+    )
+
+    rc = cli._eval_bench(["subtlememory", "--compare-readback", "--json"])
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["readback"]["mode"] == "session_readback_ceiling"
+    assert out["readback"]["ceiling"]["overall"]["recall@3"] == 1.0
+    results = pathlib.Path(bcfg.results_path).read_text().splitlines()
+    record = json.loads(results[0])
+    assert record["dataset"] == "subtlememory"
+    assert record["readback"]["ceiling"]["diagnostics"]["max_gold_ids"] == 2
+
+
+def test_bench_subtlememory_driver_report_records_summary(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    bcfg = _install_common_fakes(
+        monkeypatch, tmp_path, subtlememory_path="/fake/subtlememory"
+    )
+    dset = Dataset(
+        name="subtle",
+        corpus=[Memory(id="m1", content="first", session_source="s1")],
+        cases=[
+            EvalCase(
+                id="q1",
+                query="what happened?",
+                relevant_ids=["m1"],
+                intent="contradictory",
+            )
+        ],
+    )
+    driver_path = tmp_path / "driver.json"
+    monkeypatch.setattr(
+        subtlememory,
+        "load_subtlememory",
+        lambda path, *, persona_limit=0, persona_start=0: [dset],
+    )
+    monkeypatch.setattr(
+        subtlememory,
+        "run_recall_with_ranked",
+        lambda datasets, **kwargs: (
+            {
+                "n_conversations": 1,
+                "n_cases": 1,
+                "overall": dict(_OVERALL),
+                "by_category": {},
+            },
+            {"q1": ["m1"]},
+        ),
+    )
+
+    rc = cli._eval_bench(
+        ["subtlememory", "--driver-report", str(driver_path), "--json"]
+    )
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["driver"]["summary"]["recommendation"] == "answer_time_or_cutoff"
+    assert driver_path.exists()
+    record = json.loads(pathlib.Path(bcfg.results_path).read_text().splitlines()[0])
+    assert record["driver"]["path"] == str(driver_path)
+
+
+def test_bench_subtlememory_driver_loop_picks_winning_variant(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    bcfg = _install_common_fakes(
+        monkeypatch, tmp_path, subtlememory_path="/fake/subtlememory"
+    )
+    dset = Dataset(
+        name="subtle",
+        corpus=[Memory(id="m1", content="first", session_source="s1")],
+        cases=[
+            EvalCase(
+                id="q1",
+                query="what happened?",
+                relevant_ids=["m1"],
+                intent="contradictory",
+            )
+        ],
+    )
+    loop_path = tmp_path / "loop.json"
+    monkeypatch.setattr(
+        subtlememory,
+        "load_subtlememory",
+        lambda path, *, persona_limit=0, persona_start=0: [dset],
+    )
+
+    def _report(overall_r10: float, contra_r10: float) -> dict:
+        overall = dict(_OVERALL)
+        overall["recall@10"] = overall_r10
+        return {
+            "n_conversations": 1,
+            "n_cases": 1,
+            "overall": overall,
+            "by_category": {
+                "contradictory": {
+                    "n": 1,
+                    "recall@5": contra_r10 / 2,
+                    "recall@10": contra_r10,
+                    "mrr": contra_r10,
+                }
+            },
+        }
+
+    def _fake_ranked(datasets, **kwargs):
+        cfg = kwargs["cfg"]
+        if getattr(cfg, "session_expansion_enabled", False):
+            top = getattr(cfg, "session_expansion_top_sessions", 0)
+            weight = getattr(cfg, "session_expansion_weight", 0.0)
+            if top == 2 and weight == 2.0:
+                return _report(0.8, 0.9), {"q1": ["m1"]}
+            return _report(0.7, 0.7), {"q1": ["m1"]}
+        return _report(0.5, 0.5), {"q1": ["m1"]}
+
+    monkeypatch.setattr(subtlememory, "run_recall_with_ranked", _fake_ranked)
+
+    rc = cli._eval_bench(["subtlememory", "--driver-loop", str(loop_path), "--json"])
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["driver_loop"]["summary"]["winner"] == "session_top2_w2"
+    assert out["driver_loop"]["summary"]["winner_positive"] is True
+    assert out["driver_loop"]["summary"]["promotion_gate_passed"] is True
+    artifact = json.loads(loop_path.read_text())
+    assert artifact["summary"]["winner_config_overrides"][
+        "session_expansion_top_sessions"
+    ] == 2
+    assert artifact["summary"]["promotion_gate"]["passed"] is True
+    record = json.loads(pathlib.Path(bcfg.results_path).read_text().splitlines()[0])
+    assert record["driver_loop"]["path"] == str(loop_path)
+    assert record["driver_loop"]["summary"]["promotion_gate_passed"] is True
 
 
 def test_bench_qa_passes_eval_cfg_to_run_qa(monkeypatch, tmp_path) -> None:

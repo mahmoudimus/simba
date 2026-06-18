@@ -22,6 +22,7 @@ def _vec(mid: str, sim: float) -> dict:
         "confidence": 0.8,
         "createdAt": "t",
         "projectPath": "proj-1",
+        "sessionSource": "",
     }
 
 
@@ -198,6 +199,66 @@ class TestHybridSearch:
         )
         # The explicit pool (40) overrides cfg.fts_candidate_pool (20).
         assert captured["limit"] == 40
+
+    @pytest.mark.asyncio
+    async def test_session_expansion_adds_same_session_records(
+        self, monkeypatch
+    ) -> None:
+        seed = _vec("seed", 0.9)
+        seed["sessionSource"] = "s1"
+        sibling = {
+            "id": "sibling",
+            "type": "PATTERN",
+            "content": "same session sibling",
+            "context": "",
+            "confidence": 0.8,
+            "createdAt": "t",
+            "projectPath": "proj-1",
+            "sessionSource": "s1",
+        }
+
+        class _Query:
+            def __init__(self) -> None:
+                self._limit = 100
+
+            def where(self, expr: str):
+                assert expr == "sessionSource = 's1'"
+                return self
+
+            def limit(self, n: int):
+                self._limit = n
+                return self
+
+            async def to_list(self):
+                return [seed, sibling][: self._limit]
+
+        class _Table:
+            def query(self):
+                return _Query()
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [seed]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        cfg = simba.memory.config.MemoryConfig(
+            session_expansion_enabled=True,
+            session_expansion_top_sessions=1,
+            session_expansion_max_per_session=4,
+            llm_rerank_enabled=False,
+            scoring_enabled=False,
+        )
+        results = await hybrid.hybrid_search(
+            _Table(),
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
+        )
+
+        assert {r["id"] for r in results} == {"seed", "sibling"}
 
 
 class TestKeywordArmFocus:

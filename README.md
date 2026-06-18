@@ -606,11 +606,19 @@ Beyond the bundled sets, simba scores the same recall stack against published da
 simba eval bench locomo --qa --per 30          # recall@k + LLM-judged QA on LoCoMo
 simba eval bench longmemeval --qa --abstention # + abstention accuracy
 simba eval bench hotpotqa                       # fullwiki multi-hop recall
+simba eval bench subtlememory --compare-readback # retrieval vs exact-session ceiling
+simba eval bench subtlememory --driver-report .simba/eval/subtle-driver.json
+simba eval bench subtlememory --driver-loop .simba/eval/subtle-loop.json
+simba eval triage                            # UserPromptSubmit recall-triage gate
 simba eval halumem --user-num 5                 # HaluMem: operation-level memory-hallucination
 simba eval leaderboard                          # render BENCHMARKS.md from results.jsonl
 ```
 
 - **HaluMem** measures *not surfacing wrong/stale memories* (correct / hallucination / omission + boundary abstention) — the inverse of recall@k, the eval where forgetting / supersession can finally show value. It feeds a recency-annotated context (mirroring what the daemon injects); the decisive lever for the temporal categories is recency-aware retrieval, not forgetting.
+- **SubtleMemory readback comparison** (`--compare-readback`) records an exact-session ceiling beside normal recall. This splits "semantic retrieval missed the right transcript" from "the right transcript is available but answer synthesis collapsed the relation," and calls out gold-width effects where a target session has more turns than `k`.
+- **SubtleMemory driver reports** (`--driver-report PATH`) write per-case JSON diagnostics (`no_session_hit`, `partial_session_hit`, `session_content_gap`, `matched_readback_at_k`) and a summary recommendation. The first measured lever from this loop is default-off same-session expansion: `memory.session_expansion_enabled`.
+- **SubtleMemory driver loop** (`--driver-loop PATH`) runs baseline plus the built-in same-session expansion sweep in-process, writes a comparison artifact, picks the winner by contradictory `recall@10`, emits a promotion gate with recall/MRR guard checks, and does not mutate persistent config.
+- **Recall triage eval** (`simba eval triage`) checks the default-off UserPromptSubmit retrieval classifier against a small prompt fixture. The current gate requires zero false negatives; `--path CASES.jsonl` lets dogfood prompts extend the fixture without code changes.
 - **Eval LLM serving is config-driven** and can run on a remote GPU box — `mlx-server` / `llama-server` / `openai-http`; see [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). The answerer and judge are separate models (no self-grading) and recorded in each result.
 - **Multi-hop instruments (default-OFF, measured)**: entity-bridge (`memory.entity_bridge_enabled`, the one mechanism with a positive external signal) and Track B retrieval-time GraphRAG (`memory.kg_ppr_enabled`, a measured negative kept as an instrument). Both fold a third graph arm into recall before rescore; off until a proven in-repo delta.
 - Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model, plus a compact provenance block with dataset hash, config hash, model identities, and excluded/abstained/contaminated counts) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.

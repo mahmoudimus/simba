@@ -15,6 +15,11 @@
   write-time judge decisions, persisted conflicts, and explicit quality counters
   (`match`, `inject`, `use`, `noise`, `save`) without mutating historical rows.
 
+- **SubtleMemory readback and driver loop.** `simba eval bench subtlememory`
+  can compare normal recall against exact-session readback, write a per-case
+  failure ledger, and run a default-off same-session expansion sweep with a
+  promotion gate.
+
 - **Codex extraction analysis traces.** `simba codex-extract --run --trace`
   writes JSONL analysis-run artifacts with candidate evidence/source spans,
   keep decisions, store outcomes, and negative lessons for failed candidates.

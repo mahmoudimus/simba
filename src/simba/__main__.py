@@ -3061,6 +3061,8 @@ def _eval_bench(args: list[str]) -> int:
     """simba eval bench locomo|longmemeval [--qa] [--n N|--per N|all]
     [--k K] [--split dev|test] [--path PATH] [--json]
     [--baseline] [--cache PATH] [--abstention] [--full]
+    [--compare-readback] [--driver-report PATH] [--driver-loop PATH]
+    [--persona-start N]
     """
     import dataclasses
     import json as _json
@@ -3081,7 +3083,8 @@ def _eval_bench(args: list[str]) -> int:
         "Usage: simba eval bench locomo|longmemeval|hotpotqa|subtlememory [--qa] "
         "[--n N | --per N | all] [--k K] [--split dev|test] "
         "[--path PATH] [--json] [--baseline] [--cache PATH] "
-        "[--abstention] [--full] [--persona-limit L]"
+        "[--abstention] [--full] [--persona-limit L] [--compare-readback] "
+        "[--driver-report PATH] [--driver-loop PATH] [--persona-start N]"
     )
 
     if not args or args[0].startswith("--"):
@@ -3107,8 +3110,12 @@ def _eval_bench(args: list[str]) -> int:
     want_baseline = False
     abstention_flag = False
     full_flag = False
+    compare_readback = False
     cache_arg = ""
+    driver_report_path = ""
+    driver_loop_path = ""
     persona_limit = -1  # -1 = use config default (subtlememory only)
+    persona_start = 0
 
     i = 1
     while i < len(args):
@@ -3124,8 +3131,17 @@ def _eval_bench(args: list[str]) -> int:
         elif args[i] == "--full":
             full_flag = True
             i += 1
+        elif args[i] == "--compare-readback":
+            compare_readback = True
+            i += 1
         elif args[i] == "--cache" and i + 1 < len(args):
             cache_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--driver-report" and i + 1 < len(args):
+            driver_report_path = args[i + 1]
+            i += 2
+        elif args[i] == "--driver-loop" and i + 1 < len(args):
+            driver_loop_path = args[i + 1]
             i += 2
         elif args[i] == "--n" and i + 1 < len(args):
             n_mode, n_val = "n", int(args[i + 1])
@@ -3148,12 +3164,43 @@ def _eval_bench(args: list[str]) -> int:
         elif args[i] == "--persona-limit" and i + 1 < len(args):
             persona_limit = int(args[i + 1])
             i += 2
+        elif args[i] == "--persona-start" and i + 1 < len(args):
+            persona_start = int(args[i + 1])
+            i += 2
         elif args[i] == "--json":
             as_json = True
             i += 1
         else:
             print(f"eval bench: unknown option {args[i]!r}", file=sys.stderr)
             return 1
+
+    if compare_readback and dataset_name != "subtlememory":
+        print(
+            "eval bench: --compare-readback is only supported for subtlememory",
+            file=sys.stderr,
+        )
+        return 1
+    if driver_report_path and dataset_name != "subtlememory":
+        print(
+            "eval bench: --driver-report is only supported for subtlememory",
+            file=sys.stderr,
+        )
+        return 1
+    if driver_loop_path and dataset_name != "subtlememory":
+        print(
+            "eval bench: --driver-loop is only supported for subtlememory",
+            file=sys.stderr,
+        )
+        return 1
+    if driver_loop_path and driver_report_path:
+        print(
+            "eval bench: choose either --driver-loop or --driver-report, not both",
+            file=sys.stderr,
+        )
+        return 1
+    if driver_loop_path and run_qa_flag:
+        print("eval bench: --driver-loop does not run --qa", file=sys.stderr)
+        return 1
 
     bcfg = simba.config.load("bench")
     mcfg = simba.config.load("memory")
@@ -3194,7 +3241,9 @@ def _eval_bench(args: list[str]) -> int:
         plimit = (
             persona_limit if persona_limit >= 0 else bcfg.subtlememory_persona_limit
         )
-        datasets = subtlememory.load_subtlememory(dataset_path, persona_limit=plimit)
+        datasets = subtlememory.load_subtlememory(
+            dataset_path, persona_limit=plimit, persona_start=persona_start
+        )
     else:
         datasets = lme.load_longmemeval(
             dataset_path, include_abstention=abstention_flag
@@ -3209,13 +3258,158 @@ def _eval_bench(args: list[str]) -> int:
     # bench; unused when those are off, so the baseline is unchanged.
     bench_llm = llm_client.get_client()
 
-    recall_report = bench_run.run_recall(
-        datasets,
-        embed_doc=embed_doc,
-        embed_query=embed_query,
-        cfg=mcfg,
-        llm_client=bench_llm,
-    )
+    driver_report = None
+    driver_report_out = None
+    driver_loop_report = None
+    driver_loop_out = None
+    readback_report = None
+
+    def _run_subtle_driver_case(
+        name: str,
+        cfg,
+        overrides: dict[str, object],
+    ) -> dict[str, object]:
+        recall, ranked = subtlememory.run_recall_with_ranked(
+            datasets,
+            embed_doc=embed_doc,
+            embed_query=embed_query,
+            cfg=cfg,
+            llm_client=bench_llm,
+        )
+        ledger = subtlememory.build_failure_ledger(datasets, ranked)
+        readback = subtlememory.compare_readback_ceiling(recall, datasets)
+        return {
+            "name": name,
+            "config_overrides": overrides,
+            "recall": recall,
+            "metric_snapshot": subtlememory.recall_metric_snapshot(recall),
+            "readback": readback,
+            "driver": ledger,
+            "driver_summary": ledger["summary"],
+        }
+
+    if driver_loop_path:
+        baseline_overrides = {"session_expansion_enabled": False}
+        baseline_cfg = dataclasses.replace(mcfg, **baseline_overrides)
+        baseline_run = _run_subtle_driver_case(
+            "baseline", baseline_cfg, baseline_overrides
+        )
+        variants: list[tuple[str, dict[str, object]]] = [
+            (
+                "session_top2_w2",
+                {
+                    "session_expansion_enabled": True,
+                    "session_expansion_top_sessions": 2,
+                    "session_expansion_weight": 2.0,
+                },
+            ),
+            (
+                "session_top1_w2",
+                {
+                    "session_expansion_enabled": True,
+                    "session_expansion_top_sessions": 1,
+                    "session_expansion_weight": 2.0,
+                },
+            ),
+            (
+                "session_top3_w2",
+                {
+                    "session_expansion_enabled": True,
+                    "session_expansion_top_sessions": 3,
+                    "session_expansion_weight": 2.0,
+                },
+            ),
+            (
+                "session_top2_w1",
+                {
+                    "session_expansion_enabled": True,
+                    "session_expansion_top_sessions": 2,
+                    "session_expansion_weight": 1.0,
+                },
+            ),
+        ]
+        variant_runs = [
+            _run_subtle_driver_case(
+                name, dataclasses.replace(mcfg, **overrides), overrides
+            )
+            for name, overrides in variants
+        ]
+        winner = max(
+            variant_runs,
+            key=lambda item: subtlememory.driver_objective(item["recall"]),
+        )
+        baseline_obj = subtlememory.driver_objective(baseline_run["recall"])
+        winner_obj = subtlememory.driver_objective(winner["recall"])
+        winner_positive = winner_obj > baseline_obj
+        winner_delta = subtlememory.metric_snapshot_delta(
+            winner["metric_snapshot"], baseline_run["metric_snapshot"]
+        )
+        promotion_gate = subtlememory.driver_promotion_gate(
+            winner_positive=winner_positive,
+            winner_delta=winner_delta,
+        )
+        driver_loop_report = {
+            "mode": "subtlememory_driver_loop",
+            "dataset_path": dataset_path,
+            "persona_limit": (
+                persona_limit if persona_limit >= 0 else bcfg.subtlememory_persona_limit
+            ),
+            "persona_start": persona_start,
+            "objective": [
+                "contradictory.recall@10",
+                "overall.recall@10",
+                "contradictory.mrr",
+                "overall.mrr",
+            ],
+            "summary": {
+                "baseline_recommendation": baseline_run["driver_summary"][
+                    "recommendation"
+                ],
+                "winner": winner["name"],
+                "winner_positive": winner_positive,
+                "winner_config_overrides": winner["config_overrides"],
+                "winner_delta": winner_delta,
+                "promotion_gate": promotion_gate,
+                "promotion_gate_passed": promotion_gate["passed"],
+                "next_action": (
+                    "run held-out personas and cross-bench gates"
+                    if promotion_gate["passed"]
+                    else "try the baseline driver recommendation's next lever"
+                ),
+            },
+            "baseline": baseline_run,
+            "variants": variant_runs,
+        }
+        driver_loop_out = str(
+            subtlememory.write_failure_ledger(driver_loop_report, driver_loop_path)
+        )
+        recall_report = baseline_run["recall"]
+        readback_report = baseline_run["readback"]
+    elif driver_report_path:
+        recall_report, ranked_by_case = subtlememory.run_recall_with_ranked(
+            datasets,
+            embed_doc=embed_doc,
+            embed_query=embed_query,
+            cfg=mcfg,
+            llm_client=bench_llm,
+        )
+        driver_report = subtlememory.build_failure_ledger(datasets, ranked_by_case)
+        driver_report_out = str(
+            subtlememory.write_failure_ledger(driver_report, driver_report_path)
+        )
+    else:
+        recall_report = bench_run.run_recall(
+            datasets,
+            embed_doc=embed_doc,
+            embed_query=embed_query,
+            cfg=mcfg,
+            llm_client=bench_llm,
+        )
+        readback_report = None
+    if compare_readback and readback_report is None:
+        readback_report = subtlememory.compare_readback_ceiling(
+            recall_report, datasets
+        )
 
     qa_report = None
     if run_qa_flag:
@@ -3282,6 +3476,17 @@ def _eval_bench(args: list[str]) -> int:
             abstained_count=abstained_count,
         ),
         "recall": recall_report,
+        "readback": readback_report,
+        "driver": (
+            {"path": driver_report_out, "summary": driver_report["summary"]}
+            if driver_report is not None
+            else None
+        ),
+        "driver_loop": (
+            {"path": driver_loop_out, "summary": driver_loop_report["summary"]}
+            if driver_loop_report is not None
+            else None
+        ),
         "qa": qa_report,
     }
     bench_results.append_result(_resolve_bench_path(bcfg.results_path), record)
@@ -3309,7 +3514,29 @@ def _eval_bench(args: list[str]) -> int:
             )
 
     if as_json:
-        print(_json.dumps({"recall": recall_report, "qa": qa_report}, indent=2))
+        print(
+            _json.dumps(
+                {
+                    "recall": recall_report,
+                    "readback": readback_report,
+                    "driver": (
+                        {"path": driver_report_out, "summary": driver_report["summary"]}
+                        if driver_report is not None
+                        else None
+                    ),
+                    "driver_loop": (
+                        {
+                            "path": driver_loop_out,
+                            "summary": driver_loop_report["summary"],
+                        }
+                        if driver_loop_report is not None
+                        else None
+                    ),
+                    "qa": qa_report,
+                },
+                indent=2,
+            )
+        )
     else:
         o = recall_report["overall"]
         print(
@@ -3330,6 +3557,53 @@ def _eval_bench(args: list[str]) -> int:
         if "latency" in recall_report:
             lat = recall_report["latency"]
             print(f"  p50={lat['p50_ms']:.0f}ms p95={lat['p95_ms']:.0f}ms")
+        if readback_report is not None:
+            ceiling = readback_report["ceiling"]
+            ro = ceiling["overall"]
+            delta = readback_report["delta_vs_recall"]["overall"]
+            diag = ceiling["diagnostics"]
+            print("\nsubtlememory readback ceiling")
+            print(
+                f"  CEILING recall@5={ro['recall@5']:.3f} "
+                f"recall@10={ro['recall@10']:.3f} mrr={ro['mrr']:.3f}"
+            )
+            print(
+                f"  DELTA   recall@5={delta.get('recall@5', 0.0):+.3f} "
+                f"recall@10={delta.get('recall@10', 0.0):+.3f} "
+                f"mrr={delta.get('mrr', 0.0):+.3f}"
+            )
+            print(
+                f"  gold ids avg={diag['avg_gold_ids']:.1f} "
+                f"max={diag['max_gold_ids']} "
+                f"gold>10={diag['gold_gt_k'].get('10', 0)}/{ceiling['n_cases']}"
+            )
+        if driver_report is not None:
+            summary = driver_report["summary"]
+            print(f"\nsubtlememory driver report: {driver_report_out}")
+            print(
+                f"  recommendation={summary['recommendation']} "
+                f"k={summary['analysis_k']} cases={summary['n_cases']}"
+            )
+            for label, count in summary["gap_counts"].items():
+                print(f"  {label:<24} {count}")
+        if driver_loop_report is not None:
+            summary = driver_loop_report["summary"]
+            delta = summary["winner_delta"]
+            print(f"\nsubtlememory driver loop: {driver_loop_out}")
+            print(
+                f"  baseline_recommendation={summary['baseline_recommendation']} "
+                f"winner={summary['winner']} positive={summary['winner_positive']} "
+                f"gate={summary['promotion_gate_passed']}"
+            )
+            print(
+                f"  OVERALL  r@10={delta['overall']['recall@10']:+.3f} "
+                f"mrr={delta['overall']['mrr']:+.3f}"
+            )
+            print(
+                f"  CONTRA   r@10={delta['contradictory']['recall@10']:+.3f} "
+                f"mrr={delta['contradictory']['mrr']:+.3f}"
+            )
+            print(f"  next={summary['next_action']}")
         if qa_report is not None:
             print(
                 f"\n{dataset_name} QA accuracy (graded={qa_report['n_graded']}, "

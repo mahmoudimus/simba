@@ -178,6 +178,15 @@ class MemoryConfig:
     # 3+-span evidence needs the wider window — complete@80 = 0.90 is the
     # cost-balanced knee for these questions.
     aggregation_context_k: int = 80
+    # Same-session expansion (SubtleMemory driver). When on, if normal recall
+    # touches a transcript/session via ``sessionSource``, pull a bounded number of
+    # same-session rows into the candidate pool before scoring/reranking. This is
+    # non-oracle: sessions must already be retrieved. Default-OFF pending
+    # held-out eval because it can add noisy transcript turns.
+    session_expansion_enabled: bool = False
+    session_expansion_top_sessions: int = 2
+    session_expansion_max_per_session: int = 12
+    session_expansion_weight: float = 2.0
     # Multi-arm HyDE (Phase 0.2): a 2nd vector arm over the focused-term string.
     expansion_enabled: bool = True  # on by default (costs one extra embed per recall)
     # HyDE mode (C3): how the 2nd vector arm's text is derived.

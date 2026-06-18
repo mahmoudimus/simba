@@ -25,6 +25,7 @@ import simba.memory.kg_fold
 import simba.memory.llm_rerank
 import simba.memory.reranker
 import simba.memory.scoring
+import simba.memory.session_expand
 import simba.memory.usage
 import simba.memory.vector_db
 
@@ -179,6 +180,73 @@ def _keyword_arm(
         )
 
 
+def _lance_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _passes_filters(
+    record: dict[str, typing.Any], filters: dict[str, typing.Any]
+) -> bool:
+    if record.get("type") == "SYSTEM":
+        return False
+    filter_types = filters.get("types", [])
+    if filter_types and record.get("type") not in filter_types:
+        return False
+
+    hierarchical = bool(filters.get("hierarchical_recall")) and bool(
+        filters.get("project_scopes")
+    )
+    if hierarchical:
+        return simba.memory.vector_db._scope_match(
+            record.get("projectPath"),
+            filters.get("project_scopes") or [],
+            include_global=bool(
+                filters.get("hierarchical_recall_include_global", True)
+            ),
+        )
+
+    filter_project = filters.get("projectPath")
+    return not (filter_project and record.get("projectPath") != filter_project)
+
+
+def _session_record(raw: dict[str, typing.Any]) -> dict[str, typing.Any]:
+    return {
+        "id": raw.get("id"),
+        "type": raw.get("type"),
+        "content": raw.get("content"),
+        "context": raw.get("context", ""),
+        "similarity": raw.get("similarity", 0.0),
+        "confidence": raw.get("confidence", 0.0),
+        "createdAt": raw.get("createdAt"),
+        "tags": raw.get("tags", "[]"),
+        "projectPath": raw.get("projectPath", ""),
+        "sessionSource": raw.get("sessionSource", ""),
+    }
+
+
+async def _session_expansion_records(
+    table: typing.Any,
+    session_sources: list[str],
+    filters: dict[str, typing.Any],
+    *,
+    limit_per_session: int,
+) -> list[dict[str, typing.Any]]:
+    if table is None or not session_sources or limit_per_session <= 0:
+        return []
+    out: list[dict[str, typing.Any]] = []
+    for sid in session_sources:
+        query = table.query().where(
+            f"sessionSource = {_lance_literal(sid)}"
+        ).limit(
+            limit_per_session
+        )
+        rows = await query.to_list()
+        for raw in rows:
+            if _passes_filters(raw, filters):
+                out.append(_session_record(raw))
+    return out
+
+
 async def hybrid_search(
     table: typing.Any,
     fts_path: typing.Any,
@@ -263,6 +331,31 @@ async def hybrid_search(
         keyword_weight=cfg.keyword_weight,
         extra_vector_results=extra_vector_results,
     )
+
+    # Optional same-session fold (SubtleMemory driver): if recall already touched
+    # a transcript/session, add bounded same-session turns before scoring/rerank.
+    # This is non-oracle and default-off; any storage/query issue fail-opens.
+    if getattr(cfg, "session_expansion_enabled", False):
+        with contextlib.suppress(Exception):
+            sessions = simba.memory.session_expand.seed_sessions(
+                fused,
+                top_sessions=getattr(cfg, "session_expansion_top_sessions", 3),
+            )
+            session_records = await _session_expansion_records(
+                table,
+                sessions,
+                filters,
+                limit_per_session=getattr(
+                    cfg, "session_expansion_max_per_session", 12
+                ),
+            )
+            if session_records:
+                fused = simba.memory.session_expand.fold_session_records(
+                    fused,
+                    session_records,
+                    rrf_k=cfg.rrf_k,
+                    weight=getattr(cfg, "session_expansion_weight", 1.0),
+                )
 
     # Optional entity-bridge fold (spec 09): fold memories that share a named
     # entity with the top seeds into the candidates as a third RRF arm, before
