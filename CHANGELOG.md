@@ -32,7 +32,9 @@
 - **Store-time anticipated queries.** Memories can carry append-only anticipated
   future query phrasings via `/store` `anticipatedQueries` or
   `simba memory store --anticipated-query`, capped by
-  `memory.anticipated_query_max_per_memory`.
+  `memory.anticipated_query_max_per_memory`. A default-off
+  `memory.anticipated_query_recall_enabled` lane can now fold matching
+  anticipated-query FTS rows into hybrid recall for measured A/B runs.
 
 - **Outcome-quality decay lever.** `memory.outcome_quality_weight` is a
   default-off strength/decay contribution from explicit `use_count` vs

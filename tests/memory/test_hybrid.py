@@ -6,6 +6,8 @@ import pathlib
 
 import pytest
 
+import simba.db
+import simba.memory.anticipated
 import simba.memory.config
 import simba.memory.fts as fts
 import simba.memory.hybrid as hybrid
@@ -259,6 +261,72 @@ class TestHybridSearch:
         )
 
         assert {r["id"] for r in results} == {"seed", "sibling"}
+
+    @pytest.mark.asyncio
+    async def test_anticipated_query_lane_adds_matching_memory(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        record = {
+            "id": "mem_auth",
+            "type": "GOTCHA",
+            "content": "refresh the OAuth bearer token when gh returns 401",
+            "context": "",
+            "confidence": 0.9,
+            "createdAt": "t",
+            "projectPath": "proj-1",
+            "sessionSource": "",
+        }
+
+        class _Query:
+            def __init__(self) -> None:
+                self.expr = ""
+
+            def where(self, expr: str):
+                self.expr = expr
+                return self
+
+            def limit(self, n: int):
+                return self
+
+            async def to_list(self):
+                assert self.expr == "id = 'mem_auth'"
+                return [record]
+
+        class _Table:
+            def query(self):
+                return _Query()
+
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return []
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+        with simba.db.connect(tmp_path):
+            simba.memory.anticipated.append_queries(
+                memory_id="mem_auth",
+                queries=["opaque bearer auth failure"],
+                source="test",
+                now=1000.0,
+                limit=5,
+            )
+
+        cfg = simba.memory.config.MemoryConfig(
+            anticipated_query_recall_enabled=True,
+            llm_rerank_enabled=False,
+            scoring_enabled=False,
+        )
+        results = await hybrid.hybrid_search(
+            _Table(),
+            None,
+            [0.1] * 768,
+            "opaque bearer failure",
+            min_similarity=0.35,
+            max_results=5,
+            filters={"projectPath": "proj-1"},
+            cfg=cfg,
+            cwd=tmp_path,
+        )
+
+        assert [r["id"] for r in results] == ["mem_auth"]
 
 
 class TestKeywordArmFocus:

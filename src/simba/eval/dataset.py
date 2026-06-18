@@ -31,6 +31,7 @@ class Memory:
     session_source: str = ""
     created_at: str = ""
     confidence: float = 0.85
+    anticipated_queries: list[str] = dataclasses.field(default_factory=list)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Memory:
@@ -43,6 +44,9 @@ class Memory:
             session_source=raw.get("session_source", ""),
             created_at=raw.get("created_at", ""),
             confidence=float(raw.get("confidence", 0.85)),
+            anticipated_queries=[
+                str(q) for q in raw.get("anticipated_queries", []) if str(q).strip()
+            ],
         )
 
 
@@ -96,6 +100,7 @@ class Dataset:
                     "session_source": m.session_source,
                     "created_at": m.created_at,
                     "confidence": m.confidence,
+                    "anticipated_queries": list(m.anticipated_queries),
                 }
                 for m in self.corpus
             ],

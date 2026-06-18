@@ -16,6 +16,7 @@ import typing
 
 import simba.db
 import simba.kg.ppr
+import simba.memory.anticipated
 import simba.memory.entity_bridge
 import simba.memory.entropy_terms
 import simba.memory.fts
@@ -154,6 +155,34 @@ def rrf_fuse(
     return ordered
 
 
+def fold_ranked_records(
+    fused: list[dict[str, typing.Any]],
+    ranked_records: list[dict[str, typing.Any]],
+    *,
+    rrf_k: int = 60,
+    weight: float = 1.0,
+) -> list[dict[str, typing.Any]]:
+    """Fold a ranked auxiliary arm into existing RRF-scored records."""
+    scores: dict[str, float] = {
+        str(r["id"]): float(r.get("rrf_score", 0.0) or 0.0)
+        for r in fused
+        if r.get("id")
+    }
+    records: dict[str, dict[str, typing.Any]] = {
+        str(r["id"]): dict(r) for r in fused if r.get("id")
+    }
+    for rank, record in enumerate(ranked_records, start=1):
+        rid = str(record.get("id") or "")
+        if not rid:
+            continue
+        scores[rid] = scores.get(rid, 0.0) + weight / (rrf_k + rank)
+        records.setdefault(rid, dict(record))
+    ordered = sorted(records.values(), key=lambda r: scores[str(r["id"])], reverse=True)
+    for record in ordered:
+        record["rrf_score"] = round(scores[str(record["id"])], 6)
+    return ordered
+
+
 def _keyword_arm(
     fts_path: typing.Any,
     query_text: str,
@@ -247,6 +276,23 @@ async def _session_expansion_records(
     return out
 
 
+async def _records_by_ids(
+    table: typing.Any,
+    memory_ids: list[str],
+    filters: dict[str, typing.Any],
+) -> list[dict[str, typing.Any]]:
+    if table is None or not memory_ids:
+        return []
+    out: list[dict[str, typing.Any]] = []
+    for memory_id in memory_ids:
+        rows = await table.query().where(f"id = {_lance_literal(memory_id)}").limit(
+            1
+        ).to_list()
+        if rows and _passes_filters(rows[0], filters):
+            out.append(_session_record(rows[0]))
+    return out
+
+
 async def hybrid_search(
     table: typing.Any,
     fts_path: typing.Any,
@@ -331,6 +377,32 @@ async def hybrid_search(
         keyword_weight=cfg.keyword_weight,
         extra_vector_results=extra_vector_results,
     )
+
+    # Optional anticipated-query lane: store-time future phrasings are searched
+    # from the SQLite sidecar and folded into the candidate pool before the normal
+    # scorer/reranker arbitrate final order. Default-off until eval lift is shown.
+    if getattr(cfg, "anticipated_query_recall_enabled", False) and cwd is not None:
+        with contextlib.suppress(Exception):
+            limit = int(getattr(cfg, "anticipated_query_candidate_pool", 20))
+
+            def _search_anticipated() -> list[str]:
+                with simba.db.connect(cwd):
+                    rows = simba.memory.anticipated.search(query_text, limit=limit)
+                return [str(row.get("memory_id") or "") for row in rows]
+
+            anticipated_ids = await asyncio.to_thread(_search_anticipated)
+            anticipated_records = await _records_by_ids(
+                table,
+                [mid for mid in anticipated_ids if mid],
+                filters,
+            )
+            if anticipated_records:
+                fused = fold_ranked_records(
+                    fused,
+                    anticipated_records,
+                    rrf_k=cfg.rrf_k,
+                    weight=float(getattr(cfg, "anticipated_query_weight", 1.0)),
+                )
 
     # Optional same-session fold (SubtleMemory driver): if recall already touched
     # a transcript/session, add bounded same-session turns before scoring/rerank.

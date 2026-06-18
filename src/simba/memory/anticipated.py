@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
 import time
+import typing
 
 import simba._vendor.peewee as pw
 import simba.db
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
+_MIN_TOKEN_LEN = 3
 
 
 def _init_schema(conn) -> None:
@@ -25,6 +30,10 @@ def _init_schema(conn) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memory_anticipated_query "
         "ON memory_anticipated_queries(query)"
+    )
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_anticipated_queries_fts "
+        "USING fts5(memory_id UNINDEXED, query, tokenize='trigram')"
     )
 
 
@@ -83,6 +92,11 @@ def append_queries(
                 created_at_iso=created_at_iso,
             )
         )
+        simba.db.database.execute_sql(
+            "INSERT INTO memory_anticipated_queries_fts(memory_id, query) "
+            "VALUES (?, ?)",
+            (memory_id, query),
+        )
     return rows
 
 
@@ -92,3 +106,53 @@ def list_for(memory_id: str) -> list[AnticipatedQuery]:
         .where(AnticipatedQuery.memory_id == memory_id)
         .order_by(AnticipatedQuery.created_at.asc(), AnticipatedQuery.id.asc())
     )
+
+
+def _build_match(query: str, min_token_len: int = _MIN_TOKEN_LEN) -> str:
+    seen: set[str] = set()
+    terms: list[str] = []
+    for match in _TOKEN_RE.finditer(query or ""):
+        token = match.group()
+        if len(token) < min_token_len:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        terms.append('"' + token.replace('"', '""') + '"')
+    return " OR ".join(terms)
+
+
+def search(
+    query: str,
+    *,
+    limit: int = 20,
+) -> list[dict[str, typing.Any]]:
+    """Search anticipated future-query phrasings and return ranked memory ids.
+
+    This is a derived FTS lane over append-only anticipated-query rows. It never
+    mutates source rows and fail-opens to ``[]`` for malformed MATCH expressions
+    or older DBs missing the virtual table.
+    """
+    match = _build_match(query)
+    if not match:
+        return []
+    sql = (
+        "SELECT memory_id, query, bm25(memory_anticipated_queries_fts) AS score "
+        "FROM memory_anticipated_queries_fts "
+        "WHERE memory_anticipated_queries_fts MATCH ? "
+        "ORDER BY score LIMIT ?"
+    )
+    try:
+        cursor = simba.db.database.execute_sql(sql, (match, max(0, limit)))
+    except Exception:
+        return []
+    out: list[dict[str, typing.Any]] = []
+    seen: set[str] = set()
+    for memory_id, qtext, score in cursor.fetchall():
+        mid = str(memory_id or "")
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append({"memory_id": mid, "query": str(qtext or ""), "score": score})
+    return out

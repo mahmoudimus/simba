@@ -18,8 +18,10 @@ import pathlib
 import time
 import typing
 
+import simba.db
 import simba.eval.kg_corpus
 import simba.kg.entities
+import simba.memory.anticipated
 import simba.memory.config
 import simba.memory.entity_bridge
 import simba.memory.fts
@@ -82,6 +84,7 @@ async def _search(
     kg: typing.Any = None,
     kg_record_lookup: dict[str, dict[str, typing.Any]] | None = None,
     kg_seeds: list[str] | None = None,
+    cwd: pathlib.Path | None = None,
 ) -> list[str]:
     import lancedb
 
@@ -105,8 +108,28 @@ async def _search(
         kg_entity_memories=kg.entity_memories if kg is not None else None,
         kg_record_lookup=kg_record_lookup,
         kg_seeds=kg_seeds,
+        cwd=cwd,
     )
     return [r["id"] for r in fused]
+
+
+def _write_anticipated_sidecar(
+    dataset: Dataset,
+    *,
+    data_dir: pathlib.Path,
+    limit: int,
+) -> None:
+    """Populate the eval temp sidecar from corpus anticipated queries."""
+    with simba.db.connect(data_dir):
+        for mem in dataset.corpus:
+            if mem.anticipated_queries:
+                simba.memory.anticipated.append_queries(
+                    memory_id=mem.id,
+                    queries=list(mem.anticipated_queries),
+                    source="eval_fixture",
+                    now=time.time(),
+                    limit=limit,
+                )
 
 
 def build_retriever(
@@ -141,6 +164,11 @@ def build_retriever(
     simba.memory.fts.init(fts_path, tokenize=cfg.fts_tokenize)
     with simba.memory.fts.connect(fts_path, cfg.fts_tokenize):
         simba.memory.fts.rebuild(rows)
+    _write_anticipated_sidecar(
+        dataset,
+        data_dir=data_dir,
+        limit=getattr(cfg, "anticipated_query_max_per_memory", 5),
+    )
 
     # Shared record shape for the optional folds below (id -> materializable
     # record): both entity-bridge and Track-B PPR map a corpus id to the same dict.
@@ -210,6 +238,7 @@ def build_retriever(
                 kg=kg,
                 kg_record_lookup=kg_lookup,
                 kg_seeds=seeds,
+                cwd=data_dir,
             )
         )
 

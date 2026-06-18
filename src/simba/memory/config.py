@@ -64,6 +64,11 @@ class MemoryConfig:
     # future query phrasings append-only; recall expansion remains separately
     # measured before it can affect ranking.
     anticipated_query_max_per_memory: int = 5
+    # Default-off read-time lane over stored anticipated query phrasings. When
+    # enabled, matching sidecar rows fold their owning memories into the RRF pool.
+    anticipated_query_recall_enabled: bool = False
+    anticipated_query_weight: float = 1.0
+    anticipated_query_candidate_pool: int = 20
     # Entropy-gated exact-term boost. Trigram FTS collides high-information tokens
     # (50815 -> 508/081/815 overlaps other codes), so an exact error code / symbol /
     # path can rank #14 behind trigram-collision noise. When on, rare/identifier query

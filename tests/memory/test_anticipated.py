@@ -28,3 +28,25 @@ def test_append_queries_dedupes_and_limits(tmp_path) -> None:
 
 def test_normalize_queries_drops_empty(tmp_path) -> None:
     assert anticipated.normalize_queries(["", "  ", "alpha"], limit=5) == ["alpha"]
+
+
+def test_search_matches_anticipated_query_sidecar(tmp_path) -> None:
+    with simba.db.connect(tmp_path):
+        anticipated.append_queries(
+            memory_id="mem_a",
+            queries=["How do I fix opaque bearer auth failures?"],
+            source="test",
+            now=1000.0,
+            limit=5,
+        )
+        anticipated.append_queries(
+            memory_id="mem_b",
+            queries=["How do I tune hybrid recall?"],
+            source="test",
+            now=1001.0,
+            limit=5,
+        )
+
+        hits = anticipated.search("opaque bearer failure", limit=5)
+
+    assert [hit["memory_id"] for hit in hits] == ["mem_a"]

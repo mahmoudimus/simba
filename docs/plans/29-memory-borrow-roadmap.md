@@ -184,15 +184,30 @@ noisy memories down without recall regression.
 
 ### 5.5 Anticipated Queries
 
-Status: implemented first slice.
+Status: implemented second slice.
 
 Simba now has an append-only `memory_anticipated_queries` sidecar for likely
 future query phrasings. `/store` accepts `anticipatedQueries`, and
 `simba memory store` accepts repeatable `--anticipated-query` or comma-separated
 `--anticipated-queries`. The sidecar deduplicates, caps entries with
-`memory.anticipated_query_max_per_memory`, and does not affect recall ranking
-yet. The next gate is an FTS/expansion lane with held-out query lift and no
-plain-query regression.
+`memory.anticipated_query_max_per_memory`.
+
+The second slice adds a default-off recall lane:
+`memory.anticipated_query_recall_enabled` searches an FTS index over those
+future phrasings and folds matching memory ids into hybrid recall before
+scoring/reranking. `memory.anticipated_query_weight` and
+`memory.anticipated_query_candidate_pool` bound the read-time effect. The eval
+adapter writes corpus `anticipated_queries` into its temporary sidecar, so the
+gate runs against the real LanceDB + FTS + RRF stack.
+
+Measure-first gate:
+
+- baseline misses a held-out query whose wording exists only in anticipated
+  metadata
+- the opt-in arm recovers the relevant memory
+- ordinary content-query top hits do not regress
+- broader dogfood/held-out query sets are still required before default-on
+  promotion
 
 ### 6. Structured Query Filters
 
@@ -290,6 +305,7 @@ Implemented:
 - quality counters
 - default-off outcome-quality decay lever
 - anticipated-query sidecar for store-time metadata
+- default-off anticipated-query recall lane and fixture-level A/B gate
 - structured query filters
 - general-memory temporal/provenance sidecar for new writes
 - default-off Codex extraction analysis traces

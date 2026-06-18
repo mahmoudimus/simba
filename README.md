@@ -467,6 +467,9 @@ A dimension change requires re-embedding the whole corpus — that's `simba memo
 - a **keyword arm** — a SQLite FTS5 `bm25`/`trigram` index that catches exact
   identifiers and literal strings the embedding under-ranks. It is *not*
   cosine-gated, so it also widens coverage.
+- an optional **anticipated-query arm** — SQLite FTS5 over append-only future
+  query phrasings, folded into RRF only when
+  `memory.anticipated_query_recall_enabled` is enabled for measurement.
 
 The keyword index is a **derived mirror** at `<db-path>/memory_fts.db`, kept in
 sync by the daemon on store/delete/patch and rebuilt from LanceDB on startup (or
@@ -482,6 +485,8 @@ simba config set memory.fts_candidate_pool 20 # candidates pulled per arm
 simba config set memory.fts_tokenize trigram  # trigram | porter | unicode61
 simba config set memory.vector_weight 1.0     # RRF weight, vector arm
 simba config set memory.keyword_weight 1.0    # RRF weight, keyword arm
+simba config set memory.anticipated_query_recall_enabled true
+                                               # opt-in anticipated-query arm
 simba memory reindex                          # rebuild the keyword mirror
 ```
 
@@ -619,6 +624,10 @@ simba eval leaderboard                          # render BENCHMARKS.md from resu
 - **SubtleMemory driver reports** (`--driver-report PATH`) write per-case JSON diagnostics (`no_session_hit`, `partial_session_hit`, `session_content_gap`, `matched_readback_at_k`) and a summary recommendation. The first measured lever from this loop is default-off same-session expansion: `memory.session_expansion_enabled`.
 - **SubtleMemory driver loop** (`--driver-loop PATH`) runs baseline plus the built-in same-session expansion sweep in-process, writes a comparison artifact, picks the winner by contradictory `recall@10`, emits a promotion gate with recall/MRR guard checks, and does not mutate persistent config.
 - **Recall triage eval** (`simba eval triage`) checks the default-off UserPromptSubmit retrieval classifier against a small prompt fixture. The current gate requires zero false negatives; `--path CASES.jsonl` lets dogfood prompts extend the fixture without code changes.
+- **Anticipated-query recall gate** uses the regular eval adapter with corpus
+  `anticipated_queries`: baseline must miss only the paraphrase-covered case,
+  the opt-in arm must recover it, and ordinary content-query top hits must not
+  regress before default-on promotion.
 - **Eval LLM serving is config-driven** and can run on a remote GPU box — `mlx-server` / `llama-server` / `openai-http`; see [`docs/eval-remote-gpu.md`](docs/eval-remote-gpu.md). The answerer and judge are separate models (no self-grading) and recorded in each result.
 - **Multi-hop instruments (default-OFF, measured)**: entity-bridge (`memory.entity_bridge_enabled`, the one mechanism with a positive external signal) and Track B retrieval-time GraphRAG (`memory.kg_ppr_enabled`, a measured negative kept as an instrument). Both fold a third graph arm into recall before rescore; off until a proven in-repo delta.
 - Every run appends to `.simba/eval/results.jsonl` (git SHA + config snapshot, incl. answerer/judge model, plus a compact provenance block with dataset hash, config hash, model identities, and excluded/abstained/contaminated counts) and feeds `simba eval leaderboard` → the committed `BENCHMARKS.md`.
@@ -1280,6 +1289,9 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `min_similarity` | 0.35 | Minimum cosine similarity for recall (precise queries) |
 | `max_results` | 3 | Maximum memories returned per query (precise queries) |
 | `anticipated_query_max_per_memory` | 5 | Max future query phrasings stored per memory in the append-only anticipated-query sidecar |
+| `anticipated_query_recall_enabled` | false | Fold matching anticipated-query sidecar rows into hybrid recall |
+| `anticipated_query_weight` | 1.0 | RRF weight for the anticipated-query recall arm |
+| `anticipated_query_candidate_pool` | 20 | Max anticipated-query matches considered per recall |
 | `duplicate_threshold` | 0.92 | Similarity threshold for dedup |
 | `supersede_enabled` | true | Append supersession lineage for near-duplicate same-type memories and demote older rows on recall |
 | `supersede_threshold` | 0.85 | Supersede band floor (below `duplicate_threshold`) |
