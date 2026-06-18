@@ -736,6 +736,14 @@ explicit fallback (`simba codex-status --auto-extract` or
 `simba codex-extract --run`) stores memories with the same `sessionSource`, so
 ordinary recall and RLM pointers can reconnect them to the lossless transcript
 when the transcript is available.
+`simba codex-extract --run --trace` also writes a replayable analysis artifact
+for inspecting which candidate memories were produced and why they persisted.
+
+For exact text recovery, `simba sessions index --latest` builds a rebuildable
+SQLite/FTS sidecar over raw transcript messages in `.simba/simba.db`.
+`simba sessions search "exact error text"` returns the session id, message
+index/span, role, transcript path, and file references. This is intentionally an
+operator/RLM navigation index; it does not add raw session text to hook context.
 
 **How lossless navigation works:**
 
