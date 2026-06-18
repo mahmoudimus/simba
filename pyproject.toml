@@ -66,6 +66,7 @@ dev = [
     "huggingface-hub>=0.26",
     "spacy>=3.8.14",
     "pytest-timeout>=2.3",
+    "clingo>=5.8.0",
 ]
 
 [tool.ruff]

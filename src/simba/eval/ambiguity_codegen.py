@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import importlib.util
 import json
 import pathlib
 import re
@@ -253,9 +254,28 @@ def run_generated_souffle(case: ambiguity.AmbiguityCase, code: str) -> Generated
 def run_generated_clingo(case: ambiguity.AmbiguityCase, code: str) -> GeneratedRun:
     """Run generated Clingo over generic field/3 facts."""
     executable = shutil.which("clingo") or ""
-    if not executable:
-        raise BackendUnavailableError("clingo executable not found")
+    module_available = importlib.util.find_spec("clingo") is not None
+    if not executable and not module_available:
+        raise BackendUnavailableError("clingo Python module or executable not found")
     source = _clingo_facts(case.records) + "\n" + code
+    if module_available:
+        try:
+            answer, raw_output = _run_generated_clingo_module(source)
+        except (ValueError, TypeError) as exc:
+            return GeneratedRun(
+                case_id=case.id,
+                language="clingo",
+                answer_space={"lower": 0, "upper": 0},
+                ok=False,
+                stderr=f"invalid answer_space output: {exc}",
+            )
+        return GeneratedRun(
+            case_id=case.id,
+            language="clingo",
+            answer_space=answer,
+            ok=True,
+            stdout=raw_output,
+        )
     proc = subprocess.run(
         [executable, "--outf=2", "-"],
         input=source,
@@ -421,6 +441,27 @@ def _parse_clingo_answer_space(raw: str) -> ambiguity.Answer:
     payload = json.loads(raw)
     witnesses = payload.get("Call", [{}])[0].get("Witnesses", [])
     atoms = witnesses[0].get("Value", []) if witnesses else []
+    return _parse_clingo_answer_space_atoms(atoms)
+
+
+def _run_generated_clingo_module(source: str) -> tuple[ambiguity.Answer, str]:
+    import clingo
+
+    ctl = clingo.Control(["--models=1"])
+    ctl.add("base", [], source)
+    ctl.ground([("base", [])])
+    atoms: list[str] = []
+
+    def _on_model(model: typing.Any) -> None:
+        atoms.extend(str(symbol) for symbol in model.symbols(shown=True))
+
+    result = ctl.solve(on_model=_on_model)
+    if not result.satisfiable:
+        raise ValueError("no satisfying model")
+    return _parse_clingo_answer_space_atoms(atoms), "\n".join(atoms)
+
+
+def _parse_clingo_answer_space_atoms(atoms: list[str]) -> ambiguity.Answer:
     parsed: dict[str, int] = {}
     for atom in atoms:
         match = re.fullmatch(r'answer_space\("([^"]+)",(-?\d+)\)', atom)

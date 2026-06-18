@@ -94,11 +94,18 @@ def test_souffle_backend_matches_python_when_available() -> None:
     ]
 
 
-def test_clingo_backend_reports_unavailable_when_missing() -> None:
-    if ambiguity_backends.backend_available("clingo"):
-        pytest.skip("clingo is installed")
-    with pytest.raises(ambiguity_backends.BackendUnavailableError):
-        ambiguity.evaluate_case(_case("amb_recent_births"), backend="clingo")
+def test_clingo_backend_matches_python_when_available() -> None:
+    if not ambiguity_backends.backend_available("clingo"):
+        pytest.skip("clingo Python module or executable not installed")
+    case = _case("amb_recent_births")
+
+    python_report = ambiguity.evaluate_case(case, backend="python")
+    clingo_report = ambiguity.evaluate_case(case, backend="clingo")
+
+    assert clingo_report.answer_space == python_report.answer_space
+    assert [r.answer for r in clingo_report.interpretations] == [
+        r.answer for r in python_report.interpretations
+    ]
 
 
 def test_fail18_summary_parses_human_gold_answer_first(
@@ -218,6 +225,26 @@ answer_space("upper", 3).
     program = ambiguity_codegen.GeneratedProgram(
         case_id="amb_apple_purchases",
         language="souffle",
+        code=code,
+    )
+
+    run = ambiguity_codegen.run_generated_program(_case("amb_apple_purchases"), program)
+
+    assert run.ok is True
+    assert run.answer_space == {"lower": 2, "upper": 3}
+
+
+def test_generated_clingo_program_runs_when_available() -> None:
+    if not ambiguity_backends.backend_available("clingo"):
+        pytest.skip("clingo Python module or executable not installed")
+    code = """
+answer_space("lower", 2).
+answer_space("upper", 3).
+#show answer_space/2.
+"""
+    program = ambiguity_codegen.GeneratedProgram(
+        case_id="amb_apple_purchases",
+        language="clingo",
         code=code,
     )
 

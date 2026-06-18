@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 import json
 import pathlib
 import shutil
@@ -103,26 +104,37 @@ class SouffleBackend:
 
 
 class ClingoBackend:
-    """Run a tiny ASP count program through clingo when the CLI is available."""
+    """Run a tiny ASP count program through pyclingo or the clingo CLI."""
 
     name = "clingo"
 
     def __init__(self, executable: str | None = None) -> None:
         self.executable = executable or shutil.which("clingo") or ""
+        self.module_available = importlib.util.find_spec("clingo") is not None
 
     def evaluate(
         self,
         case: ambiguity.AmbiguityCase,
         interp: ambiguity.Interpretation,
     ) -> BackendResult:
-        if not self.executable:
-            raise BackendUnavailableError("clingo executable not found")
+        if not self.module_available and not self.executable:
+            raise BackendUnavailableError(
+                "clingo Python module or executable not found"
+            )
 
         import simba.eval.ambiguity as ambiguity
 
         answer, evidence_ids = ambiguity.evaluate_interpretation_python(case, interp)
         lower_ids, upper_ids = _evidence_bounds(answer, evidence_ids)
         source = _clingo_program(lower_ids, upper_ids)
+        if self.module_available:
+            lower_count, upper_count, raw_output = _run_clingo_module(source)
+            return BackendResult(
+                answer=_answer_from_bounds(lower_count, upper_count),
+                evidence_ids=upper_ids,
+                backend=self.name,
+                raw_output=raw_output,
+            )
         proc = subprocess.run(
             [self.executable, "--outf=2", "-"],
             input=source,
@@ -162,7 +174,10 @@ def backend_available(name: str) -> bool:
         return False
     if isinstance(backend, PythonBackend):
         return True
-    return bool(getattr(backend, "executable", ""))
+    return bool(
+        getattr(backend, "executable", "")
+        or getattr(backend, "module_available", False)
+    )
 
 
 def _evidence_bounds(
@@ -225,6 +240,8 @@ def _clingo_program(lower_ids: list[str], upper_ids: list[str]) -> str:
         facts.append(f'upper("{_escape_fact(item)}").')
     facts.extend(
         [
+            "#defined lower/1.",
+            "#defined upper/1.",
             "answer_lower(N) :- N = #count { I : lower(I) }.",
             "answer_upper(N) :- N = #count { I : upper(I) }.",
             "#show answer_lower/1.",
@@ -238,6 +255,28 @@ def _parse_clingo_counts(raw: str) -> tuple[int, int]:
     payload = json.loads(raw)
     witnesses = payload.get("Call", [{}])[0].get("Witnesses", [])
     atoms = witnesses[0].get("Value", []) if witnesses else []
+    return _parse_clingo_atoms(atoms)
+
+
+def _run_clingo_module(source: str) -> tuple[int, int, str]:
+    import clingo
+
+    ctl = clingo.Control(["--models=1"])
+    ctl.add("base", [], source)
+    ctl.ground([("base", [])])
+    atoms: list[str] = []
+
+    def _on_model(model: typing.Any) -> None:
+        atoms.extend(str(symbol) for symbol in model.symbols(shown=True))
+
+    result = ctl.solve(on_model=_on_model)
+    if not result.satisfiable:
+        raise RuntimeError("clingo ambiguity backend found no satisfying model")
+    lower, upper = _parse_clingo_atoms(atoms)
+    return lower, upper, "\n".join(atoms)
+
+
+def _parse_clingo_atoms(atoms: list[str]) -> tuple[int, int]:
     lower = upper = 0
     for atom in atoms:
         if atom.startswith("answer_lower(") and atom.endswith(")"):
