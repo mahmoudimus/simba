@@ -615,6 +615,9 @@ simba eval bench subtlememory --compare-readback # retrieval vs exact-session ce
 simba eval bench subtlememory --driver-report .simba/eval/subtle-driver.json
 simba eval bench subtlememory --driver-loop .simba/eval/subtle-loop.json
 simba eval triage                            # UserPromptSubmit recall-triage gate
+simba eval ambiguity                         # executable ambiguity smoke cases
+simba eval ambiguity --backend souffle       # optional solver checker
+simba eval ambiguity --generate python       # LLM writes executable code, then run it
 simba eval halumem --user-num 5                 # HaluMem: operation-level memory-hallucination
 simba eval leaderboard                          # render BENCHMARKS.md from results.jsonl
 ```
@@ -624,6 +627,11 @@ simba eval leaderboard                          # render BENCHMARKS.md from resu
 - **SubtleMemory driver reports** (`--driver-report PATH`) write per-case JSON diagnostics (`no_session_hit`, `partial_session_hit`, `session_content_gap`, `matched_readback_at_k`) and a summary recommendation. The first measured lever from this loop is default-off same-session expansion: `memory.session_expansion_enabled`.
 - **SubtleMemory driver loop** (`--driver-loop PATH`) runs baseline plus the built-in same-session expansion sweep in-process, writes a comparison artifact, picks the winner by contradictory `recall@10`, emits a promotion gate with recall/MRR guard checks, and does not mutate persistent config.
 - **Recall triage eval** (`simba eval triage`) checks the default-off UserPromptSubmit retrieval classifier against a small prompt fixture. The current gate requires zero false negatives; `--path CASES.jsonl` lets dogfood prompts extend the fixture without code changes.
+- **Executable ambiguity eval** (`simba eval ambiguity`) checks structured-data
+  questions where vague language should produce an answer space. The default
+  path is a deterministic Python oracle. `--backend souffle|clingo` runs optional
+  external checkers when installed, and `--generate python|souffle|clingo` asks
+  the configured LLM to write the executable artifact before Simba runs it.
 - **Anticipated-query recall gate** uses the regular eval adapter with corpus
   `anticipated_queries`: baseline must miss only the paraphrase-covered case,
   the opt-in arm must recover it, and ordinary content-query top hits must not

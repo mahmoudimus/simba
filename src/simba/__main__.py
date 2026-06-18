@@ -30,6 +30,7 @@ Usage:
     simba eval <cmd>       Recall eval harness (run | build from real corpus)
     simba eval bench DATASET [opts]
                            Run recall@k (+ QA) on locomo/longmemeval benchmarks
+    simba eval ambiguity   Run ambiguity-preserving executable smoke cases
     simba eval leaderboard [--no-write]
                            Render BENCHMARKS.md from results log
     simba neuron <cmd>     Neuro-symbolic logic server (MCP)
@@ -2875,6 +2876,8 @@ def _cmd_eval(args: list[str]) -> int:
         return _eval_halumem(args[1:])
     if args and args[0] == "triage":
         return _eval_triage(args[1:])
+    if args and args[0] == "ambiguity":
+        return _eval_ambiguity(args[1:])
     if args and args[0] == "leaderboard":
         return _eval_leaderboard(args[1:])
     if args and args[0] == "build":
@@ -3055,6 +3058,167 @@ def _eval_build(args: list[str]) -> int:
     pathlib.Path(out).write_text(_json.dumps(dataset.to_dict(), indent=2))
     print(f"wrote {out}: {len(dataset.corpus)} memories, {len(dataset.cases)} cases")
     return 0
+
+
+def _eval_ambiguity(args: list[str]) -> int:
+    """Run executable ambiguity smoke cases.
+
+    Usage:
+      simba eval ambiguity [--path PATH] [--backend python|souffle|clingo] [--json]
+      simba eval ambiguity --generate python|souffle|clingo [--artifact-dir DIR]
+      simba eval ambiguity --fail18 [--path PATH] [--backend python|souffle|clingo]
+    """
+    import json as _json
+
+    import simba.eval.ambiguity as ambiguity
+    import simba.eval.ambiguity_backends as ambiguity_backends
+    import simba.eval.ambiguity_codegen as ambiguity_codegen
+    import simba.eval.ambiguity_fail18 as ambiguity_fail18
+
+    path = ""
+    backend = "python"
+    as_json = False
+    fail18 = False
+    generate_language = ""
+    artifact_dir = ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--path" and i + 1 < len(args):
+            path = args[i + 1]
+            i += 2
+        elif args[i] == "--backend" and i + 1 < len(args):
+            backend = args[i + 1]
+            i += 2
+        elif args[i] == "--fail18":
+            fail18 = True
+            i += 1
+        elif args[i] == "--json":
+            as_json = True
+            i += 1
+        elif args[i] == "--generate" and i + 1 < len(args):
+            generate_language = args[i + 1]
+            i += 2
+        elif args[i] == "--artifact-dir" and i + 1 < len(args):
+            artifact_dir = args[i + 1]
+            i += 2
+        else:
+            print(f"eval ambiguity: unknown option {args[i]!r}", file=sys.stderr)
+            print(
+                "Usage: simba eval ambiguity [--fail18] [--path PATH] "
+                "[--backend python|souffle|clingo] [--generate LANGUAGE] "
+                "[--artifact-dir DIR] [--json]",
+                file=sys.stderr,
+            )
+            return 1
+
+    try:
+        if fail18 and generate_language:
+            print(
+                "eval ambiguity: --generate is for ambiguity JSON cases, not fail18",
+                file=sys.stderr,
+            )
+            return 1
+        if fail18:
+            summary = ambiguity_fail18.summarize(
+                pathlib.Path(path) if path else ambiguity_fail18.DEFAULT_MANIFEST,
+                backend=backend,
+            )
+            if as_json:
+                print(_json.dumps(summary.to_dict(), indent=2))
+            else:
+                print(
+                    f"clingo_fail18 ambiguity range coverage ({summary.backend}): "
+                    f"{summary.contains_gold}/{summary.gold_known} known gold "
+                    f"inside range; misses={summary.misses_gold}; total={summary.total}"
+                )
+                for item in summary.results:
+                    mark = (
+                        "?"
+                        if item.contains_gold is None
+                        else "ok"
+                        if item.contains_gold
+                        else "MISS"
+                    )
+                    print(
+                        f"  {mark:<4} {item.question_id} "
+                        f"gold={item.gold_numeric} range={item.answer_space} "
+                        f"mode={item.failure_mode}"
+                    )
+            return 0
+
+        case_path = (
+            pathlib.Path(path)
+            if path
+            else pathlib.Path(__file__).parent
+            / "eval"
+            / "datasets"
+            / "ambiguity.json"
+        )
+        if generate_language:
+            generated = []
+            ok = True
+            for case in ambiguity.load_cases(case_path):
+                program, run = ambiguity_codegen.generate_and_run(
+                    case, language=generate_language
+                )
+                if artifact_dir:
+                    ambiguity_codegen.save_program(program, artifact_dir)
+                generated.append(
+                    {
+                        "case_id": case.id,
+                        "language": program.language,
+                        "answer_space": run.answer_space,
+                        "ok": run.ok,
+                        "stderr": run.stderr,
+                    }
+                )
+                ok = ok and run.ok
+            if as_json:
+                print(_json.dumps(generated, indent=2))
+            else:
+                for item in generated:
+                    mark = "ok" if item["ok"] else "FAIL"
+                    print(
+                        f"{item['case_id']}: generated {item['language']} "
+                        f"{mark} {item['answer_space']}"
+                    )
+            return 0 if ok else 1
+        reports = ambiguity.evaluate_all(
+            ambiguity.load_cases(case_path), backend=backend
+        )
+        if as_json:
+            print(
+                _json.dumps(
+                    [
+                        {
+                            "case_id": report.case_id,
+                            "question": report.question,
+                            "answer_space": report.answer_space,
+                            "interpretations": [
+                                {
+                                    "interpretation_id": item.interpretation_id,
+                                    "answer": item.answer,
+                                    "reliability": item.reliability,
+                                    "evidence_ids": item.evidence_ids,
+                                }
+                                for item in report.interpretations
+                            ],
+                        }
+                        for report in reports
+                    ],
+                    indent=2,
+                )
+            )
+        else:
+            for report in reports:
+                print(f"{report.case_id}: {report.answer_space}")
+        return 0
+    except ambiguity_backends.BackendUnavailableError as exc:
+        print(f"eval ambiguity: backend unavailable: {exc}", file=sys.stderr)
+        return 2
+    except ambiguity_codegen.CodegenError as exc:
+        print(f"eval ambiguity: codegen failed: {exc}", file=sys.stderr)
+        return 2
 
 
 def _eval_bench(args: list[str]) -> int:

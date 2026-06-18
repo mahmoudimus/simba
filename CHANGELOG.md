@@ -40,6 +40,13 @@
   default-off strength/decay contribution from explicit `use_count` vs
   `noise_count` quality counters.
 
+- **Executable ambiguity eval.** `simba eval ambiguity` runs small structured-data
+  cases that preserve multiple interpretations as answer spaces instead of
+  collapsing vague language to one count. The default Python oracle is fully
+  offline; optional Souffle/Clingo backends and opt-in LLM codegen
+  (`--generate python|souffle|clingo`) are off the daemon path and meant for
+  research/eval only.
+
 ## [0.11.0] — 2026-06-17
 
 Every new lever in this release defaults **OFF** (backward-compatible): with the

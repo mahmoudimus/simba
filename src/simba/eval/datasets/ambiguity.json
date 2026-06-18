@@ -1,0 +1,249 @@
+{
+  "name": "simba-ambiguity-smoke",
+  "description": "Small executable ambiguity cases for testing generated programs that preserve multiple interpretations instead of collapsing vague natural language into one threshold.",
+  "cases": [
+    {
+      "id": "amb_recent_births",
+      "category": "temporal",
+      "source_dataset": "synthetic-smoke",
+      "question": "How many babies were born in the last few months?",
+      "program": "count_recent_births",
+      "expected_answer_space": {"lower": 2, "upper": 7},
+      "records": [
+        {"id": "b1", "birth_date": "2026-06-01"},
+        {"id": "b2", "birth_date": "2026-05-05"},
+        {"id": "b3", "birth_date": "2026-03-20"},
+        {"id": "b4", "birth_date": "2026-01-02"},
+        {"id": "b5", "birth_month": "2026-04"},
+        {"id": "b6", "birth_month": "2026-02"},
+        {"id": "b7"}
+      ],
+      "interpretations": [
+        {
+          "id": "few_2_known_only",
+          "label": "few means 2 months; records without exact dates are excluded",
+          "layer": "L0",
+          "formality": "F3",
+          "raw_reliability": 0.92,
+          "params": {
+            "anchor_date": "2026-06-18",
+            "months": 2,
+            "missing_policy": "exclude_unknown"
+          },
+          "assumptions": [
+            {"id": "few", "value": "2 months", "reliability": 0.55},
+            {"id": "missing_dates", "value": "exclude", "reliability": 0.80}
+          ],
+          "expected_answer": {"count": 2}
+        },
+        {
+          "id": "few_3_known_only",
+          "label": "few means 3 months; records without exact dates are excluded",
+          "layer": "L1",
+          "formality": "F2",
+          "raw_reliability": 0.82,
+          "params": {
+            "anchor_date": "2026-06-18",
+            "months": 3,
+            "missing_policy": "exclude_unknown"
+          },
+          "assumptions": [
+            {"id": "few", "value": "3 months", "reliability": 0.76},
+            {"id": "missing_dates", "value": "exclude", "reliability": 0.80}
+          ],
+          "expected_answer": {"count": 4}
+        },
+        {
+          "id": "few_6_include_possible",
+          "label": "few means up to 6 months; partial or unknown dates produce a range",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.64,
+          "params": {
+            "anchor_date": "2026-06-18",
+            "months": 6,
+            "missing_policy": "include_possible_range"
+          },
+          "assumptions": [
+            {"id": "few", "value": "6 months", "reliability": 0.42},
+            {"id": "missing_dates", "value": "possible upper bound", "reliability": 0.60}
+          ],
+          "expected_answer": {"lower": 6, "upper": 7}
+        }
+      ]
+    },
+    {
+      "id": "amb_lot_products",
+      "category": "quantifier",
+      "source_dataset": "synthetic-smoke",
+      "question": "How many customers bought a lot of products?",
+      "program": "count_lot_products",
+      "expected_answer_space": {"lower": 2, "upper": 3},
+      "records": [
+        {"id": "c1", "items": 2},
+        {"id": "c2", "items": 8},
+        {"id": "c3", "items": 11},
+        {"id": "c4", "items": 15},
+        {"id": "c5", "items": 20},
+        {"id": "c6", "items": 4}
+      ],
+      "interpretations": [
+        {
+          "id": "absolute_10_items",
+          "label": "a lot means at least 10 items",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.70,
+          "params": {"threshold": "min_items", "min_items": 10},
+          "assumptions": [
+            {"id": "lot_threshold", "value": ">=10", "reliability": 0.70}
+          ],
+          "expected_answer": {"count": 3}
+        },
+        {
+          "id": "top_quartile",
+          "label": "a lot means top quartile by item count",
+          "layer": "L1",
+          "formality": "F2",
+          "raw_reliability": 0.74,
+          "params": {"threshold": "top_percentile", "percentile": 25},
+          "assumptions": [
+            {"id": "comparison_group", "value": "within current table", "reliability": 0.72}
+          ],
+          "expected_answer": {"count": 2}
+        },
+        {
+          "id": "above_average",
+          "label": "a lot means more than the cohort average",
+          "layer": "L0",
+          "formality": "F2",
+          "raw_reliability": 0.68,
+          "params": {"threshold": "above_average"},
+          "assumptions": [
+            {"id": "comparison_group", "value": "within current table", "reliability": 0.68}
+          ],
+          "expected_answer": {"count": 3}
+        }
+      ]
+    },
+    {
+      "id": "amb_nearby_users",
+      "category": "geographic",
+      "source_dataset": "synthetic-smoke",
+      "question": "How many users are nearby?",
+      "program": "count_nearby_users",
+      "expected_answer_space": {"lower": 1, "upper": 5},
+      "records": [
+        {"id": "u1", "distance_miles": 0.8, "city": "sf", "metro": "bay_area"},
+        {"id": "u2", "distance_miles": 2.5, "city": "sf", "metro": "bay_area"},
+        {"id": "u3", "distance_miles": 4.7, "city": "oakland", "metro": "bay_area"},
+        {"id": "u4", "distance_miles": 7.2, "city": "sf", "metro": "bay_area"},
+        {"id": "u5", "distance_miles": 18.0, "city": "san_jose", "metro": "bay_area"}
+      ],
+      "interpretations": [
+        {
+          "id": "walking_distance",
+          "label": "nearby means within 1 mile",
+          "layer": "L0",
+          "formality": "F1",
+          "raw_reliability": 0.62,
+          "params": {"mode": "radius_miles", "radius_miles": 1},
+          "assumptions": [
+            {"id": "nearby_radius", "value": "1 mile", "reliability": 0.58}
+          ],
+          "expected_answer": {"count": 1}
+        },
+        {
+          "id": "short_drive",
+          "label": "nearby means within 5 miles",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.71,
+          "params": {"mode": "radius_miles", "radius_miles": 5},
+          "assumptions": [
+            {"id": "nearby_radius", "value": "5 miles", "reliability": 0.70}
+          ],
+          "expected_answer": {"count": 3}
+        },
+        {
+          "id": "same_city",
+          "label": "nearby means same city",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.66,
+          "params": {"mode": "same_city", "city": "sf"},
+          "assumptions": [
+            {"id": "nearby_boundary", "value": "same city", "reliability": 0.66}
+          ],
+          "expected_answer": {"count": 3}
+        },
+        {
+          "id": "same_metro",
+          "label": "nearby means same metropolitan area",
+          "layer": "L0",
+          "formality": "F1",
+          "raw_reliability": 0.48,
+          "params": {"mode": "same_metro", "metro": "bay_area"},
+          "assumptions": [
+            {"id": "nearby_boundary", "value": "same metro", "reliability": 0.48}
+          ],
+          "expected_answer": {"count": 5}
+        }
+      ]
+    },
+    {
+      "id": "amb_apple_purchases",
+      "category": "entity",
+      "source_dataset": "synthetic-smoke",
+      "question": "Count all Apple purchases.",
+      "program": "count_apple_purchases",
+      "expected_answer_space": {"lower": 2, "upper": 3},
+      "records": [
+        {"id": "p1", "merchant": "Apple", "brand": "Apple", "category": "electronics", "item": "iPhone 15"},
+        {"id": "p2", "merchant": "Best Buy", "brand": "Apple", "category": "electronics", "item": "AirPods"},
+        {"id": "p3", "merchant": "Farm Market", "brand": "", "category": "grocery", "item": "Gala apples"},
+        {"id": "p4", "merchant": "Apple", "brand": "Apple", "category": "service", "item": "AppleCare"},
+        {"id": "p5", "merchant": "Corner Store", "brand": "", "category": "grocery", "item": "apple juice"},
+        {"id": "p6", "merchant": "Applebee's", "brand": "", "category": "restaurant", "item": "dinner"}
+      ],
+      "interpretations": [
+        {
+          "id": "apple_inc_merchant",
+          "label": "Apple means purchases from Apple Inc. as merchant",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.75,
+          "params": {"entity_kind": "merchant_apple_inc"},
+          "assumptions": [
+            {"id": "entity_resolution", "value": "merchant exact", "reliability": 0.75}
+          ],
+          "expected_answer": {"count": 2}
+        },
+        {
+          "id": "apple_product_brand",
+          "label": "Apple means Apple-branded products and services",
+          "layer": "L1",
+          "formality": "F1",
+          "raw_reliability": 0.70,
+          "params": {"entity_kind": "apple_product_brand"},
+          "assumptions": [
+            {"id": "entity_resolution", "value": "brand/product", "reliability": 0.70}
+          ],
+          "expected_answer": {"count": 3}
+        },
+        {
+          "id": "grocery_apples",
+          "label": "Apple means grocery apple items",
+          "layer": "L0",
+          "formality": "F1",
+          "raw_reliability": 0.40,
+          "params": {"entity_kind": "grocery_apples"},
+          "assumptions": [
+            {"id": "entity_resolution", "value": "food item", "reliability": 0.40}
+          ],
+          "expected_answer": {"count": 2}
+        }
+      ]
+    }
+  ]
+}

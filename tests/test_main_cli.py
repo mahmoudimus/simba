@@ -1421,3 +1421,35 @@ def test_db_facts_shows_occurred_at(tmp_path, monkeypatch, capsys) -> None:
     assert rc == 0
     assert "alpha rel beta" in out
     assert "2025-03-01" in out
+
+
+def test_eval_ambiguity_generate_dispatches_codegen(monkeypatch, capsys) -> None:
+    import simba.eval.ambiguity_codegen as codegen
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_generate_and_run(case, *, language):
+        calls.append((case.id, language))
+        return (
+            codegen.GeneratedProgram(
+                case_id=case.id,
+                language=language,
+                code="ANSWER_SPACE = {'count': 1}",
+            ),
+            codegen.GeneratedRun(
+                case_id=case.id,
+                language=language,
+                answer_space={"lower": 1, "upper": 1},
+                ok=True,
+            ),
+        )
+
+    monkeypatch.setattr(codegen, "generate_and_run", _fake_generate_and_run)
+
+    rc = cli._eval_ambiguity(["--generate", "python"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert calls
+    assert {language for _, language in calls} == {"python"}
+    assert "generated python ok" in out
