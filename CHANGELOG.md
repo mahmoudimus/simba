@@ -15,6 +15,10 @@
   write-time judge decisions, persisted conflicts, and explicit quality counters
   (`match`, `inject`, `use`, `noise`, `save`) without mutating historical rows.
 
+- **Codex extraction analysis traces.** `simba codex-extract --run --trace`
+  writes JSONL analysis-run artifacts with candidate evidence/source spans,
+  keep decisions, store outcomes, and negative lessons for failed candidates.
+
 - **Default-off retrieval triage.** `hooks.recall_triage_enabled` adds a
   conservative no-LLM UserPromptSubmit classifier that skips recall/RAG only for
   narrow self-contained prompts; `simba eval triage` provides a re-runnable

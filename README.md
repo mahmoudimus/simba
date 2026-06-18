@@ -143,6 +143,8 @@ simba codex-status --auto-extract
                               # Explicit raw-JSONL fallback extraction
 simba codex-extract           # Print manual extraction prompt for latest transcript
 simba codex-extract --run     # Run the conservative heuristic extractor now
+simba codex-extract --run --trace
+                              # Also write a JSONL analysis trace artifact
 simba codex-recall "<query>"  # Query semantic memory via /recall
 simba codex-finalize          # Run end-of-task signal/error checks
 simba codex-automation        # Print a suggested Codex automation directive
@@ -170,6 +172,11 @@ transcript for the current project and runs the same conservative path as
 `simba codex-extract --run` when the transcript is pending and the memory daemon
 is healthy. Successful runs store memories with the Codex session id as
 `sessionSource` and the transcript `cwd` as `projectPath`.
+Add `--trace` or set `codex.extraction_trace_enabled=true` to write an
+inspectable JSONL sidecar under `.simba/analysis_runs` (or
+`codex.extraction_trace_dir`). The trace records candidate evidence, source
+spans, heuristic keep decisions, store outcomes, negative lessons for failed
+candidates, and final run status.
 
 Idempotency is tracked separately from memory duplicate detection:
 `${CODEX_HOME:-$HOME/.codex}/simba/extractions.jsonl` is an append-only Simba
@@ -383,6 +390,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ⬜ | Retrieval triage | `hooks.recall_triage_enabled` | Default-off UserPromptSubmit classifier that skips recall/RAG only for narrow self-contained prompts; uncertain still retrieves. |
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
 | ⬜ | Codex raw-transcript fallback | `codex.auto_extract_on_status` | Optional `codex-status` fallback stores learnings from pending Codex JSONL transcripts and records an append-only extraction ledger. |
+| ⬜ | Codex extraction trace | `codex.extraction_trace_enabled` | Optional JSONL sidecar for replaying raw-transcript candidates, evidence, keep decisions, and store results. |
 | ✅ | Guardian | `guardian.core_injection_mode` | Re-inject `SIMBA:core` rule blocks every prompt / after compaction; `capsule` mode injects a compact compiled reminder. |
 | ✅ | Reflection | `reflection.enabled` | Background pattern/reflection extraction (scheduler on, project-scoped). |
 | ✅ | Episodic consolidation | `episodes.enabled` | Consolidate episodes (auto on PreCompact). |
@@ -985,7 +993,10 @@ memory store:
    appends a done record to
    `${CODEX_HOME:-$HOME/.codex}/simba/extractions.jsonl` only after successful
    storage. `simba codex-extract` still prints the manual prompt, and
-   `simba codex-extract --run` runs the same storage path explicitly.
+   `simba codex-extract --run` runs the same storage path explicitly. Add
+   `--trace` to write a JSONL analysis run with candidate evidence, source
+   spans, keep decisions, store outcomes, negative lessons for failed
+   candidates, and final status.
 4. **RLM lossless recall and digest** keep the full transcript navigable by
    `sessionSource`; the autonomous engine can digest full transcripts in the
    background while the MCP tools let the active agent inspect exact transcript
@@ -1109,6 +1120,8 @@ simba codex-status --auto-extract
                               Explicit raw-JSONL fallback extraction
 simba codex-extract           Print manual extraction prompt for latest transcript
 simba codex-extract --run     Run conservative heuristic extraction now
+simba codex-extract --run --trace
+                              Write an analysis trace while extracting
 simba codex-recall <query>    Query semantic memory via /recall
 simba codex-finalize          Run end-of-task signal/error checks
 simba codex-automation        Print a suggested Codex automation directive

@@ -9,6 +9,8 @@ Usage:
                            Remove bundled Codex skills
     simba codex-status     Check daemon health + transcript extraction status
     simba codex-extract    Show manual extraction prompt for pending transcript
+    simba codex-extract --run --trace
+                           Run extraction and write an analysis trace artifact
     simba codex-recall     Query semantic memory (/recall) for a text query
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
@@ -452,13 +454,13 @@ def _extract_learnings(
     """Extract candidate learnings from transcript text heuristically."""
     if max_content_length is None:
         max_content_length = _memory_max_content_length()
-    # Split into sentence-like units and normalize whitespace.
-    chunks = re.split(r"[.\n]+", transcript_text)
+    # Split into sentence-like units and preserve source spans for trace output.
+    chunks = re.finditer(r"[^.\n]+", transcript_text)
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
 
     for raw in chunks:
-        sentence = " ".join(raw.strip().split())
+        sentence = " ".join(raw.group(0).strip().split())
         if len(sentence) < 24:
             continue
         key = sentence.lower()
@@ -471,12 +473,19 @@ def _extract_learnings(
             continue
 
         mtype, conf = tagged
+        evidence = sentence[:2000]
+        if len(sentence) > len(evidence):
+            evidence += "..."
         out.append(
             {
                 "type": mtype,
                 "content": sentence[:max_content_length],
                 "context": "extracted from transcript",
                 "confidence": conf,
+                "score": conf,
+                "reason": f"matched {mtype.lower()} transcript heuristic",
+                "evidence": evidence,
+                "source_span": [raw.start(), raw.end()],
             }
         )
         if len(out) >= max_items:
@@ -688,10 +697,13 @@ def _run_codex_extraction(
     *,
     max_items: int,
     force: bool = False,
+    trace_enabled: bool = False,
+    trace_dir: str | pathlib.Path | None = None,
 ) -> dict[str, Any]:
     """Extract and store learnings for one Codex transcript metadata record."""
     import httpx
 
+    import simba.codex.analysis_runs as analysis_runs
     import simba.codex.ledger as codex_ledger
     import simba.hooks._memory_client
 
@@ -742,34 +754,90 @@ def _run_codex_extraction(
             "message": "transcript fingerprint already extracted",
         }
 
+    trace_run: analysis_runs.AnalysisRun | None = None
+    if trace_enabled:
+        root = pathlib.Path(trace_dir).expanduser() if trace_dir else None
+        trace_run = analysis_runs.start_run(
+            session_id=session_id,
+            project_path=project_path,
+            transcript_path=transcript,
+            root=root,
+            cwd=pathlib.Path(project_path),
+        )
+
+    def _trace(event: str, payload: dict[str, Any]) -> None:
+        if trace_run is not None:
+            analysis_runs.append_event(trace_run, event, payload)
+
+    def _with_trace(result: dict[str, Any]) -> dict[str, Any]:
+        if trace_run is not None:
+            result["trace_path"] = str(trace_run.trace_path)
+        return result
+
     text = _extract_transcript_text(transcript_path)
+    _trace(
+        "transcript_loaded",
+        {
+            "text_chars": len(text),
+            "fingerprint": fingerprint,
+        },
+    )
     if not text.strip():
-        return {
-            "status": "no_content",
-            "candidates": 0,
-            "stored": 0,
-            "duplicates": 0,
-            "errors": 0,
-            "message": f"no readable transcript content found in {transcript_path}",
-        }
+        result = _with_trace(
+            {
+                "status": "no_content",
+                "candidates": 0,
+                "stored": 0,
+                "duplicates": 0,
+                "errors": 0,
+                "message": f"no readable transcript content found in {transcript_path}",
+            }
+        )
+        _trace("run_completed", result)
+        return result
 
     learnings = _extract_learnings(text, max_items=max_items)
     if not learnings:
-        return {
-            "status": "no_candidates",
-            "candidates": 0,
-            "stored": 0,
-            "duplicates": 0,
-            "errors": 0,
-            "message": "no candidate learnings found heuristically",
-        }
+        result = _with_trace(
+            {
+                "status": "no_candidates",
+                "candidates": 0,
+                "stored": 0,
+                "duplicates": 0,
+                "errors": 0,
+                "message": "no candidate learnings found heuristically",
+            }
+        )
+        _trace("run_completed", result)
+        return result
 
     daemon = simba.hooks._memory_client.daemon_url()
     stored = 0
     duplicates = 0
     errors = 0
 
-    for mem in learnings:
+    for index, mem in enumerate(learnings):
+        candidate_payload = {
+            "index": index,
+            "type": mem["type"],
+            "content": mem["content"],
+            "context": mem["context"],
+            "confidence": mem["confidence"],
+            "score": mem.get("score", mem["confidence"]),
+            "reason": mem.get("reason", ""),
+            "evidence": mem.get("evidence", mem["content"]),
+            "source_span": mem.get("source_span"),
+        }
+        _trace("candidate", candidate_payload)
+        _trace(
+            "curator_decision",
+            {
+                "index": index,
+                "decision": "keep",
+                "reason": "conservative heuristic candidate",
+                "score": mem.get("score", mem["confidence"]),
+            },
+        )
         payload = {
             "type": mem["type"],
             "content": mem["content"],
@@ -789,8 +857,41 @@ def _run_codex_extraction(
                 duplicates += 1
             else:
                 errors += 1
-        except (httpx.HTTPError, ValueError):
+                _trace(
+                    "negative_lesson",
+                    {
+                        "index": index,
+                        "reason": "store_status_unaccepted",
+                        "status": store_status or "unknown",
+                    },
+                )
+            _trace(
+                "store_result",
+                {
+                    "index": index,
+                    "status": store_status or "unknown",
+                    "memory_id": body.get("id") or body.get("memoryId"),
+                    "superseded_id": body.get("supersededId"),
+                },
+            )
+        except (httpx.HTTPError, ValueError) as exc:
             errors += 1
+            _trace(
+                "store_error",
+                {
+                    "index": index,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                },
+            )
+            _trace(
+                "negative_lesson",
+                {
+                    "index": index,
+                    "reason": "store_exception",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     result = {
         "status": "stored" if errors == 0 else "store_errors",
@@ -811,6 +912,8 @@ def _run_codex_extraction(
             duplicates=duplicates,
         )
         result["ledger_path"] = str(ledger)
+    result = _with_trace(result)
+    _trace("run_completed", result)
     return result
 
 
@@ -907,6 +1010,8 @@ def _cmd_codex_status(args: list[str]) -> int:
             result = _run_codex_extraction(
                 meta,
                 max_items=max(1, int(cfg.auto_extract_max_items)),
+                trace_enabled=bool(cfg.extraction_trace_enabled),
+                trace_dir=cfg.extraction_trace_dir,
             )
             r_status = result.get("status", "unknown")
             print(
@@ -918,6 +1023,8 @@ def _cmd_codex_status(args: list[str]) -> int:
             )
             if result.get("ledger_path"):
                 print(f"[codex] extraction ledger: {result['ledger_path']}")
+            if result.get("trace_path"):
+                print(f"[codex] analysis trace: {result['trace_path']}")
             if r_status != "stored":
                 if result.get("message"):
                     print(f"[codex] auto-extract detail: {result['message']}")
@@ -943,6 +1050,11 @@ def _cmd_codex_extract(args: list[str]) -> int:
     mark_done = "--mark-done" in args
     run_mode = "--run" in args
     force = "--force" in args
+    raw_trace_dir = _parse_opt_value(args, "--trace-dir")
+    trace_enabled = bool(
+        cfg.extraction_trace_enabled or "--trace" in args or raw_trace_dir
+    )
+    trace_dir = raw_trace_dir or cfg.extraction_trace_dir
     max_items = max(1, int(cfg.auto_extract_max_items))
     raw_max_items = _parse_opt_value(args, "--max-items")
     if raw_max_items:
@@ -970,7 +1082,13 @@ def _cmd_codex_extract(args: list[str]) -> int:
         print(f"Extraction status is '{status}' (not pending).")
 
     if run_mode:
-        result = _run_codex_extraction(meta, max_items=max_items, force=force)
+        result = _run_codex_extraction(
+            meta,
+            max_items=max_items,
+            force=force,
+            trace_enabled=trace_enabled,
+            trace_dir=trace_dir,
+        )
         print(
             f"[codex] extract run complete: status={result.get('status', 'unknown')} "
             f"candidates={result.get('candidates', 0)} "
@@ -980,6 +1098,8 @@ def _cmd_codex_extract(args: list[str]) -> int:
         )
         if result.get("ledger_path"):
             print(f"[codex] extraction ledger: {result['ledger_path']}")
+        if result.get("trace_path"):
+            print(f"[codex] analysis trace: {result['trace_path']}")
         if result.get("message"):
             print(f"[codex] extract detail: {result['message']}")
         if result.get("status") == "no_candidates":

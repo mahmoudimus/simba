@@ -477,12 +477,99 @@ def test_cmd_codex_extract_run_keeps_pending_on_store_error(
     )
     monkeypatch.setattr(httpx, "post", lambda *a, **k: _StoreResp())
 
-    rc = cli._cmd_codex_extract(["--run"])
+    trace_dir = tmp_path / "trace-errors"
+    rc = cli._cmd_codex_extract(["--run", "--trace-dir", str(trace_dir)])
     assert rc == 1
     assert not (codex_home / "simba" / "extractions.jsonl").exists()
     out = capsys.readouterr().out
     assert "store_errors" in out
     assert "errors=1" in out
+    trace_file = next(trace_dir.glob("*.jsonl"))
+    events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+    ]
+    negative = next(event for event in events if event["event"] == "negative_lesson")
+    assert negative["payload"] == {
+        "index": 0,
+        "reason": "store_status_unaccepted",
+        "status": "error",
+    }
+
+
+def test_cmd_codex_extract_run_writes_trace_artifact(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    _write_codex_session(
+        codex_home,
+        text=(
+            "Always use uv run for Simba CLI commands because it fixes lifecycle tests."
+        ),
+    )
+
+    class _StoreResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"status": "stored", "id": "mem_1"}
+
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(
+        simba.hooks._memory_client, "daemon_url", lambda: "http://daemon"
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _StoreResp())
+
+    trace_dir = tmp_path / "analysis-traces"
+    rc = cli._cmd_codex_extract(["--run", "--trace-dir", str(trace_dir)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[codex] analysis trace:" in out
+    trace_files = list(trace_dir.glob("*.jsonl"))
+    assert len(trace_files) == 1
+    records = [
+        json.loads(line)
+        for line in trace_files[0].read_text(encoding="utf-8").splitlines()
+    ]
+    events = [record["event"] for record in records]
+    assert events == [
+        "run_started",
+        "transcript_loaded",
+        "candidate",
+        "curator_decision",
+        "store_result",
+        "run_completed",
+    ]
+
+    candidate = next(record for record in records if record["event"] == "candidate")
+    assert candidate["payload"]["type"] == "PREFERENCE"
+    assert candidate["payload"]["reason"] == "matched preference transcript heuristic"
+    assert candidate["payload"]["source_span"]
+    assert "Always use uv run" in candidate["payload"]["evidence"]
+
+    decision = next(
+        record for record in records if record["event"] == "curator_decision"
+    )
+    assert decision["payload"]["decision"] == "keep"
+    store = next(record for record in records if record["event"] == "store_result")
+    assert store["payload"] == {
+        "index": 0,
+        "memory_id": "mem_1",
+        "status": "stored",
+        "superseded_id": None,
+    }
+    completed = records[-1]
+    assert completed["payload"]["status"] == "stored"
+    assert completed["payload"]["stored"] == 1
 
 
 def test_cmd_codex_finalize_runs_signal_and_reflection(
@@ -526,6 +613,10 @@ def test_codex_config_visible_via_config_cli(
     import simba.config_cli
 
     rc = simba.config_cli.cmd_get("codex.auto_extract_on_status", tmp_path)
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "False"
+
+    rc = simba.config_cli.cmd_get("codex.extraction_trace_enabled", tmp_path)
     assert rc == 0
     assert capsys.readouterr().out.strip() == "False"
 

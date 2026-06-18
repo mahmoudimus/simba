@@ -16,3 +16,8 @@ class CodexConfig:
     auto_extract_on_status: bool = False
     # Max heuristic memories to store from one automatic extraction pass.
     auto_extract_max_items: int = 15
+    # Optional JSONL sidecar for replaying why raw transcript extraction kept,
+    # rejected, or failed candidate memories. Disabled until measured.
+    extraction_trace_enabled: bool = False
+    # Empty means `.simba/analysis_runs` for the transcript project.
+    extraction_trace_dir: str = ""
