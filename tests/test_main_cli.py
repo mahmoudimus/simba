@@ -13,9 +13,13 @@ def _write_codex_session(
     codex_home: pathlib.Path,
     *,
     session_id: str = "abc123",
-    cwd: str = "/tmp/codex-project",
+    cwd: str | None = None,
     text: str | None = None,
 ) -> pathlib.Path:
+    # Default the session's recorded cwd to the live cwd so codex commands that
+    # scope extraction to the current project (the cross-wiring fix) still match.
+    if cwd is None:
+        cwd = str(pathlib.Path.cwd())
     session_dir = codex_home / "sessions" / "2026" / "02" / "20"
     session_dir.mkdir(parents=True, exist_ok=True)
     codex_jsonl = session_dir / f"rollout-2026-02-20T08-33-13-{session_id}.jsonl"
@@ -221,7 +225,7 @@ def test_cmd_codex_extract_mark_done_updates_latest_target(
         json.dumps(
             {
                 "type": "session_meta",
-                "payload": {"id": "s1", "cwd": "/tmp/project"},
+                "payload": {"id": "s1", "cwd": str(pathlib.Path.cwd())},
             }
         )
         + "\n"
@@ -250,7 +254,7 @@ def test_cmd_codex_status_shows_pending_extraction(
         json.dumps(
             {
                 "type": "session_meta",
-                "payload": {"id": "s1", "cwd": "/tmp/project"},
+                "payload": {"id": "s1", "cwd": str(pathlib.Path.cwd())},
             }
         )
         + "\n"
@@ -326,14 +330,14 @@ def test_cmd_codex_status_auto_extracts_and_marks_ledger(
     assert posts[0][0] == "http://daemon/store"
     payload = posts[0][1]
     assert payload["sessionSource"] == "abc123"
-    assert payload["projectPath"] == "/tmp/codex-project"
+    assert payload["projectPath"] == str(pathlib.Path.cwd())
     assert payload["content"].startswith("Always use uv run")
 
     ledger_path = codex_home / "simba" / "extractions.jsonl"
     record = json.loads(ledger_path.read_text().strip())
     assert record["status"] == "extracted"
     assert record["session_id"] == "abc123"
-    assert record["project_path"] == "/tmp/codex-project"
+    assert record["project_path"] == str(pathlib.Path.cwd())
     assert record["transcript_path"] == str(transcript)
     assert record["stored"] == 1
     out = capsys.readouterr().out
@@ -428,7 +432,7 @@ def test_cmd_codex_extract_run_skips_already_extracted_transcript(
         codex_home=codex_home,
         transcript_path=str(transcript),
         session_id="abc123",
-        project_path="/tmp/codex-project",
+        project_path=str(pathlib.Path.cwd()),
         fingerprint=fingerprint,
         candidates=1,
         stored=1,
@@ -1476,6 +1480,36 @@ def test_codex_extract_does_not_fallback_to_claude_metadata(
     assert rc == 1
 
 
+def test_cmd_codex_extract_scopes_to_current_project(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    # Cross-wiring guard: a NEWER session belonging to another project must not
+    # be the one codex-extract surfaces. It scopes to the current project (cwd),
+    # mirroring transcripts.find_pending on the Claude side.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    here = tmp_path / "this-project"
+    here.mkdir()
+    other = tmp_path / "other-project"
+    other.mkdir()
+
+    # current project's session (written first -> older mtime)
+    _write_codex_session(codex_home, session_id="mine", cwd=str(here), text="x")
+    # another project's session, globally NEWER (written second -> newer mtime)
+    _write_codex_session(codex_home, session_id="theirs", cwd=str(other), text="y")
+
+    monkeypatch.chdir(here)
+    rc = cli._cmd_codex_extract([])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'session-source "mine"' in out  # current project's session
+    assert "theirs" not in out  # never the newer cross-project one
+
+
 def test_cmd_codex_extract_uses_codex_session_path(
     tmp_path: pathlib.Path,
     monkeypatch,
@@ -1484,18 +1518,8 @@ def test_cmd_codex_extract_uses_codex_session_path(
     monkeypatch.setenv("HOME", str(tmp_path))
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    session_dir = codex_home / "sessions" / "2026" / "02" / "20"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    codex_jsonl = session_dir / "rollout-2026-02-20T08-33-13-abc123.jsonl"
-    codex_jsonl.write_text(
-        json.dumps(
-            {
-                "type": "session_meta",
-                "payload": {"id": "abc123", "cwd": "/tmp/codex-project"},
-            }
-        )
-        + "\n"
-    )
+    # Default session cwd == live cwd, so the project-scoped extract matches it.
+    codex_jsonl = _write_codex_session(codex_home, session_id="abc123")
 
     rc = cli._cmd_codex_extract([])
     assert rc == 0

@@ -272,8 +272,55 @@ def _write_codex_project_hooks(
     return True
 
 
-def _latest_codex_transcript_metadata() -> dict[str, Any] | None:
-    """Build transcript metadata from the newest Codex session JSONL."""
+def _norm_path(p: str) -> str:
+    """Normalize a path for cwd-vs-stored comparison (mirrors transcripts._norm)."""
+    return str(pathlib.PurePath(p)) if p else p
+
+
+def _read_codex_session_meta(path: pathlib.Path) -> tuple[str, str]:
+    """Return ``(session_id, cwd)`` from a Codex session JSONL's session_meta.
+
+    Either field is ``""`` when absent/unreadable; the caller supplies defaults.
+    """
+    try:
+        with path.open() as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("type") != "session_meta":
+                    continue
+                payload = entry.get("payload", {})
+                if isinstance(payload, dict):
+                    sid = payload.get("id")
+                    cwd = payload.get("cwd")
+                    return (
+                        sid if isinstance(sid, str) else "",
+                        cwd if isinstance(cwd, str) else "",
+                    )
+                break
+    except OSError:
+        return "", ""
+    return "", ""
+
+
+def _latest_codex_transcript_metadata(
+    project_path: str | None = None,
+) -> dict[str, Any] | None:
+    """Build transcript metadata from the newest Codex session JSONL.
+
+    When ``project_path`` is given, only sessions whose recorded ``cwd`` matches
+    it are considered — the Codex analog of ``transcripts.find_pending``'s
+    project scoping, which prevents cross-wiring (surfacing or extracting another
+    project's session, e.g. running ``codex-extract`` in project A and getting
+    B's newer session). ``None`` keeps the legacy global-newest behavior for
+    callers without a project context (diagnostics only).
+    """
     sessions_dir = _codex_home() / "sessions"
     if not sessions_dir.exists():
         return None
@@ -307,57 +354,35 @@ def _latest_codex_transcript_metadata() -> dict[str, Any] | None:
             mtime = 0.0
         return (has_ts, ts_key, mtime)
 
-    try:
-        latest = max(candidates, key=_session_sort_key)
-    except ValueError:
-        return None
-
-    session_id = latest.stem
-    project_path = str(pathlib.Path.cwd())
-    try:
-        with latest.open() as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    entry = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get("type") != "session_meta":
-                    continue
-                payload = entry.get("payload", {})
-                if isinstance(payload, dict):
-                    sid = payload.get("id")
-                    cwd = payload.get("cwd")
-                    if isinstance(sid, str) and sid:
-                        session_id = sid
-                    if isinstance(cwd, str) and cwd:
-                        project_path = cwd
-                break
-    except OSError:
-        return None
+    target = _norm_path(project_path) if project_path is not None else None
 
     import simba.codex.ledger as codex_ledger
 
-    fingerprint = codex_ledger.transcript_fingerprint(latest)
-    status = codex_ledger.status_for(
-        codex_home=_codex_home(),
-        transcript_path=str(latest),
-        session_id=session_id,
-        project_path=project_path,
-        fingerprint=fingerprint,
-    )
+    # Newest-first; with a target, return the newest whose cwd matches it.
+    for latest in sorted(candidates, key=_session_sort_key, reverse=True):
+        sid, cwd = _read_codex_session_meta(latest)
+        session_id = sid or latest.stem
+        proj = cwd or str(pathlib.Path.cwd())
+        if target is not None and _norm_path(proj) != target:
+            continue
 
-    return {
-        "session_id": session_id,
-        "project_path": project_path,
-        "transcript_path": str(latest),
-        "status": status,
-        "source": "codex",
-        "_fingerprint": fingerprint,
-    }
+        fingerprint = codex_ledger.transcript_fingerprint(latest)
+        status = codex_ledger.status_for(
+            codex_home=_codex_home(),
+            transcript_path=str(latest),
+            session_id=session_id,
+            project_path=proj,
+            fingerprint=fingerprint,
+        )
+        return {
+            "session_id": session_id,
+            "project_path": proj,
+            "transcript_path": str(latest),
+            "status": status,
+            "source": "codex",
+            "_fingerprint": fingerprint,
+        }
+    return None
 
 
 def _latest_claude_transcript_metadata() -> dict[str, Any] | None:
@@ -994,7 +1019,7 @@ def _cmd_codex_status(args: list[str]) -> int:
     if not health_ok:
         print("[codex] memory: down (start with `simba server`)")
 
-    meta = _latest_codex_transcript_metadata()
+    meta = _latest_codex_transcript_metadata(str(pathlib.Path.cwd()))
     if not meta:
         print("[codex] extraction: no latest Codex transcript metadata found")
         return 0
@@ -1066,7 +1091,7 @@ def _cmd_codex_extract(args: list[str]) -> int:
             print(f"Error: --max-items must be an integer, got {raw_max_items!r}")
             return 1
 
-    meta = _latest_codex_transcript_metadata()
+    meta = _latest_codex_transcript_metadata(str(pathlib.Path.cwd()))
     if not meta:
         print("No transcript metadata found in Codex sessions (~/.codex/sessions).")
         return 1
@@ -1344,7 +1369,7 @@ def _cmd_codex_finalize(args: list[str]) -> int:
             return 1
 
     if not transcript:
-        meta = _latest_codex_transcript_metadata()
+        meta = _latest_codex_transcript_metadata(str(pathlib.Path.cwd()))
         if meta:
             transcript = meta.get("transcript_path", "")
 
