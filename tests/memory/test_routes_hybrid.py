@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -13,6 +15,7 @@ import simba.memory.fts as fts
 import simba.memory.judge_log
 import simba.memory.server
 import simba.memory.supersession
+import simba.memory.vector_db
 
 
 @pytest_asyncio.fixture
@@ -593,3 +596,55 @@ class TestReindex:
         assert resp.status_code == 200
         assert resp.json()["indexed"] == 1
         assert _mirror_count(fts_path) == 1
+
+
+class TestCompact:
+    @pytest.mark.asyncio
+    async def test_compact_dry_run_reports_storage_snapshot(
+        self, hybrid_client, tmp_path
+    ) -> None:
+        ac, _, app = hybrid_client
+        db_path = tmp_path / "memories.lance"
+        db_path.mkdir()
+        (db_path / "retained-data.bin").write_bytes(b"x" * 2048)
+        app.state.db_path = str(db_path)
+
+        resp = await ac.post("/compact")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "dry_run"
+        assert body["retentionSeconds"] == 86400
+        assert body["deleteUnverified"] is False
+        assert body["before"]["rows"] == 1
+        assert body["before"]["onDiskBytes"] >= 2048
+        assert body["before"]["versions"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_compact_run_passes_lance_retention_options(
+        self, hybrid_client, monkeypatch
+    ) -> None:
+        ac, _, _ = hybrid_client
+        seen: dict[str, object] = {}
+
+        async def _fake_compact(table, *, cleanup_older_than, delete_unverified):
+            seen["table"] = table
+            seen["cleanup_older_than"] = cleanup_older_than
+            seen["delete_unverified"] = delete_unverified
+            return {"ok": True}
+
+        monkeypatch.setattr(simba.memory.vector_db, "compact_table", _fake_compact)
+
+        resp = await ac.post(
+            "/compact",
+            params={
+                "dry_run": "false",
+                "older_than_seconds": "3600",
+                "delete_unverified": "true",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "compacted"
+        assert seen["cleanup_older_than"] == datetime.timedelta(hours=1)
+        assert seen["delete_unverified"] is True

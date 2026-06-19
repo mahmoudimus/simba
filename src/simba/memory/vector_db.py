@@ -273,19 +273,31 @@ async def reembed_table(
     return new_table, len(new_rows)
 
 
-async def compact_table(table: typing.Any) -> bool:
-    """Compact table fragments to improve search performance.
+async def compact_table(
+    table: typing.Any,
+    *,
+    cleanup_older_than: typing.Any | None = None,
+    delete_unverified: bool = False,
+) -> typing.Any | None:
+    """Compact table fragments and prune old LanceDB versions.
 
     LanceDB creates one fragment per ``add()`` call.  Periodic compaction
-    merges them into fewer, larger files.  Returns True on success.
+    merges them into fewer, larger files and removes old version history once it
+    is past the requested retention window.  Returns LanceDB's optimize stats on
+    success, or None if compaction failed.
     """
     try:
-        stats = await table.optimize()
+        kwargs: dict[str, typing.Any] = {}
+        if cleanup_older_than is not None:
+            kwargs["cleanup_older_than"] = cleanup_older_than
+        if delete_unverified:
+            kwargs["delete_unverified"] = True
+        stats = await table.optimize(**kwargs)
         logger.info("[compact] optimized: %s", stats)
-        return True
+        return stats
     except Exception:
         logger.debug("compact_table failed", exc_info=True)
-        return False
+        return None
 
 
 async def count_rows(table: typing.Any) -> int:

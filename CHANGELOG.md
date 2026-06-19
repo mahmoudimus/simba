@@ -55,6 +55,12 @@
   (`--generate python|souffle|clingo`) are off the daemon path and meant for
   research/eval only.
 
+- **LanceDB storage compaction CLI.** `simba memory compact` now reports live
+  LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments
+  without mutating by default. `simba memory compact --run --older-than 24h`
+  calls LanceDB optimize to compact fragments and prune old derived-store
+  versions while preserving memory rows.
+
 ## [0.11.0] — 2026-06-17
 
 Every new lever in this release defaults **OFF** (backward-compatible): with the

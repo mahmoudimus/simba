@@ -6,6 +6,7 @@ Ported from claude-memory/routes/*.js — all 6 endpoints in a single file.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import pathlib
@@ -77,6 +78,82 @@ def _fts_delete(fts_path: str, memory_id: str) -> None:
 def _fts_set_project(fts_path: str, memory_id: str, project_path: str) -> None:
     with simba.memory.fts.connect(fts_path):
         simba.memory.fts.set_project(memory_id, project_path)
+
+
+def _directory_size_bytes(path: pathlib.Path) -> int | None:
+    """Return recursive byte size, skipping files that disappear mid-scan."""
+    if not path.exists():
+        return None
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                stat = child.stat()
+                blocks = getattr(stat, "st_blocks", None)
+                if isinstance(blocks, int) and blocks > 0:
+                    total += blocks * 512
+                else:
+                    total += stat.st_size
+        except OSError:
+            continue
+    return total
+
+
+def _jsonable(value: typing.Any) -> typing.Any:
+    """Best-effort conversion for LanceDB optimize stats."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime.timedelta):
+        return value.total_seconds()
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "_asdict"):
+        return _jsonable(value._asdict())
+    if hasattr(value, "__dict__"):
+        return _jsonable(vars(value))
+    return repr(value)
+
+
+async def _lance_storage_snapshot(
+    table: typing.Any, db_path: str | None
+) -> dict[str, typing.Any]:
+    """Report live Lance table size next to actual on-disk size."""
+    stats: dict[str, typing.Any] = {}
+    try:
+        raw_stats = await table.stats()
+        if isinstance(raw_stats, dict):
+            stats = raw_stats
+    except Exception as exc:
+        stats = {"error": type(exc).__name__}
+
+    try:
+        rows = await table.count_rows()
+    except Exception:
+        rows = stats.get("num_rows")
+
+    try:
+        versions = len(await table.list_versions())
+    except Exception:
+        versions = None
+
+    on_disk_bytes: int | None = None
+    if db_path:
+        on_disk_bytes = await asyncio.to_thread(
+            _directory_size_bytes, pathlib.Path(db_path)
+        )
+
+    fragment_stats = stats.get("fragment_stats") or {}
+    return {
+        "path": db_path,
+        "rows": rows,
+        "liveBytes": stats.get("total_bytes"),
+        "onDiskBytes": on_disk_bytes,
+        "versions": versions,
+        "fragments": fragment_stats.get("num_fragments"),
+        "smallFragments": fragment_stats.get("num_small_fragments"),
+    }
 
 
 async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> None:
@@ -1265,6 +1342,62 @@ async def reindex(request: fastapi.Request) -> dict:
 
     indexed = await asyncio.to_thread(_rebuild)
     return {"status": "reindexed", "indexed": indexed}
+
+
+@router.post("/compact")
+async def compact(
+    request: fastapi.Request,
+    dry_run: bool = True,
+    older_than_seconds: int = 86_400,
+    delete_unverified: bool = False,
+) -> dict:
+    """Compact LanceDB storage and prune retained versions.
+
+    Dry-run is the default because LanceDB compaction mutates the derived vector
+    store.  The memory source rows are unchanged; this only removes old table
+    versions and compactable data files after the retention window.
+    """
+    table = getattr(request.app.state, "table", None)
+    if table is None:
+        return {"status": "not_ready"}
+    if older_than_seconds < 0:
+        raise fastapi.HTTPException(
+            status_code=400, detail="older_than_seconds must be >= 0"
+        )
+
+    db_path = getattr(request.app.state, "db_path", None)
+    before = await _lance_storage_snapshot(table, db_path)
+    retention = datetime.timedelta(seconds=older_than_seconds)
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "retentionSeconds": older_than_seconds,
+            "deleteUnverified": delete_unverified,
+            "before": before,
+        }
+
+    optimize_stats = await simba.memory.vector_db.compact_table(
+        table,
+        cleanup_older_than=retention,
+        delete_unverified=delete_unverified,
+    )
+    after = await _lance_storage_snapshot(table, db_path)
+    if optimize_stats is None:
+        return {
+            "status": "failed",
+            "retentionSeconds": older_than_seconds,
+            "deleteUnverified": delete_unverified,
+            "before": before,
+            "after": after,
+        }
+    return {
+        "status": "compacted",
+        "retentionSeconds": older_than_seconds,
+        "deleteUnverified": delete_unverified,
+        "before": before,
+        "after": after,
+        "optimize": _jsonable(optimize_stats),
+    }
 
 
 @router.post("/reembed")

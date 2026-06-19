@@ -504,7 +504,15 @@ simba config set memory.keyword_weight 1.0    # RRF weight, keyword arm
 simba config set memory.anticipated_query_recall_enabled true
                                                # opt-in anticipated-query arm
 simba memory reindex                          # rebuild the keyword mirror
+simba memory compact                          # inspect LanceDB storage bloat
+simba memory compact --run --older-than 24h   # prune old LanceDB versions
 ```
+
+The LanceDB vector store is also derived storage. If `<db-path>/memories.lance`
+gets much larger than the live table bytes, run `simba memory compact` first; it
+reports rows, live bytes, on-disk bytes, retained versions, and fragments without
+mutating anything. `--run` calls LanceDB optimize with the retention window
+passed via `--older-than` (default `24h`) and does not delete memory rows.
 
 ### Query intelligence
 

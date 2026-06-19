@@ -999,6 +999,93 @@ def test_rlm_run_llm_requires_prompt_file(capsys):
     assert "prompt-file" in capsys.readouterr().err
 
 
+def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "status": "dry_run",
+                "retentionSeconds": 86400,
+                "before": {
+                    "rows": 6512,
+                    "liveBytes": 30_013_613,
+                    "onDiskBytes": 23 * 1024**3,
+                    "versions": 21_592,
+                    "fragments": 12,
+                },
+            }
+
+    def _fake_post(url, params=None, timeout=0.0):
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_compact([])
+
+    assert rc == 0
+    assert captured["url"] == "http://x/compact"
+    assert captured["params"]["dry_run"] == "true"
+    assert captured["params"]["older_than_seconds"] == 86400
+    out = capsys.readouterr().out
+    assert "dry-run:" in out
+    assert "disk=23.0 GiB" in out
+    assert "versions=21592" in out
+
+
+def test_memory_compact_run_passes_options(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "status": "compacted",
+                "before": {"rows": 1, "liveBytes": 1024, "onDiskBytes": 4096},
+                "after": {"rows": 1, "liveBytes": 1024, "onDiskBytes": 2048},
+            }
+
+    def _fake_post(url, params=None, timeout=0.0):
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_compact(["--run", "--older-than", "2h", "--delete-unverified"])
+
+    assert rc == 0
+    assert captured["params"]["dry_run"] == "false"
+    assert captured["params"]["older_than_seconds"] == 7200
+    assert captured["params"]["delete_unverified"] == "true"
+    assert captured["timeout"] == 3600.0
+    assert "compacted:" in capsys.readouterr().out
+
+
+def test_memory_compact_rejects_bad_retention(capsys) -> None:
+    rc = cli._memory_compact(["--older-than", "bogus"])
+    assert rc == 1
+    assert "invalid --older-than" in capsys.readouterr().err
+
+
 def test_memory_prune_requires_a_filter(capsys) -> None:
     rc = cli._memory_prune([])
     assert rc == 1
