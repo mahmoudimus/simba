@@ -572,6 +572,197 @@ def test_cmd_codex_extract_run_writes_trace_artifact(
     assert completed["payload"]["stored"] == 1
 
 
+def _write_analysis_trace(
+    trace_dir: pathlib.Path,
+    *,
+    name: str = "run.jsonl",
+) -> pathlib.Path:
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    trace = trace_dir / name
+    rows = [
+        {
+            "event": "candidate",
+            "session_id": "session-1",
+            "project_path": "/tmp/codex-project",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "payload": {
+                "index": 0,
+                "type": "DECISION",
+                "content": "Curator reports are review-only",
+                "source_span": "message:2",
+                "evidence": "no auto-store",
+            },
+        },
+        {
+            "event": "store_result",
+            "session_id": "session-1",
+            "project_path": "/tmp/codex-project",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "payload": {"index": 0, "status": "duplicate", "memory_id": "mem-1"},
+        },
+        {
+            "event": "run_completed",
+            "session_id": "session-1",
+            "project_path": "/tmp/codex-project",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "payload": {"status": "stored"},
+        },
+    ]
+    trace.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    return trace
+
+
+class _CodexCurateCfg:
+    auto_extract_on_status = False
+    auto_extract_max_items = 15
+    extraction_trace_enabled = False
+    extraction_trace_dir = ""
+    curator_report_dir = ""
+    curator_default_format = "markdown"
+    curator_min_candidate_score = 0.0
+
+
+def test_cmd_codex_curate_latest_uses_configured_trace_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import simba.config
+
+    trace_dir = tmp_path / "traces"
+    report_dir = tmp_path / "reports"
+    _write_analysis_trace(trace_dir)
+    cfg = _CodexCurateCfg()
+    cfg.extraction_trace_dir = str(trace_dir)
+    cfg.curator_report_dir = str(report_dir)
+    monkeypatch.setattr(simba.config, "load", lambda section: cfg)
+
+    rc = cli._cmd_codex_curate(["--latest"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[codex] curator report:" in out
+    reports = list(report_dir.glob("*.md"))
+    assert len(reports) == 1
+    assert "Curator reports are review-only" in reports[0].read_text()
+
+
+def test_cmd_codex_curate_trace_writes_default_curator_dir(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import simba.config
+
+    monkeypatch.chdir(tmp_path)
+    trace = _write_analysis_trace(tmp_path / "traces")
+    monkeypatch.setattr(simba.config, "load", lambda section: _CodexCurateCfg())
+
+    rc = cli._cmd_codex_curate(["--trace", str(trace)])
+
+    assert rc == 0
+    assert "candidates=1" in capsys.readouterr().out
+    report = tmp_path / ".simba" / "curator_runs" / "run.md"
+    assert report.exists()
+    assert "message:2" in report.read_text()
+
+
+def test_cmd_codex_curate_json_writes_json_report(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    import simba.config
+
+    trace = _write_analysis_trace(tmp_path / "traces")
+    out = tmp_path / "curator.json"
+    monkeypatch.setattr(simba.config, "load", lambda section: _CodexCurateCfg())
+
+    rc = cli._cmd_codex_curate(["--trace", str(trace), "--out", str(out), "--json"])
+
+    assert rc == 0
+    data = json.loads(out.read_text())
+    assert data["metrics"]["duplicate_count"] == 1
+    assert data["candidates"][0]["store_status"] == "duplicate"
+
+
+def test_cmd_codex_curate_does_not_call_memory_store(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+) -> None:
+    import httpx
+
+    import simba.config
+
+    trace = _write_analysis_trace(tmp_path / "traces")
+    monkeypatch.setattr(simba.config, "load", lambda section: _CodexCurateCfg())
+
+    def _forbid_post(*args, **kwargs):
+        raise AssertionError("codex-curate must not call memory store")
+
+    monkeypatch.setattr(httpx, "post", _forbid_post)
+
+    rc = cli._cmd_codex_curate(["--trace", str(trace), "--out", str(tmp_path)])
+
+    assert rc == 0
+    assert (tmp_path / "run.md").exists()
+
+
+def test_cmd_codex_curate_review_appends_labels_and_prints_commands(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import httpx
+
+    trace = _write_analysis_trace(tmp_path / "traces")
+    report = tmp_path / "report.json"
+    rc = cli._cmd_codex_curate(["--trace", str(trace), "--out", str(report), "--json"])
+    assert rc == 0
+    capsys.readouterr()
+
+    def _forbid_post(*args, **kwargs):
+        raise AssertionError("codex-curate review must not call memory store")
+
+    monkeypatch.setattr(httpx, "post", _forbid_post)
+
+    rc = cli._cmd_codex_curate(
+        [
+            "review",
+            str(report),
+            "--accept",
+            "0",
+            "--reason",
+            "good evidence",
+            "--reviewer",
+            "tester",
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "accepted promotion commands: 1 (not executed)" in out
+    assert "simba memory store" in out
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "report.review.jsonl").read_text().splitlines()
+    ]
+    assert rows[0]["label"] == "accepted"
+    assert rows[0]["reason"] == "good evidence"
+    assert rows[0]["reviewer"] == "tester"
+
+
+def test_cmd_codex_curate_review_rejects_missing_labels(
+    tmp_path: pathlib.Path,
+    capsys,
+) -> None:
+    trace = _write_analysis_trace(tmp_path / "traces")
+
+    rc = cli._cmd_codex_curate(["review", str(trace)])
+
+    assert rc == 1
+    assert "provide at least one review label" in capsys.readouterr().err
+
+
 def test_cmd_codex_finalize_runs_signal_and_reflection(
     tmp_path: pathlib.Path,
     monkeypatch,
@@ -619,6 +810,10 @@ def test_codex_config_visible_via_config_cli(
     rc = simba.config_cli.cmd_get("codex.extraction_trace_enabled", tmp_path)
     assert rc == 0
     assert capsys.readouterr().out.strip() == "False"
+
+    rc = simba.config_cli.cmd_get("codex.curator_default_format", tmp_path)
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "markdown"
 
 
 def test_cmd_codex_recall_prints_memories(monkeypatch, capsys) -> None:

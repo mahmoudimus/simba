@@ -145,6 +145,11 @@ simba codex-extract           # Print manual extraction prompt for latest transc
 simba codex-extract --run     # Run the conservative heuristic extractor now
 simba codex-extract --run --trace
                               # Also write a JSONL analysis trace artifact
+simba codex-curate --latest   # Write a review report for the newest trace
+simba codex-curate --trace .simba/analysis_runs/<run>.jsonl --json
+                              # Write a stable JSON curator report
+simba codex-curate review .simba/curator_runs/<run>.json --accept 0
+                              # Append review labels and print store commands
 simba codex-recall "<query>"  # Query semantic memory via /recall
 simba codex-finalize          # Run end-of-task signal/error checks
 simba codex-automation        # Print a suggested Codex automation directive
@@ -177,6 +182,16 @@ inspectable JSONL sidecar under `.simba/analysis_runs` (or
 `codex.extraction_trace_dir`). The trace records candidate evidence, source
 spans, heuristic keep decisions, store outcomes, negative lessons for failed
 candidates, and final run status.
+Run `simba codex-curate --latest` or `simba codex-curate --trace <path>` to turn
+one of those traces into an append-only review artifact under
+`.simba/curator_runs` (or `codex.curator_report_dir`). Curator reports are
+deliberately review-only: they summarize candidate memories, source spans, store
+outcomes, negative lessons, and playbook candidates, but never call `/store` or
+promote facts into memory. Use `simba codex-curate review <report>` with labels
+such as `--accept 0`, `--reject 1`, `--duplicate 2`, `--noisy 3`, or
+`--needs-more-evidence 4` to append reviewer decisions to
+`<report>.review.jsonl`. Accepted candidates print exact `simba memory store ...`
+commands for manual promotion; the curator still does not execute them.
 
 Idempotency is tracked separately from memory duplicate detection:
 `${CODEX_HOME:-$HOME/.codex}/simba/extractions.jsonl` is an append-only Simba
@@ -391,6 +406,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
 | ⬜ | Codex raw-transcript fallback | `codex.auto_extract_on_status` | Optional `codex-status` fallback stores learnings from pending Codex JSONL transcripts and records an append-only extraction ledger. |
 | ⬜ | Codex extraction trace | `codex.extraction_trace_enabled` | Optional JSONL sidecar for replaying raw-transcript candidates, evidence, keep decisions, and store results. |
+| ⬜ | Codex trace curator | `codex.curator_report_dir` | Review-only markdown/JSON reports plus append-only reviewer labels over extraction traces; no memory writes or hook-context injection. |
 | ✅ | Guardian | `guardian.core_injection_mode` | Re-inject `SIMBA:core` rule blocks every prompt / after compaction; `capsule` mode injects a compact compiled reminder. |
 | ✅ | Reflection | `reflection.enabled` | Background pattern/reflection extraction (scheduler on, project-scoped). |
 | ✅ | Episodic consolidation | `episodes.enabled` | Consolidate episodes (auto on PreCompact). |
@@ -1155,6 +1171,11 @@ simba codex-extract           Print manual extraction prompt for latest transcri
 simba codex-extract --run     Run conservative heuristic extraction now
 simba codex-extract --run --trace
                               Write an analysis trace while extracting
+simba codex-curate --latest   Write a review report for the newest trace
+simba codex-curate --trace PATH [--json]
+                              Write markdown/JSON trace curator report
+simba codex-curate review REPORT --accept N
+                              Append labels and print manual store commands
 simba codex-recall <query>    Query semantic memory via /recall
 simba codex-finalize          Run end-of-task signal/error checks
 simba codex-automation        Print a suggested Codex automation directive

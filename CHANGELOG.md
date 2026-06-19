@@ -24,6 +24,14 @@
   writes JSONL analysis-run artifacts with candidate evidence/source spans,
   keep decisions, store outcomes, and negative lessons for failed candidates.
 
+- **Codex trace curator reports.** `simba codex-curate` turns extraction trace
+  JSONL into append-only markdown or JSON review reports under
+  `.simba/curator_runs`, surfacing candidate memories, evidence, store
+  outcomes, negative lessons, and playbook candidates. `simba codex-curate
+  review <report>` appends reviewer labels to `.review.jsonl` and prints exact
+  `simba memory store ...` commands for accepted candidates without executing
+  them.
+
 - **Default-off retrieval triage.** `hooks.recall_triage_enabled` adds a
   conservative no-LLM UserPromptSubmit classifier that skips recall/RAG only for
   narrow self-contained prompts; `simba eval triage` provides a re-runnable

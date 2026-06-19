@@ -21,3 +21,9 @@ class CodexConfig:
     extraction_trace_enabled: bool = False
     # Empty means `.simba/analysis_runs` for the transcript project.
     extraction_trace_dir: str = ""
+    # Empty means `.simba/curator_runs` for the transcript project.
+    curator_report_dir: str = ""
+    # `markdown` or `json`; CLI flags can override it per run.
+    curator_default_format: str = "markdown"
+    # Keep all candidates by default; report-only filter for future review tuning.
+    curator_min_candidate_score: float = 0.0

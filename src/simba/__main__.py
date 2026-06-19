@@ -11,6 +11,7 @@ Usage:
     simba codex-extract    Show manual extraction prompt for pending transcript
     simba codex-extract --run --trace
                            Run extraction and write an analysis trace artifact
+    simba codex-curate     Summarize extraction traces into review reports
     simba codex-recall     Query semantic memory (/recall) for a text query
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
@@ -1138,6 +1139,157 @@ def _cmd_codex_extract(args: list[str]) -> int:
     return 0
 
 
+def _cmd_codex_curate(args: list[str]) -> int:
+    """Summarize Codex analysis traces into reviewable curator reports."""
+    import simba.codex.config  # registers "codex"
+    import simba.codex.curator as curator
+    import simba.config
+
+    if "--help" in args or "-h" in args:
+        print(
+            "Usage: simba codex-curate [--latest | --trace PATH] "
+            "[--out PATH] [--json]\n"
+            "       simba codex-curate review REPORT "
+            "[--accept N] [--reject N] [--duplicate N] [--noisy N] "
+            "[--needs-more-evidence N]"
+        )
+        return 0
+    if args and args[0] == "review":
+        return _cmd_codex_curate_review(args[1:])
+
+    cfg = simba.config.load("codex")
+    raw_trace = _parse_opt_value(args, "--trace")
+    raw_trace_dir = _parse_opt_value(args, "--trace-dir")
+    raw_out = _parse_opt_value(args, "--out")
+    use_json = "--json" in args or (
+        "--markdown" not in args and cfg.curator_default_format == "json"
+    )
+
+    if raw_trace:
+        trace_path = pathlib.Path(raw_trace).expanduser()
+    else:
+        trace_dir = curator.resolve_trace_dir(
+            raw_trace_dir or cfg.extraction_trace_dir,
+            pathlib.Path.cwd(),
+        )
+        trace_path = curator.find_latest_trace(trace_dir)
+        if trace_path is None:
+            print(f"No analysis traces found in {trace_dir}", file=sys.stderr)
+            return 1
+
+    if not trace_path.exists():
+        print(f"Trace not found: {trace_path}", file=sys.stderr)
+        return 1
+
+    trace = curator.load_trace(trace_path)
+    report = curator.summarize_trace(trace)
+    if cfg.curator_min_candidate_score:
+        report = curator.filter_report(
+            report,
+            min_score=float(cfg.curator_min_candidate_score),
+        )
+    out_path = curator.resolve_report_path(
+        trace_path=trace_path,
+        raw_out=raw_out,
+        raw_report_dir=cfg.curator_report_dir,
+        as_json=use_json,
+        cwd=pathlib.Path.cwd(),
+    )
+    if use_json:
+        written = curator.write_json(report, out_path)
+    else:
+        written = curator.write_markdown(report, out_path)
+    print(
+        "[codex] curator report: "
+        f"{written} candidates={report.metrics.get('candidate_count', 0)} "
+        f"stored={report.metrics.get('stored_count', 0)} "
+        f"duplicates={report.metrics.get('duplicate_count', 0)} "
+        f"errors={report.metrics.get('store_error_count', 0)}"
+    )
+    return 0
+
+
+def _cmd_codex_curate_review(args: list[str]) -> int:
+    """Append review labels for a curator report or trace."""
+    import simba.codex.curator as curator
+
+    if not args or args[0].startswith("--"):
+        print(
+            "Usage: simba codex-curate review REPORT "
+            "[--accept N] [--reject N] [--duplicate N] [--noisy N] "
+            "[--needs-more-evidence N]",
+            file=sys.stderr,
+        )
+        return 1
+
+    subject = pathlib.Path(args[0]).expanduser()
+    if not subject.exists():
+        print(f"Report or trace not found: {subject}", file=sys.stderr)
+        return 1
+    rest = args[1:]
+    try:
+        decisions = _curator_review_decisions(rest)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if not decisions:
+        print("Error: provide at least one review label", file=sys.stderr)
+        return 1
+
+    try:
+        report = curator.load_report_or_trace(subject)
+        review_path = pathlib.Path(
+            _parse_opt_value(rest, "--review-out") or curator.review_path_for(subject)
+        )
+        written = curator.append_review_decisions(report, decisions, review_path)
+    except (OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    commands = curator.memory_store_commands(report, decisions)
+    if "--commands-only" not in rest:
+        print(f"[codex] curator review: {written} decisions={len(decisions)}")
+        print(
+            "[codex] accepted promotion commands: "
+            f"{len(commands)} (not executed)"
+        )
+    for command in commands:
+        print(command)
+    return 0
+
+
+def _curator_review_decisions(args: list[str]) -> tuple[Any, ...]:
+    """Parse curator review label flags into ReviewDecision records."""
+    import simba.codex.curator as curator
+
+    reason = _parse_opt_value(args, "--reason") or ""
+    reviewer = _parse_opt_value(args, "--reviewer") or ""
+    labels = {
+        "--accept": "accepted",
+        "--reject": "rejected",
+        "--duplicate": "duplicate",
+        "--noisy": "noisy",
+        "--needs-more-evidence": "needs_more_evidence",
+    }
+    decisions = []
+    for flag, label in labels.items():
+        for raw in _split_values(_values_for(args, flag)):
+            try:
+                index = int(raw)
+            except ValueError as exc:
+                msg = f"{flag} expects integer indexes, got {raw!r}"
+                raise ValueError(msg) from exc
+            decisions.append(
+                curator.ReviewDecision(
+                    candidate_index=index,
+                    label=label,
+                    reason=reason,
+                    reviewer=reviewer,
+                )
+            )
+    return tuple(decisions)
+
+
 def _cmd_codex_recall(args: list[str]) -> int:
     """Recall memories for a query via the memory daemon."""
     if not args:
@@ -1443,6 +1595,7 @@ Subcommands:
     prune    Bulk-delete memories by age / confidence / type
     update   Update memory metadata
     reindex  Rebuild the hybrid-recall FTS keyword mirror from LanceDB
+    compact  Inspect/compact LanceDB fragments and retained versions
     reembed  Re-embed the whole corpus with the current model (after a swap)
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
@@ -1479,6 +1632,10 @@ list options:
 
 delete:
     simba memory delete <memory_id>
+
+compact:
+    simba memory compact
+    simba memory compact --run [--older-than 24h] [--delete-unverified]
 
 prune options (at least one filter required):
     --type TYPE            Only prune this memory type (e.g. TOOL_RULE)
@@ -1543,6 +1700,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_update(rest)
     elif subcmd == "reindex":
         return _memory_reindex(rest)
+    elif subcmd == "compact":
+        return _memory_compact(rest)
     elif subcmd == "reembed":
         return _memory_reembed(rest)
     elif subcmd == "consolidate":
@@ -1580,6 +1739,65 @@ def _memory_reindex(args: list[str]) -> int:
         return 0
     print(f"reindexed: {body.get('indexed', 0)} memories")
     return 0
+
+
+def _memory_compact(args: list[str]) -> int:
+    """Inspect or compact LanceDB fragments and retained versions."""
+    import httpx
+
+    import simba.hooks._memory_client
+
+    run = "--run" in args
+    older_than_raw = _parse_opt_value(args, "--older-than") or "24h"
+    older_than_seconds = _parse_duration_seconds(older_than_raw)
+    if older_than_seconds is None:
+        print(
+            f"Error: invalid --older-than '{older_than_raw}' "
+            "(use e.g. 24h, 7d, 2w, 30m)",
+            file=sys.stderr,
+        )
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    params = {
+        "dry_run": str(not run).lower(),
+        "older_than_seconds": older_than_seconds,
+        "delete_unverified": str("--delete-unverified" in args).lower(),
+    }
+    try:
+        resp = httpx.post(
+            f"{url}/compact",
+            params=params,
+            timeout=3600.0 if run else 120.0,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    status = body.get("status", "unknown")
+    if status == "not_ready":
+        print("daemon not ready (no LanceDB table)")
+        return 1
+
+    before = body.get("before") or {}
+    if status == "dry_run":
+        print(f"dry-run: {_memory_compact_snapshot(before)}")
+        print(
+            "retention: old LanceDB versions older than "
+            f"{older_than_raw} would be pruned"
+        )
+        print("run with: simba memory compact --run --older-than " + older_than_raw)
+        return 0
+
+    after = body.get("after") or {}
+    print(f"{status}: {_memory_compact_snapshot(before)} ->")
+    print(f"           {_memory_compact_snapshot(after)}")
+    return 0 if status == "compacted" else 1
 
 
 def _memory_reembed(args: list[str]) -> int:
@@ -2001,6 +2219,33 @@ def _memory_supersession(args: list[str]) -> int:
                 f"reason={row.reason} at={row.created_at_iso}"
             )
     return 0
+
+
+def _format_bytes(value: object) -> str:
+    """Format optional byte counts for CLI output."""
+    if not isinstance(value, (int, float)):
+        return "unknown"
+    amount = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(amount)} {unit}"
+            return f"{amount:.1f} {unit}"
+        amount /= 1024
+    return f"{amount:.1f} TiB"
+
+
+def _memory_compact_snapshot(snapshot: dict) -> str:
+    """Render a LanceDB storage snapshot in one line."""
+    rows = snapshot.get("rows", "?")
+    versions = snapshot.get("versions", "?")
+    fragments = snapshot.get("fragments", "?")
+    live = _format_bytes(snapshot.get("liveBytes"))
+    disk = _format_bytes(snapshot.get("onDiskBytes"))
+    return (
+        f"rows={rows} live={live} disk={disk} "
+        f"versions={versions} fragments={fragments}"
+    )
 
 
 def _parse_duration_seconds(raw: str) -> int | None:
@@ -4444,6 +4689,8 @@ def main() -> None:
         sys.exit(_cmd_codex_status(rest))
     elif cmd == "codex-extract":
         sys.exit(_cmd_codex_extract(rest))
+    elif cmd == "codex-curate":
+        sys.exit(_cmd_codex_curate(rest))
     elif cmd == "codex-recall":
         sys.exit(_cmd_codex_recall(rest))
     elif cmd == "codex-finalize":
