@@ -55,6 +55,10 @@
   (`--generate python|souffle|clingo`) are off the daemon path and meant for
   research/eval only.
 
+- **Ontology/lexicon eval scaffolding.** Added local lexicon bootstrap helpers
+  for WordNet/FrameNet resources and a micro-schema ontology router that can
+  cache/append ratification candidates for Fail18-style ambiguity probes.
+
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments
   without mutating by default. `simba memory compact --run --older-than 24h`
