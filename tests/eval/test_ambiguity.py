@@ -9,6 +9,7 @@ import simba.eval.ambiguity as ambiguity
 import simba.eval.ambiguity_backends as ambiguity_backends
 import simba.eval.ambiguity_codegen as ambiguity_codegen
 import simba.eval.ambiguity_fail18 as ambiguity_fail18
+import simba.eval.world_lexicon as world_lexicon
 
 FIXTURE = pathlib.Path("src/simba/eval/datasets/ambiguity.json")
 
@@ -151,6 +152,54 @@ def test_fail18_summary_parses_human_gold_answer_first(
     assert by_id["6d550036"].contains_gold is False
 
 
+def test_fail18_numeric_gold_prefers_earliest_human_number() -> None:
+    row = {
+        "gold_answer": (
+            "I have worked on or bought five model kits. The scales are: "
+            "Revell F-15 Eagle and 1/72 scale B-29 bomber."
+        ),
+        "gold_count": None,
+    }
+
+    assert ambiguity_fail18.numeric_gold(row) == 5
+
+
+def test_fail18_answer_type_router() -> None:
+    cases = {
+        "How many points do I need to earn to redeem a free skincare product?":
+            "threshold_lookup",
+        "How many musical instruments do I currently own?": "current_inventory",
+        "How many times did I bake something in the past two weeks?":
+            "temporal_event_count",
+        "How many model kits have I worked on or bought?":
+            "canonical_entity_count",
+        "How many projects have I led or am currently leading?":
+            "role_filtered_count",
+    }
+
+    for question, answer_type in cases.items():
+        classified = ambiguity_fail18.classify_answer_type({"question": question})
+        assert classified == answer_type
+
+
+def test_world_lexicon_resolves_typed_concepts_and_frames() -> None:
+    lexicon = world_lexicon.default_world_lexicon()
+
+    model_matches = {
+        match.concept_id
+        for match in lexicon.resolve_concepts("a 1/72 scale B-29 bomber")
+    }
+    instrument_matches = {
+        match.concept_id
+        for match in lexicon.resolve_concepts("my acoustic guitar")
+    }
+
+    assert "scale_model_kit" in model_matches
+    assert "musical_instrument" in instrument_matches
+    assert "working on" in lexicon.lexical_units_for_frame("worked_or_bought")
+    assert "led" in lexicon.lexical_units_for_frame("leadership_role")
+
+
 def test_local_fail18_fixture_shows_old_clingo_range_coverage() -> None:
     if not ambiguity_fail18.DEFAULT_MANIFEST.exists():
         pytest.skip("local clingo_fail18 fixture not present")
@@ -158,13 +207,39 @@ def test_local_fail18_fixture_shows_old_clingo_range_coverage() -> None:
 
     assert summary.total == 18
     assert summary.gold_known == 18
-    assert summary.contains_gold == 13
-    assert summary.misses_gold == 5
+    assert summary.contains_gold == 14
+    assert summary.misses_gold == 4
     by_id = {item.question_id: item for item in summary.results}
     assert by_id["60036106"].gold_numeric == 12000
     assert by_id["60036106"].contains_gold is True
     assert by_id["6d550036"].answer_space == {"lower": 12, "upper": 23}
     assert by_id["6d550036"].contains_gold is False
+    assert by_id["gpt4_59c863d7"].gold_numeric == 5
+    assert by_id["gpt4_59c863d7"].contains_gold is True
+
+
+def test_local_fail18_repair_lifts_remaining_misses() -> None:
+    if (
+        not ambiguity_fail18.DEFAULT_MANIFEST.exists()
+        or not ambiguity_fail18.DEFAULT_CORPUS.exists()
+    ):
+        pytest.skip("local clingo_fail18 fixtures not present")
+    summary = ambiguity_fail18.summarize(backend="python", repair=True)
+
+    assert summary.total == 18
+    assert summary.gold_known == 18
+    assert summary.contains_gold == 18
+    assert summary.misses_gold == 0
+    repaired = {
+        item.question_id: item
+        for item in summary.results
+        if item.repair_applied
+    }
+    assert repaired["6d550036"].answer_space == {"count": 2}
+    assert repaired["88432d0a"].answer_space == {"count": 4}
+    assert repaired["9ee3ecd6"].answer_space == {"count": 100}
+    assert repaired["gpt4_194be4b3"].answer_space == {"count": 4}
+    assert repaired["gpt4_59c863d7"].answer_space == {"count": 5}
 
 
 def test_codegen_prompt_requires_llm_to_write_executable_program() -> None:

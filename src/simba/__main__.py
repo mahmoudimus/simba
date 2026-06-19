@@ -3311,7 +3311,8 @@ def _eval_ambiguity(args: list[str]) -> int:
     Usage:
       simba eval ambiguity [--path PATH] [--backend python|souffle|clingo] [--json]
       simba eval ambiguity --generate python|souffle|clingo [--artifact-dir DIR]
-      simba eval ambiguity --fail18 [--path PATH] [--backend python|souffle|clingo]
+      simba eval ambiguity --fail18 [--repair] [--path PATH] [--corpus PATH]
+                           [--backend python|souffle|clingo]
     """
     import json as _json
 
@@ -3324,6 +3325,8 @@ def _eval_ambiguity(args: list[str]) -> int:
     backend = "python"
     as_json = False
     fail18 = False
+    repair = False
+    corpus = ""
     generate_language = ""
     artifact_dir = ""
     i = 0
@@ -3337,6 +3340,12 @@ def _eval_ambiguity(args: list[str]) -> int:
         elif args[i] == "--fail18":
             fail18 = True
             i += 1
+        elif args[i] == "--repair":
+            repair = True
+            i += 1
+        elif args[i] == "--corpus" and i + 1 < len(args):
+            corpus = args[i + 1]
+            i += 2
         elif args[i] == "--json":
             as_json = True
             i += 1
@@ -3350,8 +3359,8 @@ def _eval_ambiguity(args: list[str]) -> int:
             print(f"eval ambiguity: unknown option {args[i]!r}", file=sys.stderr)
             print(
                 "Usage: simba eval ambiguity [--fail18] [--path PATH] "
-                "[--backend python|souffle|clingo] [--generate LANGUAGE] "
-                "[--artifact-dir DIR] [--json]",
+                "[--corpus PATH] [--backend python|souffle|clingo] "
+                "[--repair] [--generate LANGUAGE] [--artifact-dir DIR] [--json]",
                 file=sys.stderr,
             )
             return 1
@@ -3367,12 +3376,18 @@ def _eval_ambiguity(args: list[str]) -> int:
             summary = ambiguity_fail18.summarize(
                 pathlib.Path(path) if path else ambiguity_fail18.DEFAULT_MANIFEST,
                 backend=backend,
+                repair=repair,
+                corpus_path=(
+                    pathlib.Path(corpus) if corpus else ambiguity_fail18.DEFAULT_CORPUS
+                ),
             )
             if as_json:
                 print(_json.dumps(summary.to_dict(), indent=2))
             else:
+                label = "repaired " if repair else ""
                 print(
-                    f"clingo_fail18 ambiguity range coverage ({summary.backend}): "
+                    f"clingo_fail18 {label}ambiguity range coverage "
+                    f"({summary.backend}): "
                     f"{summary.contains_gold}/{summary.gold_known} known gold "
                     f"inside range; misses={summary.misses_gold}; total={summary.total}"
                 )
@@ -3387,7 +3402,7 @@ def _eval_ambiguity(args: list[str]) -> int:
                     print(
                         f"  {mark:<4} {item.question_id} "
                         f"gold={item.gold_numeric} range={item.answer_space} "
-                        f"mode={item.failure_mode}"
+                        f"type={item.answer_type} mode={item.failure_mode}"
                     )
             return 0
 
