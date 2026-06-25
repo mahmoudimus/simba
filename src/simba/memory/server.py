@@ -35,6 +35,15 @@ _DEFAULT_DB_DIR = ".simba/memory"
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     """Manage startup/shutdown for the memory daemon."""
+    # Tag this process so loopback /recall calls (run_hook → dispatch → recall)
+    # are attributed to "daemon", not conflated with real CLI traffic. Forced
+    # (not setdefault): the daemon may be spawned by a SessionStart hook that
+    # already exported SIMBA_CLIENT — the daemon's own identity is always
+    # "daemon". Only the real server boots the lifespan; tests pass
+    # create_app(use_lifespan=False).
+    import os
+
+    os.environ["SIMBA_CLIENT"] = "daemon"
     await init_database(app)
     await init_embeddings(app)
     sync_task = await _start_sync_scheduler(app)
@@ -161,9 +170,7 @@ def _cached_query_embedder(
         hit = cache.get(model_id, "search_query", text)
         if hit is not None:
             return hit
-        vector = await service.embed(
-            text, task=simba.memory.embeddings.TaskType.QUERY
-        )
+        vector = await service.embed(text, task=simba.memory.embeddings.TaskType.QUERY)
         cache.put(model_id, "search_query", text, vector)
         return vector
 

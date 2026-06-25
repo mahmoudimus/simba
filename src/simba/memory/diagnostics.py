@@ -24,10 +24,15 @@ class DiagnosticsTracker:
         self._reservoir_size = reservoir_size
         self.last_error: dict[str, str] | None = None
         self._latency_samples: dict[str, list[float]] = collections.defaultdict(list)
+        # Cumulative client tallies survive report resets (like _total_requests)
+        # so /stats can show an all-time breakdown; _client_hits is the rolling
+        # per-interval window that feeds the periodic log report.
+        self._client_hits_total: dict[str, int] = collections.defaultdict(int)
         self._reset()
 
     def _reset(self) -> None:
         self._endpoint_hits: dict[str, int] = collections.defaultdict(int)
+        self._client_hits: dict[str, int] = collections.defaultdict(int)
         self._recall_total = 0
         self._recall_successful = 0
         self._recall_empty = 0
@@ -40,6 +45,15 @@ class DiagnosticsTracker:
         """Record a hit to any endpoint."""
         self._endpoint_hits[endpoint] += 1
         self._total_requests += 1
+
+    def record_client(self, client: str) -> None:
+        """Record a hit attributed to a named client (``X-Simba-Client``)."""
+        self._client_hits[client] += 1
+        self._client_hits_total[client] += 1
+
+    def client_hits(self) -> dict[str, int]:
+        """Cumulative all-time hits per client (a copy; safe to mutate)."""
+        return dict(self._client_hits_total)
 
     def record_latency(self, endpoint: str, latency_ms: float) -> None:
         """Record a latency sample, evicting the oldest when at capacity."""
@@ -113,6 +127,12 @@ class DiagnosticsTracker:
         ]
         for ep, count in sorted(self._endpoint_hits.items()):
             lines.append(f"  {ep:<25s} {count:>5d}")
+
+        if self._client_hits:
+            lines.append("")
+            lines.append("Client hits:")
+            for c, count in sorted(self._client_hits.items()):
+                lines.append(f"  {c:<25s} {count:>5d}")
 
         lines.append("")
         lines.append(

@@ -6,7 +6,73 @@ import json
 import os
 import pathlib
 
+import pytest
+
 import simba.__main__ as cli
+
+
+class TestResolveHookClient:
+    """`simba hook <event> [--client X]` splits the flag and resolves a name."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in (
+            "SIMBA_CLIENT",
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CODEX_SANDBOX",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_explicit_flag(self) -> None:
+        args, client = cli._resolve_hook_client(
+            ["UserPromptSubmit", "--client", "codex"]
+        )
+        assert args == ["UserPromptSubmit"]
+        assert client == "codex"
+
+    def test_equals_form(self) -> None:
+        args, client = cli._resolve_hook_client(["PreToolUse", "--client=codex"])
+        assert args == ["PreToolUse"]
+        assert client == "codex"
+
+    def test_default_is_claude_code(self) -> None:
+        args, client = cli._resolve_hook_client(["SessionStart"])
+        assert args == ["SessionStart"]
+        assert client == "claude-code"
+
+    def test_env_marker_codex_without_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
+        _args, client = cli._resolve_hook_client(["SessionStart"])
+        assert client == "codex"
+
+
+class TestHookConfigClientTag:
+    """Generated Codex hooks self-identify as `codex`; Claude stays default."""
+
+    def test_codex_commands_carry_client_flag(self) -> None:
+        cfg = cli._build_codex_hooks_config()
+        cmds = [
+            h["command"]
+            for entries in cfg["hooks"].values()
+            for entry in entries
+            for h in entry["hooks"]
+        ]
+        assert cmds, "expected at least one codex hook command"
+        assert all(c.endswith(" --client codex") for c in cmds)
+
+    def test_claude_commands_have_no_client_flag(self) -> None:
+        cfg = cli._build_hooks_config()
+        cmds = [
+            h["command"]
+            for entries in cfg.values()
+            for entry in entries
+            for h in entry["hooks"]
+        ]
+        assert cmds
+        assert all("--client" not in c for c in cmds)
 
 
 def _write_codex_session(
@@ -490,8 +556,7 @@ def test_cmd_codex_extract_run_keeps_pending_on_store_error(
     assert "errors=1" in out
     trace_file = next(trace_dir.glob("*.jsonl"))
     events = [
-        json.loads(line)
-        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()
     ]
     negative = next(event for event in events if event["event"] == "negative_lesson")
     assert negative["payload"] == {
@@ -826,7 +891,7 @@ def test_cmd_codex_recall_prints_memories(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         simba.hooks._memory_client,
         "recall_memories",
-        lambda query, project_path=None: [
+        lambda query, project_path=None, **kwargs: [
             {"type": "PATTERN", "similarity": 0.91, "content": "Use uv run for CLI"}
         ],
     )

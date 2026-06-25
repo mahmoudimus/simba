@@ -13,6 +13,19 @@ def _pi_home(tmp_path, monkeypatch) -> pathlib.Path:
     return home
 
 
+def test_pi_bridge_self_identifies_as_pi_client() -> None:
+    """The bundled pi extension stamps the pi client on both transports."""
+    import importlib.resources
+
+    src = (
+        importlib.resources.files("simba") / "pi" / "extension" / "simba.ts"
+    ).read_text()
+    # Direct daemon fetch carries the header.
+    assert '"x-simba-client": "pi"' in src
+    # CLI fallback exports the env marker so downstream calls match.
+    assert 'SIMBA_CLIENT: "pi"' in src
+
+
 def test_pi_install_writes_extension_and_registers(tmp_path, monkeypatch):
     home = _pi_home(tmp_path, monkeypatch)
     rc = cli._cmd_pi_install([])

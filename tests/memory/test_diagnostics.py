@@ -23,6 +23,51 @@ class TestDiagnosticsTracker:
         assert tracker._endpoint_hits["POST /recall"] == 1
         assert tracker._endpoint_hits["POST /store"] == 1
 
+    def test_record_client_counts_by_name(self) -> None:
+        tracker = DiagnosticsTracker()
+        tracker.record_client("claude-code")
+        tracker.record_client("claude-code")
+        tracker.record_client("pi")
+        assert tracker._client_hits["claude-code"] == 2
+        assert tracker._client_hits["pi"] == 1
+
+    def test_client_hits_in_report(self) -> None:
+        tracker = DiagnosticsTracker()
+        tracker.record_client("pi")
+        tracker.record_client("codex")
+        import asyncio
+
+        with (
+            patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)),
+            patch.object(logging.getLogger("simba.memory"), "info") as mock_info,
+        ):
+            asyncio.run(tracker.emit_report(table=None))
+        report = "\n".join(str(c.args[0]) for c in mock_info.call_args_list)
+        assert "Client hits:" in report
+        assert "pi" in report
+        assert "codex" in report
+
+    def test_client_hits_cumulative_survives_report_reset(self) -> None:
+        tracker = DiagnosticsTracker()
+        tracker.record_client("pi")
+        tracker.record_client("pi")
+        with patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)):
+            import asyncio
+
+            asyncio.run(tracker.emit_report(table=None))
+        # Per-interval window reset, but the cumulative view for /stats persists.
+        assert tracker._client_hits == {}
+        assert tracker.client_hits() == {"pi": 2}
+        tracker.record_client("pi")
+        assert tracker.client_hits() == {"pi": 3}
+
+    def test_client_hits_returns_copy(self) -> None:
+        tracker = DiagnosticsTracker()
+        tracker.record_client("cli")
+        snapshot = tracker.client_hits()
+        snapshot["cli"] = 999
+        assert tracker.client_hits() == {"cli": 1}
+
     def test_record_recall_successful(self) -> None:
         tracker = DiagnosticsTracker()
         tracker.record_recall("test query", 3)

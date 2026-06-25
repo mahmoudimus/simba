@@ -28,6 +28,17 @@ def daemon_url() -> str:
     return f"http://{cfg.daemon_host}:{cfg.daemon_port}"
 
 
+def _client_headers(client: str | None = None) -> dict[str, str]:
+    """Outbound ``X-Simba-Client`` header for daemon attribution.
+
+    Defaults to ``cli``; runtime markers (e.g. ``CLAUDECODE`` during a Claude
+    Code hook) upgrade it automatically. Callers with a known runtime pass it.
+    """
+    import simba.harness.client
+
+    return simba.harness.client.client_headers(client)
+
+
 def project_scope_chain(cwd: str) -> list[str]:
     """Resolved ancestor-prefix scope chain for ``cwd`` (spec 26).
 
@@ -75,6 +86,7 @@ def recall_memories(
     min_similarity: float | None = None,
     max_results: int | None = None,
     filters: dict | None = None,
+    client: str | None = None,
 ) -> list[dict]:
     """Query the memory daemon for relevant memories.
 
@@ -112,7 +124,12 @@ def recall_memories(
         payload["filters"] = filters
 
     try:
-        resp = httpx.post(url, json=payload, timeout=cfg.default_timeout)
+        resp = httpx.post(
+            url,
+            json=payload,
+            timeout=cfg.default_timeout,
+            headers=_client_headers(client),
+        )
         if resp.status_code == 200:
             return resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):
@@ -131,7 +148,12 @@ def embed_text(text: str) -> list[float]:
     cfg = _get_cfg()
     url = f"{daemon_url()}/embed"
     try:
-        resp = httpx.post(url, json={"text": text}, timeout=cfg.default_timeout)
+        resp = httpx.post(
+            url,
+            json={"text": text},
+            timeout=cfg.default_timeout,
+            headers=_client_headers(),
+        )
         if resp.status_code == 200:
             vec = resp.json().get("embedding", [])
             return vec if isinstance(vec, list) else []
@@ -158,7 +180,12 @@ def count_memories(
     if project_path:
         params["projectPath"] = project_path
     try:
-        resp = httpx.get(url, params=params, timeout=cfg.default_timeout)
+        resp = httpx.get(
+            url,
+            params=params,
+            timeout=cfg.default_timeout,
+            headers=_client_headers(),
+        )
         if resp.status_code == 200:
             return int(resp.json().get("total", 0))
     except (httpx.HTTPError, ValueError, TypeError):
@@ -191,7 +218,12 @@ def store_memory(
     payload["confidence"] = confidence
 
     try:
-        resp = httpx.post(url, json=payload, timeout=cfg.default_timeout)
+        resp = httpx.post(
+            url,
+            json=payload,
+            timeout=cfg.default_timeout,
+            headers=_client_headers(),
+        )
         if resp.status_code == 200:
             return resp.json()
     except (httpx.HTTPError, ValueError):

@@ -527,7 +527,7 @@ class TestMemoryClientFilters:
             def json(self):
                 return {"memories": []}
 
-        def fake_post(url, json=None, timeout=None):
+        def fake_post(url, json=None, timeout=None, **kwargs):
             sent_payloads.append(json)
             return FakeResp()
 
@@ -567,7 +567,7 @@ class TestMemoryClientFilters:
             def json(self):
                 return {"memories": []}
 
-        def fake_post(url, json=None, timeout=None):
+        def fake_post(url, json=None, timeout=None, **kwargs):
             sent_payloads.append(json)
             return FakeResp()
 
@@ -608,7 +608,7 @@ class TestMemoryClientStore:
             def json(self):
                 return {"status": "stored", "id": "mem_test"}
 
-        def fake_post(url, json=None, timeout=None):
+        def fake_post(url, json=None, timeout=None, **kwargs):
             sent_payloads.append((url, json))
             return FakeResp()
 
@@ -667,7 +667,7 @@ class TestMemoryClientCount:
             def json(self):
                 return {"total": 3, "memories": []}
 
-        def fake_get(url, params=None, timeout=None):
+        def fake_get(url, params=None, timeout=None, **kwargs):
             captured["url"] = url
             captured["params"] = params
             return FakeResp()

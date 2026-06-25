@@ -238,7 +238,9 @@ def _build_codex_hooks_config() -> dict:
             "hooks": [
                 {
                     "type": "command",
-                    "command": f"simba hook {event}",
+                    # --client codex so the daemon attributes Codex traffic
+                    # deterministically (no reliable Codex env marker at hook time).
+                    "command": f"simba hook {event} --client codex",
                     "timeout": timeout_s,
                 }
             ]
@@ -1274,10 +1276,7 @@ def _cmd_codex_curate_review(args: list[str]) -> int:
     commands = curator.memory_store_commands(report, decisions)
     if "--commands-only" not in rest:
         print(f"[codex] curator review: {written} decisions={len(decisions)}")
-        print(
-            "[codex] accepted promotion commands: "
-            f"{len(commands)} (not executed)"
-        )
+        print(f"[codex] accepted promotion commands: {len(commands)} (not executed)")
     for command in commands:
         print(command)
     return 0
@@ -1331,6 +1330,7 @@ def _cmd_codex_recall(args: list[str]) -> int:
     memories = simba.hooks._memory_client.recall_memories(
         query,
         project_path=str(pathlib.Path.cwd()),
+        client="codex",
     )
     if not memories:
         print("[codex] recall: no memories")
@@ -1429,12 +1429,18 @@ def _hook_via_daemon(
     """
     import httpx
 
+    import simba.harness.client
     import simba.harness.core
     import simba.hooks._memory_client
 
     url = f"{simba.hooks._memory_client.daemon_url()}/hook/{event}"
     try:
-        resp = httpx.post(url, json=payload, timeout=3.0)
+        resp = httpx.post(
+            url,
+            json=payload,
+            timeout=3.0,
+            headers=simba.harness.client.client_headers(),
+        )
         if resp.status_code == 200:
             b = resp.json()
             return simba.harness.core.CanonicalResult(
@@ -1561,8 +1567,45 @@ def _cmd_pi_install(args: list[str]) -> int:
     return 0
 
 
+def _resolve_hook_client(args: list[str]) -> tuple[list[str], str]:
+    """Split a ``--client NAME`` (or ``--client=NAME``) flag out of ``args``.
+
+    Returns ``(positional_args_without_flag, resolved_client_name)``. The client
+    name follows ``simba.harness.client.detect_client`` precedence, defaulting to
+    ``claude-code`` (the primary caller of ``simba hook``). Codex's generated
+    hooks pass ``--client codex`` so they self-identify deterministically.
+    """
+    import simba.harness.client
+
+    client_flag: str | None = None
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--client":
+            client_flag = args[i + 1] if i + 1 < len(args) else None
+            i += 2
+            continue
+        if a.startswith("--client="):
+            client_flag = a.split("=", 1)[1]
+            i += 1
+            continue
+        positional.append(a)
+        i += 1
+    resolved = simba.harness.client.detect_client(
+        client_flag, default=simba.harness.client.CLAUDE_CODE
+    )
+    return positional, resolved
+
+
 def _cmd_hook(args: list[str]) -> int:
-    """Dispatch a hook event. Called by Claude Code, not users."""
+    """Dispatch a hook event. Called by Claude Code / Codex, not users."""
+    # Resolve client identity once, then export it so BOTH the daemon path
+    # (X-Simba-Client header) and the inline fallback (recall via _memory_client)
+    # attribute this process consistently.
+    args, client = _resolve_hook_client(args)
+    os.environ["SIMBA_CLIENT"] = client
+
     if not args:
         print("Usage: simba hook <event>", file=sys.stderr)
         print(f"Events: {', '.join(_HOOK_EVENTS)}", file=sys.stderr)
@@ -1956,8 +1999,7 @@ def _memory_store(args: list[str]) -> int:
         print(f"stored: {body.get('id', '?')}")
     elif status == "superseded":
         print(
-            f"superseded: old={body.get('supersededId', '?')} "
-            f"new={body.get('id', '?')}"
+            f"superseded: old={body.get('supersededId', '?')} new={body.get('id', '?')}"
         )
     elif status == "pending_confirmation":
         print(
@@ -2194,9 +2236,7 @@ def _memory_supersession(args: list[str]) -> int:
         try:
             with simba.db.connect(pathlib.Path.cwd()):
                 if args[0] == "confirm":
-                    row = simba.memory.supersession.confirm(
-                        audit_id, now=time.time()
-                    )
+                    row = simba.memory.supersession.confirm(audit_id, now=time.time())
                 else:
                     row = simba.memory.supersession.reject(audit_id, now=time.time())
         except (KeyError, ValueError) as exc:
@@ -2268,8 +2308,7 @@ def _memory_compact_snapshot(snapshot: dict) -> str:
     live = _format_bytes(snapshot.get("liveBytes"))
     disk = _format_bytes(snapshot.get("onDiskBytes"))
     return (
-        f"rows={rows} live={live} disk={disk} "
-        f"versions={versions} fragments={fragments}"
+        f"rows={rows} live={live} disk={disk} versions={versions} fragments={fragments}"
     )
 
 
@@ -3434,10 +3473,7 @@ def _eval_ambiguity(args: list[str]) -> int:
         case_path = (
             pathlib.Path(path)
             if path
-            else pathlib.Path(__file__).parent
-            / "eval"
-            / "datasets"
-            / "ambiguity.json"
+            else pathlib.Path(__file__).parent / "eval" / "datasets" / "ambiguity.json"
         )
         if generate_language:
             generated = []
@@ -3856,9 +3892,7 @@ def _eval_bench(args: list[str]) -> int:
         )
         readback_report = None
     if compare_readback and readback_report is None:
-        readback_report = subtlememory.compare_readback_ceiling(
-            recall_report, datasets
-        )
+        readback_report = subtlememory.compare_readback_ceiling(recall_report, datasets)
 
     qa_report = None
     if run_qa_flag:

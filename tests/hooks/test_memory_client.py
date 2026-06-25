@@ -4,7 +4,60 @@ from __future__ import annotations
 
 import unittest.mock
 
+import pytest
+
 import simba.hooks._memory_client
+from simba.harness.client import CLIENT_HEADER
+
+
+class TestClientHeader:
+    """Every daemon call carries the X-Simba-Client header."""
+
+    def _ok(self) -> unittest.mock.MagicMock:
+        resp = unittest.mock.MagicMock(status_code=200)
+        resp.json.return_value = {"memories": []}
+        return resp
+
+    def test_recall_sends_detected_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        with unittest.mock.patch("httpx.post", return_value=self._ok()) as mock_post:
+            simba.hooks._memory_client.recall_memories("q")
+        assert mock_post.call_args.kwargs["headers"][CLIENT_HEADER] == "claude-code"
+
+    def test_recall_explicit_client_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        with unittest.mock.patch("httpx.post", return_value=self._ok()) as mock_post:
+            simba.hooks._memory_client.recall_memories("q", client="codex")
+        assert mock_post.call_args.kwargs["headers"][CLIENT_HEADER] == "codex"
+
+    def test_loopback_recall_nests_origin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Inside the daemon (SIMBA_CLIENT=daemon) with an inbound origin set, a
+        # loopback recall self-identifies as "<origin>.daemon".
+        import simba.harness.client as hc
+
+        monkeypatch.setenv("SIMBA_CLIENT", hc.DAEMON)
+        token = hc.set_origin_client("claude-code")
+        try:
+            with unittest.mock.patch(
+                "httpx.post", return_value=self._ok()
+            ) as mock_post:
+                simba.hooks._memory_client.recall_memories("q")
+            sent = mock_post.call_args.kwargs["headers"][CLIENT_HEADER]
+            assert sent == "claude-code.daemon"
+        finally:
+            hc.reset_origin_client(token)
+
+    def test_embed_sends_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "pi")
+        resp = unittest.mock.MagicMock(status_code=200)
+        resp.json.return_value = {"embedding": [0.0]}
+        with unittest.mock.patch("httpx.post", return_value=resp) as mock_post:
+            simba.hooks._memory_client.embed_text("hello")
+        assert mock_post.call_args.kwargs["headers"][CLIENT_HEADER] == "pi"
 
 
 class TestDaemonUrl:

@@ -21,6 +21,7 @@ import starlette.middleware.base
 import starlette.requests
 import starlette.responses
 
+import simba.harness.client
 import simba.harness.core
 import simba.memory.anticipated
 import simba.memory.conflict
@@ -489,6 +490,10 @@ class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
         diag = getattr(request.app.state, "diagnostics", None)
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         request.state.request_id = request_id
+        # Client identity (X-Simba-Client): set before call_next so route
+        # handlers can read it; "unknown" when a caller omits the header.
+        client = request.headers.get("x-simba-client") or "unknown"
+        request.state.client = client
         t0 = time.monotonic()
         try:
             response = await call_next(request)
@@ -499,6 +504,7 @@ class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
         response.headers["x-simba-request-id"] = request_id
         if diag is not None:
             diag.record_request(request.url.path)
+            diag.record_client(client)
             diag.record_latency(request.url.path, (time.monotonic() - t0) * 1000)
             if diag.should_report():
                 table = getattr(request.app.state, "table", None)
@@ -656,9 +662,7 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
                 )
                 margin = float(getattr(config, "supersede_trust_margin", 0.05))
                 if new_trust_score + margin < old_trust_score:
-                    supersession_status = (
-                        simba.memory.supersession.STATUS_PENDING
-                    )
+                    supersession_status = simba.memory.supersession.STATUS_PENDING
 
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -994,8 +998,9 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     query_time_ms = int((time.time() - start_time) * 1000)
     top_sim = round(results[0]["similarity"], 2) if results else 0.0
     logger.info(
-        '[recall] project=%s mode=%s floor=%.2f query="%s" '
+        '[recall] client=%s project=%s mode=%s floor=%.2f query="%s" '
         "-> %d memories (%dms), top: %.2f",
+        getattr(request.state, "client", "unknown"),
         body.project_path or "(global)",
         mode,
         min_sim,
@@ -1135,9 +1140,7 @@ async def health(request: fastapi.Request) -> dict:
     db_path = getattr(request.app.state, "db_path", None)
     if db_path and pathlib.Path(db_path).is_dir():
         total = sum(
-            f.stat().st_size
-            for f in pathlib.Path(db_path).rglob("*")
-            if f.is_file()
+            f.stat().st_size for f in pathlib.Path(db_path).rglob("*") if f.is_file()
         )
         db_size = f"{total / 1024 / 1024:.2f}MB"
 
@@ -1182,9 +1185,7 @@ async def health(request: fastapi.Request) -> dict:
             "mode": "http" if config.embed_url else config.embed_provider,
         },
         "reranker": {
-            "mode": (
-                config.reranker_mode if config.llm_rerank_enabled else "none"
-            ),
+            "mode": (config.reranker_mode if config.llm_rerank_enabled else "none"),
             "intent_gating": config.rerank_intent_gating,
             "async_mode": config.llm_rerank_mode,
         },
@@ -1258,12 +1259,16 @@ async def stats(request: fastapi.Request) -> dict:
                 newest = created
 
     total = len(all_memories)
+    diag = getattr(request.app.state, "diagnostics", None)
+    client_hits = diag.client_hits() if diag is not None else {}
     return {
         "total": total,
         "byType": by_type,
         "avgConfidence": round(total_confidence / total, 2) if total > 0 else 0,
         "oldestMemory": oldest,
         "newestMemory": newest,
+        # Cumulative per-client request counts (X-Simba-Client attribution).
+        "clientHits": client_hits,
     }
 
 
@@ -1559,6 +1564,11 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
                 payload = parsed
         except (json.JSONDecodeError, ValueError):
             payload = {}
+    # Expose the inbound client as the request origin so a loopback /recall
+    # (dispatch → recall_memories) nests as "<origin>.daemon". Contextvars are
+    # copied into the threadpool, so the sync dispatch path inherits it.
+    origin = request.headers.get("x-simba-client")
+    token = simba.harness.client.set_origin_client(origin)
     try:
         result = await fastapi.concurrency.run_in_threadpool(
             simba.harness.core.dispatch, event, payload
@@ -1567,6 +1577,8 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
         raise fastapi.HTTPException(
             status_code=404, detail=f"unknown hook event: {event}"
         ) from None
+    finally:
+        simba.harness.client.reset_origin_client(token)
     return {
         "additional_context": result.additional_context,
         "suppress_output": result.suppress_output,

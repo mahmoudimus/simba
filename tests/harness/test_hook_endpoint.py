@@ -29,6 +29,29 @@ def test_hook_endpoint_empty_body_ok():
     assert resp.status_code == 200
 
 
+def test_hook_sets_origin_client_from_header(monkeypatch):
+    """run_hook exposes the inbound X-Simba-Client as the origin during dispatch."""
+    import simba.harness.client as hc
+    import simba.harness.core
+
+    captured: dict = {}
+
+    def fake_dispatch(event, payload):
+        captured["origin"] = hc.get_origin_client()
+        return simba.harness.core.CanonicalResult(additional_context="ok")
+
+    monkeypatch.setattr(simba.harness.core, "dispatch", fake_dispatch)
+    resp = _client().post(
+        "/hook/prompt_submit",
+        json={"prompt": "", "cwd": "/tmp"},
+        headers={"x-simba-client": "claude-code"},
+    )
+    assert resp.status_code == 200
+    assert captured["origin"] == "claude-code"
+    # And it is reset afterward (no leak into the next request's context).
+    assert hc.get_origin_client() is None
+
+
 def test_hook_endpoint_unknown_event_404():
     resp = _client().post("/hook/bogus", json={})
     assert resp.status_code == 404

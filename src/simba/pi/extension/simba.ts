@@ -116,7 +116,12 @@ function lastAssistantReasoning(sessionManager: { getBranch(): unknown[] }): str
 
 function viaCli(event: string, payload: Record<string, unknown>): Promise<Canonical> {
   return new Promise((resolve) => {
-    const child = spawn("simba", ["hook-canonical", event], { stdio: ["pipe", "pipe", "ignore"] });
+    // SIMBA_CLIENT=pi so the CLI fallback (and any daemon call it makes)
+    // attributes this traffic to pi, matching the direct-fetch header.
+    const child = spawn("simba", ["hook-canonical", event], {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: { ...process.env, SIMBA_CLIENT: "pi" },
+    });
     let out = "";
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.on("close", () => {
@@ -135,7 +140,7 @@ async function callSimba(event: string, payload: Record<string, unknown>): Promi
   try {
     const resp = await fetch(`${DAEMON}/hook/${event}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-simba-client": "pi" },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(3000),
     });
