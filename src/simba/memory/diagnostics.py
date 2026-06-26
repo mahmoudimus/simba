@@ -18,10 +18,18 @@ class DiagnosticsTracker:
     report resets so percentiles reflect a stable window.
     """
 
-    def __init__(self, report_interval: int = 50, reservoir_size: int = 1000) -> None:
+    def __init__(
+        self,
+        report_interval: int = 50,
+        reservoir_size: int = 1000,
+        compact_cleanup_seconds: int = 0,
+    ) -> None:
         self.report_interval = report_interval
         self._total_requests = 0
         self._reservoir_size = reservoir_size
+        # Version-retention window for the periodic auto-compaction (0 = never
+        # prune). Passed as optimize()'s cleanup_older_than so versions self-bound.
+        self._compact_cleanup_seconds = compact_cleanup_seconds
         self.last_error: dict[str, str] | None = None
         self._latency_samples: dict[str, list[float]] = collections.defaultdict(list)
         # Cumulative client tallies survive report resets (like _total_requests)
@@ -111,13 +119,23 @@ class DiagnosticsTracker:
 
     async def emit_report(self, table: object = None) -> None:
         """Print diagnostics summary and reset counters."""
+        import datetime
+
         import simba.memory.vector_db
 
         memory_count = 0
         if table is not None:
             memory_count = await simba.memory.vector_db.count_rows(table)
-            # Compact fragments to keep vector search fast.
-            await simba.memory.vector_db.compact_table(table)
+            # Compact fragments AND prune old versions so the table self-bounds
+            # (None retention = merge-only, the legacy 37GB-bloat behavior).
+            cleanup = (
+                datetime.timedelta(seconds=self._compact_cleanup_seconds)
+                if self._compact_cleanup_seconds > 0
+                else None
+            )
+            await simba.memory.vector_db.compact_table(
+                table, cleanup_older_than=cleanup
+            )
 
         lines = [
             "=" * 60,

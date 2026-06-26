@@ -47,6 +47,37 @@ class TestDiagnosticsTracker:
         assert "pi" in report
         assert "codex" in report
 
+    def test_emit_report_prunes_versions_with_retention(self) -> None:
+        import asyncio
+        import datetime
+
+        tracker = DiagnosticsTracker(compact_cleanup_seconds=3600)
+        with (
+            patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)),
+            patch(
+                "simba.memory.vector_db.compact_table", new=AsyncMock()
+            ) as mock_compact,
+            patch.object(logging.getLogger("simba.memory"), "info"),
+        ):
+            asyncio.run(tracker.emit_report(table=object()))
+        assert mock_compact.call_args.kwargs.get(
+            "cleanup_older_than"
+        ) == datetime.timedelta(seconds=3600)
+
+    def test_emit_report_no_retention_when_zero(self) -> None:
+        import asyncio
+
+        tracker = DiagnosticsTracker(compact_cleanup_seconds=0)
+        with (
+            patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)),
+            patch(
+                "simba.memory.vector_db.compact_table", new=AsyncMock()
+            ) as mock_compact,
+            patch.object(logging.getLogger("simba.memory"), "info"),
+        ):
+            asyncio.run(tracker.emit_report(table=object()))
+        assert mock_compact.call_args.kwargs.get("cleanup_older_than") is None
+
     def test_client_hits_cumulative_survives_report_reset(self) -> None:
         tracker = DiagnosticsTracker()
         tracker.record_client("pi")

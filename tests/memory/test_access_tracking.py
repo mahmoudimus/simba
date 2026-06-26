@@ -47,6 +47,86 @@ async def _drain_background_tasks(timeout: float = 2.0) -> None:
         await asyncio.wait(pending, timeout=timeout)
 
 
+@pytest.fixture
+def memory_config():
+    """Override conftest's config to ENABLE the LanceDB access-tracking write.
+
+    The write is default-OFF in production (redundant with the sqlite usage
+    sidecar; it generated per-recall LanceDB versions). These tests exercise the
+    write itself, so they opt in. The gate is verified separately below.
+    """
+    import simba.memory.config
+
+    return simba.memory.config.MemoryConfig(
+        max_content_length=200,
+        duplicate_threshold=0.92,
+        access_tracking_lancedb_enabled=True,
+    )
+
+
+class TestAccessTrackingGate:
+    """The LanceDB access-tracking write is gated; default-OFF skips it."""
+
+    async def _build_app(self, tmp_path, lance_table, mock_embed, *, enabled: bool):
+        import httpx
+
+        import simba.memory.config
+        import simba.memory.fts
+        import simba.memory.server
+
+        cfg = simba.memory.config.MemoryConfig(
+            max_content_length=200,
+            duplicate_threshold=0.92,
+            access_tracking_lancedb_enabled=enabled,
+        )
+        app = simba.memory.server.create_app(cfg)
+        app.state.table = lance_table
+        app.state.embed = mock_embed
+        app.state.embed_query = mock_embed
+        app.state.db_path = None
+        app.state.cwd = tmp_path
+        fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
+        simba.memory.fts.init(fts_path, tokenize=cfg.fts_tokenize)
+        app.state.fts_path = str(fts_path)
+        return app, httpx.ASGITransport(app=app)
+
+    @pytest.mark.asyncio
+    async def test_disabled_skips_lancedb_write(
+        self, tmp_path, lance_table, mock_embed, monkeypatch
+    ) -> None:
+        import httpx
+
+        await lance_table.add([_make_memory("mem_off")])
+        called = unittest.mock.AsyncMock()
+        monkeypatch.setattr(simba.memory.vector_db, "update_access_tracking", called)
+        _app, transport = await self._build_app(
+            tmp_path, lance_table, mock_embed, enabled=False
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post("/recall", json={"query": "x"})
+        assert resp.status_code == 200
+        await _drain_background_tasks()
+        called.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enabled_does_lancedb_write(
+        self, tmp_path, lance_table, mock_embed, monkeypatch
+    ) -> None:
+        import httpx
+
+        await lance_table.add([_make_memory("mem_on")])
+        called = unittest.mock.AsyncMock()
+        monkeypatch.setattr(simba.memory.vector_db, "update_access_tracking", called)
+        _app, transport = await self._build_app(
+            tmp_path, lance_table, mock_embed, enabled=True
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post("/recall", json={"query": "x"})
+        assert resp.status_code == 200
+        await _drain_background_tasks()
+        called.assert_called_once()
+
+
 class TestAccessTracking:
     """Verify that recalling memories updates lastAccessedAt and accessCount."""
 
