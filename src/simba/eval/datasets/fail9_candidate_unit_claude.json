@@ -1,0 +1,804 @@
+{
+  "name": "fail9-candidate-unit-claude",
+  "description": "Recorded Claude -p outputs for the generic candidate-unit action IR prompt on the nine fail18 cases discussed during the semantic graph eval loop.",
+  "source_fixture": ".simba/fixtures/clingo_fail18_corpus.json",
+  "prompt_version": "generic_action_ir_v3_candidate_audit",
+  "tool": "claude -p",
+  "generated_at": "2026-06-18T22:00:00-07:00",
+  "compiler_contract": [
+    "Return exactly one strict JSON object for the input id. No markdown.",
+    "Treat evidence as authoritative scenario memory. Do not reject entities, events, products, or claims merely because they seem fictional, unfamiliar, or unsupported by outside knowledge.",
+    "Use only the evidence text plus ordinary language/type knowledge. Do not use web knowledge or plausibility checks.",
+    "First determine answer_variable: entity | action_obligation | event | semantic_type | scalar_value | duration.",
+    "Then determine individuation_policy: canonical_entity | action_obligation | event_instance | semantic_type | scalar_value | duration_sum.",
+    "Represent direct propositions using action(subject, object, verb). Use subject=user for the human whose memory is being queried.",
+    "Also emit typed facts when needed: event(event_id,event_type), participant(event_id,role,entity), attribute(node,key,value), isa(node,type), same_entity(a,b), duration(node,unit,value), time(node,value), provenance(fact_id,session_id,span).",
+    "Before computing the answer, build candidate_units: every plausible answer unit from every evidence session, with included|excluded|merged status and a terse reason.",
+    "If a relevant entity/event/artifact lacks a precise name, create a skolem object id from its supported description and provenance instead of dropping it.",
+    "Normalize recursively: normalized_action(S,O,V2) from action + verb_alias; typed_object(O,T2) from isa + subtype; canonical_object(O2) from same_entity chains.",
+    "Infer action satisfaction by meaning, not surface wording: evidence may satisfy a requested action predicate through synonyms, entailments, or result states.",
+    "If text establishes the user now possesses, controls, received, has, or added an object, that can satisfy an acquired/obtained predicate unless evidence says borrowed, rented, temporary, canceled, or not theirs.",
+    "If the question asks for an artifact kind, include physical/digital realizations of that artifact kind. A format/container descriptor does not exclude the object if ordinary type knowledge says it realizes the requested kind.",
+    "Choose the answer variable from the question, then aggregate only included candidate_units of that variable. Count answer units, not sentence mentions.",
+    "Merge mentions only when the selected individuation_policy says they are the same answer unit. Do not merge two different answer units just because they refer to related real-world objects.",
+    "For action_obligation policy, do not merge obligations merely because they involve related or exchanged objects; merge only if they are the same required action on the same obligation target.",
+    "For event_instance policy, people, roles, locations, and themes are attributes used for coreference and deduplication; they are not themselves counted unless the question asks for them.",
+    "For cross-session event coreference, default to same_entity when two event mentions share compatible event type plus a distinctive participant name or distinctive description, unless evidence explicitly says they are separate occasions.",
+    "A changed relationship label alone is not explicit evidence of a separate event; relationship labels can be noisy attributes.",
+    "For semantic_type policy, count distinct kinds/classes after normalizing subtypes and aliases, not mentions or containers.",
+    "For duration_sum policy, sum numeric durations over matching events/entities and preserve units.",
+    "Count only facts asserted about the user/history/state relevant to the question. Do not count assistant advice, recommendations, hypothetical examples, future plans, or generic possibilities unless the question explicitly asks for them.",
+    "Scan every evidence session for answer-bearing facts before finalizing. Multi-session questions often need one fact from each session."
+  ],
+  "score": {
+    "matches": 9,
+    "total": 9
+  },
+  "cases": [
+    {
+      "id": "0a995998",
+      "answer_variable": "entity",
+      "individuation_policy": "canonical_entity",
+      "candidate_units": [
+        {
+          "unit_id": "navy_blue_blazer",
+          "status": "included",
+          "merge_target": null,
+          "reason": "blazer at dry cleaner, user still needs to pick up (clothing + store obligation)"
+        },
+        {
+          "unit_id": "zara_boots_old",
+          "status": "included",
+          "merge_target": null,
+          "reason": "too-small original pair to return to Zara"
+        },
+        {
+          "unit_id": "zara_boots_new",
+          "status": "included",
+          "merge_target": null,
+          "reason": "larger exchanged pair to pick up at Zara; distinct physical item from the returned pair"
+        },
+        {
+          "unit_id": "zara_boots_new_s1",
+          "status": "merged",
+          "merge_target": "zara_boots_new",
+          "reason": "session_1 'pick up the new pair' coreferences same Zara exchange (boots, 2/5)"
+        },
+        {
+          "unit_id": "navy_blazer_s2_second",
+          "status": "merged",
+          "merge_target": "navy_blue_blazer",
+          "reason": "second mention of the same blazer dry-cleaning pickup"
+        },
+        {
+          "unit_id": "black_jeans_levis",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "already owned recent purchase; no pickup/return obligation"
+        },
+        {
+          "unit_id": "white_button_down_hm",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "already owned recent purchase; no pickup/return obligation"
+        },
+        {
+          "unit_id": "green_sweater",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "lent to sister, not a store pickup/return"
+        },
+        {
+          "unit_id": "yellow_sundress",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "owned wardrobe item under seasonal storage, not a store obligation"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, navy_blue_blazer, pick_up).",
+        "isa(navy_blue_blazer, clothing). attribute(navy_blue_blazer, store, dry_cleaner).",
+        "provenance(f1, answer_afa9873b_2, \"still need to pick up my dry cleaning for the navy blue blazer\").",
+        "action(user, zara_boots_old, return).",
+        "isa(zara_boots_old, clothing). attribute(zara_boots_old, store, zara). attribute(zara_boots_old, reason, too_small).",
+        "action(user, zara_boots_new, pick_up).",
+        "isa(zara_boots_new, clothing). attribute(zara_boots_new, store, zara). attribute(zara_boots_new, status, exchanged_larger).",
+        "provenance(f2, answer_afa9873b_3, \"need to return some boots to Zara ... too small ... exchanged ... haven't picked them up\").",
+        "same_entity(zara_boots_new_s1, zara_boots_new).",
+        "provenance(f3, answer_afa9873b_1, \"exchanged a pair of boots ... still need to pick up the new pair\").",
+        "excluded(black_jeans_levis, owned). excluded(white_button_down_hm, owned). excluded(green_sweater, lent)."
+      ],
+      "query": "answer(N) :- count_distinct(O, (action(user,O,V), member(V,[pick_up,return]), isa(O,clothing), attribute(O,store,_)), N).",
+      "computed_answer": 3,
+      "rationale": "Three clothing items carry a store pickup/return: the navy blazer at the cleaner, the too-small Zara boots to return, and the exchanged larger boots to pick up; jeans/shirt are owned and the sweater is lent.",
+      "gold": 3,
+      "match": true,
+      "elapsed_s": 102.93
+    },
+    {
+      "id": "2ce6a0f2",
+      "answer_variable": "event",
+      "individuation_policy": "event_instance",
+      "candidate_units": [
+        {
+          "unit_id": "e1_women_in_art",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user attended 'Women in Art' exhibition Feb 10 (session _1)"
+        },
+        {
+          "unit_id": "e2_art_afternoon",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user volunteered/attended 'Art Afternoon' at Children's Museum Feb 17 (session _2)"
+        },
+        {
+          "unit_id": "e3_history_tour",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user attended guided tour at History Museum Feb 24, ancient pottery/art (session _3)"
+        },
+        {
+          "unit_id": "e4_street_art_lecture",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user attended 'The Evolution of Street Art' lecture at Art Gallery Mar 3 (session _4)"
+        },
+        {
+          "unit_id": "x_street_art_workshop",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "future plan ('thinking of organizing'), not attended"
+        },
+        {
+          "unit_id": "x_la_festivals",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "assistant recommendations / upcoming festivals, not attended"
+        },
+        {
+          "unit_id": "x_studio_visits",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "planned weekend gallery visits, not attended"
+        },
+        {
+          "unit_id": "x_met_visit",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "hypothetical future Met/Temple of Dendur visit, not attended"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "event(e1, exhibition)",
+        "attribute(e1, name, \"Women in Art\")",
+        "isa(e1, art_related)",
+        "action(user, e1, attend)",
+        "time(e1, \"02-10\")",
+        "provenance(e1, answer_901a6763_1, \"Women in Art exhibition which I attended on February 10th\")",
+        "event(e2, art_event)",
+        "attribute(e2, name, \"Art Afternoon\")",
+        "isa(e2, art_related)",
+        "action(user, e2, attend)",
+        "time(e2, \"02-17\")",
+        "provenance(e2, answer_901a6763_2, \"Art Afternoon event on February 17th\")",
+        "event(e3, guided_tour)",
+        "attribute(e3, venue, \"History Museum\")",
+        "isa(e3, art_related)",
+        "action(user, e3, attend)",
+        "time(e3, \"02-24\")",
+        "provenance(e3, answer_901a6763_3, \"guided tour at the History Museum on February 24th ... ancient pottery\")",
+        "event(e4, lecture)",
+        "attribute(e4, topic, \"The Evolution of Street Art\")",
+        "isa(e4, art_related)",
+        "action(user, e4, attend)",
+        "time(e4, \"03-03\")",
+        "provenance(e4, answer_901a6763_4, \"attended a lecture at the Art Gallery on 'The Evolution of Street Art' on March 3rd\")"
+      ],
+      "query": "answer(N) :- N = #count{ E : event(E,_), action(user,E,attend), isa(E,art_related) }.",
+      "computed_answer": 4,
+      "rationale": "Four distinct user-attended art-related events, one per session (Women in Art Feb 10, Art Afternoon Feb 17, History Museum tour Feb 24, Street Art lecture Mar 3); workshops, festivals, studio visits, and the planned Met trip are excluded as future/recommended, not attended.",
+      "gold": 4,
+      "match": true,
+      "elapsed_s": 93.3
+    },
+    {
+      "id": "3a704032",
+      "answer_variable": "entity",
+      "individuation_policy": "canonical_entity",
+      "candidate_units": [
+        {
+          "unit_id": "peace_lily",
+          "status": "included",
+          "merge_target": null,
+          "reason": "got from nursery two weeks ago \u2014 plant acquired within last month"
+        },
+        {
+          "unit_id": "succulent",
+          "status": "included",
+          "merge_target": null,
+          "reason": "bought with peace lily at nursery two weeks ago \u2014 within last month"
+        },
+        {
+          "unit_id": "snake_plant",
+          "status": "included",
+          "merge_target": null,
+          "reason": "got from sister last month \u2014 acquisition within last month"
+        },
+        {
+          "unit_id": "snake_plant_s3",
+          "status": "merged",
+          "merge_target": "snake_plant",
+          "reason": "same snake plant, fertilizer topic in session _3"
+        },
+        {
+          "unit_id": "peace_lily_s3",
+          "status": "merged",
+          "merge_target": "peace_lily",
+          "reason": "same peace lily, adjustment topic in session _3"
+        },
+        {
+          "unit_id": "fern",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "pre-existing care/misting topic; no acquisition in window"
+        },
+        {
+          "unit_id": "rose_bush",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "pruned a month ago, not acquired"
+        },
+        {
+          "unit_id": "orchid",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "fertilizer question; no acquisition stated"
+        },
+        {
+          "unit_id": "african_violets",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "humidity care topic; no acquisition stated"
+        },
+        {
+          "unit_id": "spider_plant",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "repotting topic; no acquisition in window"
+        },
+        {
+          "unit_id": "basil_plant",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "pre-existing balcony plant; no acquisition in window"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, peace_lily, acquired).",
+        "time(peace_lily, two_weeks_ago).",
+        "provenance(f1, answer_c2204106_2, \"got from the nursery two weeks ago along with a succulent\").",
+        "action(user, succulent, acquired).",
+        "time(succulent, two_weeks_ago).",
+        "provenance(f2, answer_c2204106_2, \"a succulent plant two weeks ago\").",
+        "action(user, snake_plant, acquired).",
+        "time(snake_plant, last_month).",
+        "provenance(f3, answer_c2204106_1, \"my snake plant, which I got from my sister last month\").",
+        "isa(peace_lily, plant).",
+        "isa(succulent, plant).",
+        "isa(snake_plant, plant).",
+        "within_last_month(peace_lily).",
+        "within_last_month(succulent).",
+        "within_last_month(snake_plant).",
+        "action(user, rose_bush, pruned).",
+        "time(rose_bush, last_month).",
+        "isa(basil_plant, plant).",
+        "isa(fern, plant)."
+      ],
+      "query": "answer(N) :- N = #count{ P : action(user, P, acquired), isa(P, plant), within_last_month(P) }.",
+      "computed_answer": 3,
+      "rationale": "Three plants acquired within the last month \u2014 peace lily and succulent (nursery, two weeks ago) and snake plant (from sister, last month); all other plants are pre-existing care/prune/repot topics.",
+      "gold": 3,
+      "match": true,
+      "elapsed_s": 98.79
+    },
+    {
+      "id": "bf659f65",
+      "answer_variable": "entity",
+      "individuation_policy": "canonical_entity",
+      "candidate_units": [
+        {
+          "unit_id": "happier_than_ever",
+          "status": "included",
+          "merge_target": null,
+          "reason": "Billie Eilish album user downloaded on Spotify (acquired)"
+        },
+        {
+          "unit_id": "midnight_sky_s1",
+          "status": "included",
+          "merge_target": null,
+          "reason": "Whiskey Wanderers EP user bought at merch booth; fictional-but-authoritative per contract"
+        },
+        {
+          "unit_id": "midnight_sky_s2",
+          "status": "merged",
+          "merge_target": "midnight_sky_s1",
+          "reason": "same EP, restated in session 2"
+        },
+        {
+          "unit_id": "midnight_sky_s3",
+          "status": "merged",
+          "merge_target": "midnight_sky_s1",
+          "reason": "same EP, restated in session 3"
+        },
+        {
+          "unit_id": "tame_impala_vinyl",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user possesses/collects a signed Tame Impala vinyl; vinyl realizes an album, possession satisfies acquired"
+        },
+        {
+          "unit_id": "nda_track",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "a song on Happier Than Ever, not a separate album/EP"
+        },
+        {
+          "unit_id": "recommended_albums",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "assistant recommendations (Melodrama, Manic, etc.), not user-acquired"
+        },
+        {
+          "unit_id": "playlists_radio_podcasts",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "not albums/EPs"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, happier_than_ever, download)",
+        "isa(happier_than_ever, album)",
+        "provenance(f1, answer_7726e7e9_1, downloaded_on_spotify)",
+        "action(user, midnight_sky, purchase)",
+        "isa(midnight_sky, ep)",
+        "provenance(f2, answer_7726e7e9_1, bought_ep_at_merch_booth)",
+        "same_entity(midnight_sky_s2, midnight_sky)",
+        "same_entity(midnight_sky_s3, midnight_sky)",
+        "action(user, tame_impala_vinyl, possess)",
+        "isa(tame_impala_vinyl, vinyl)",
+        "isa(vinyl, album)",
+        "provenance(f3, answer_7726e7e9_3, signed_vinyl_in_collection)",
+        "normalized_action(user, X, acquire) :- action(user, X, download)",
+        "normalized_action(user, X, acquire) :- action(user, X, purchase)",
+        "normalized_action(user, X, acquire) :- action(user, X, possess)",
+        "is_album_or_ep(X) :- isa(X, album)",
+        "is_album_or_ep(X) :- isa(X, ep)",
+        "is_album_or_ep(X) :- isa(X, vinyl), isa(vinyl, album)"
+      ],
+      "query": "answer(N) :- N = count{ X : normalized_action(user, X, acquire), is_album_or_ep(X) }.",
+      "computed_answer": 3,
+      "rationale": "Three distinct user-acquired releases: downloaded Happier Than Ever, purchased EP Midnight Sky (one unit across all three sessions), and the owned Tame Impala vinyl; recommendations/playlists/podcasts/the NDA track excluded.",
+      "gold": 3,
+      "match": true,
+      "elapsed_s": 92.67
+    },
+    {
+      "id": "c4a1ceb8",
+      "answer_variable": "semantic_type",
+      "individuation_policy": "semantic_type",
+      "candidate_units": [
+        {
+          "unit_id": "orange_bitters_s3",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user made orange bitters from orange peels -> orange citrus used by user"
+        },
+        {
+          "unit_id": "orange_sangria_s2",
+          "status": "merged",
+          "merge_target": "orange_bitters_s3",
+          "reason": "same citrus kind (orange); user Sangria orange slices"
+        },
+        {
+          "unit_id": "lime_daiquiri_s4",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user made classic Daiquiri with fresh lime juice"
+        },
+        {
+          "unit_id": "lime_gimlet_s1",
+          "status": "merged",
+          "merge_target": "lime_daiquiri_s4",
+          "reason": "same citrus kind (lime); user Cucumber Gimlet with lime juice"
+        },
+        {
+          "unit_id": "lemon_sangria_s2",
+          "status": "included",
+          "merge_target": null,
+          "reason": "user Sangria with lemon slices, made two weeks ago"
+        },
+        {
+          "unit_id": "grapefruit_assistant",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "only in assistant honey-syrup/garnish/gin suggestions, not user's actual use"
+        },
+        {
+          "unit_id": "orange_assistant_recipes",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "assistant whiskey-sour recipe orange juice/bitters, not user-asserted"
+        },
+        {
+          "unit_id": "lemon_assistant_recipes",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "assistant recipe lemon juice, not user-asserted"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, orange_bitters, made)",
+        "attribute(orange_bitters, made_from, orange_peel)",
+        "isa(orange, citrus)",
+        "provenance(orange_bitters, answer_56d02cab_3, user_first_turn)",
+        "action(user, sangria, made)",
+        "attribute(sangria, ingredient, orange_slice)",
+        "attribute(sangria, ingredient, lemon_slice)",
+        "isa(lemon, citrus)",
+        "provenance(sangria, answer_56d02cab_2, user_last_turn_made_two_weeks_ago)",
+        "action(user, daiquiri, made)",
+        "attribute(daiquiri, ingredient, lime_juice)",
+        "isa(lime, citrus)",
+        "provenance(daiquiri, answer_56d02cab_4, user_first_turn)",
+        "action(user, cucumber_gimlet, made)",
+        "attribute(cucumber_gimlet, ingredient, lime_juice)",
+        "provenance(cucumber_gimlet, answer_56d02cab_1, user_first_turn)",
+        "same_entity(sangria_orange, orange_bitters_orange)",
+        "same_entity(gimlet_lime, daiquiri_lime)",
+        "used_in_user_cocktail(orange)",
+        "used_in_user_cocktail(lime)",
+        "used_in_user_cocktail(lemon)"
+      ],
+      "query": "answer(N) :- N = #count{ C : isa(C, citrus), used_in_user_cocktail(C) }.",
+      "computed_answer": 3,
+      "rationale": "User actually used orange (homemade bitters + Sangria), lime (Daiquiri + Cucumber Gimlet), and lemon (Sangria); grapefruit and other citrus appear only in assistant suggestions, yielding 3 distinct citrus types.",
+      "gold": 3,
+      "match": true,
+      "elapsed_s": 91.07
+    },
+    {
+      "id": "d23cf73b",
+      "answer_variable": "semantic_type",
+      "individuation_policy": "semantic_type",
+      "candidate_units": [
+        {
+          "unit_id": "cuisine_ethiopian",
+          "status": "included",
+          "merge_target": null,
+          "reason": "User tried an Ethiopian restaurant and is cooking misir wot/injera (session _4)"
+        },
+        {
+          "unit_id": "cuisine_indian",
+          "status": "included",
+          "merge_target": null,
+          "reason": "User learned chicken tikka masala in an Indian cuisine class (session _2)"
+        },
+        {
+          "unit_id": "cuisine_korean",
+          "status": "included",
+          "merge_target": null,
+          "reason": "User tried a Korean bibimbap recipe from the cooking class (session _3)"
+        },
+        {
+          "unit_id": "cuisine_vegan",
+          "status": "included",
+          "merge_target": null,
+          "reason": "User attended a vegan cuisine class and made vegan lasagna (session _1)"
+        },
+        {
+          "unit_id": "ethiopian_misir_wot_injera",
+          "status": "merged",
+          "merge_target": "cuisine_ethiopian",
+          "reason": "Same cuisine class as the Ethiopian restaurant"
+        },
+        {
+          "unit_id": "korean_kimchi",
+          "status": "merged",
+          "merge_target": "cuisine_korean",
+          "reason": "Kimchi is Korean; same cuisine class as bibimbap"
+        },
+        {
+          "unit_id": "fermentation_workshop_sauerkraut",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Fermentation is a technique, not a cuisine; sauerkraut is a single dish not framed as a learned cuisine, and its kimchi is already Korean"
+        },
+        {
+          "unit_id": "assistant_suggested_cuisines",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Japanese/teriyaki/etc. are assistant recommendations, not user-performed actions"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, ethiopian_restaurant, tried_out)",
+        "isa(ethiopian_restaurant, cuisine_ethiopian)",
+        "action(user, misir_wot, learned_to_cook)",
+        "isa(misir_wot, cuisine_ethiopian)",
+        "provenance(f_eth, answer_5a0d28f8_4, user_turn_1)",
+        "action(user, chicken_tikka_masala, learned_to_cook)",
+        "isa(chicken_tikka_masala, cuisine_indian)",
+        "provenance(f_ind, answer_5a0d28f8_2, user_turn_1)",
+        "action(user, korean_bibimbap, tried_out)",
+        "isa(korean_bibimbap, cuisine_korean)",
+        "provenance(f_kor, answer_5a0d28f8_3, user_turn_1)",
+        "action(user, vegan_cuisine_class, attended)",
+        "action(user, vegan_lasagna, learned_to_cook)",
+        "isa(vegan_lasagna, cuisine_vegan)",
+        "provenance(f_veg, answer_5a0d28f8_1, user_turn_1)",
+        "isa(sauerkraut, fermentation_technique)",
+        "semantic_type(cuisine_ethiopian)",
+        "semantic_type(cuisine_indian)",
+        "semantic_type(cuisine_korean)",
+        "semantic_type(cuisine_vegan)"
+      ],
+      "query": "answer(N) :- N = #count{ C : semantic_type(C), action(user,O,V), member(V,[learned_to_cook,tried_out,attended]), isa(O,C) }.",
+      "computed_answer": 4,
+      "rationale": "User learned-to-cook or tried four distinct cuisines \u2014 Ethiopian, Indian, Korean, and vegan \u2014 excluding the fermentation workshop (a technique) and assistant-suggested cuisines.",
+      "gold": 4,
+      "match": true,
+      "elapsed_s": 89.44
+    },
+    {
+      "id": "edced276",
+      "answer_variable": "duration",
+      "individuation_policy": "duration_sum",
+      "candidate_units": [
+        {
+          "unit_id": "hawaii_10d",
+          "status": "included",
+          "merge_target": null,
+          "reason": "completed family island-hopping trip to Hawaii, stated as '10-day'"
+        },
+        {
+          "unit_id": "nyc_5d",
+          "status": "included",
+          "merge_target": null,
+          "reason": "completed solo trip to New York City for five days"
+        },
+        {
+          "unit_id": "europe_7_10d",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "future planned Europe trip; not Hawaii/NYC and not yet taken"
+        },
+        {
+          "unit_id": "paris_4d",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "future plan duration; not Hawaii/NYC"
+        },
+        {
+          "unit_id": "rome_3d",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "future plan duration; not Hawaii/NYC"
+        }
+      ],
+      "aggregation": "sum",
+      "facts": [
+        "event(hawaii_trip, travel).",
+        "attribute(hawaii_trip, location, hawaii).",
+        "duration(hawaii_trip, day, 10).",
+        "provenance(hawaii_trip, answer_60e8941a_1, \"we had to plan everything out for the 10-day\").",
+        "event(nyc_trip, travel).",
+        "attribute(nyc_trip, location, new_york_city).",
+        "duration(nyc_trip, day, 5).",
+        "provenance(nyc_trip, answer_60e8941a_2, \"New York City for five days\")."
+      ],
+      "query": "answer(N) :- duration(hawaii_trip, day, A), duration(nyc_trip, day, B), N is A + B.",
+      "computed_answer": 15,
+      "rationale": "Hawaii family trip = 10 days plus NYC solo trip = 5 days; Europe/Paris/Rome are future plans and excluded; 10 + 5 = 15.",
+      "gold": 15,
+      "match": true,
+      "elapsed_s": 69.79
+    },
+    {
+      "id": "gpt4_15e38248",
+      "answer_variable": "entity",
+      "individuation_policy": "canonical_entity",
+      "candidate_units": [
+        {
+          "unit_id": "coffee_table",
+          "status": "included",
+          "merge_target": null,
+          "reason": "West Elm wooden coffee table w/ metal legs; user 'got'/'delivered' = bought; furniture"
+        },
+        {
+          "unit_id": "casper_mattress",
+          "status": "included",
+          "merge_target": null,
+          "reason": "Ordered from Casper last week = bought; mattress realizes the bed/furniture kind"
+        },
+        {
+          "unit_id": "ikea_bookshelf",
+          "status": "included",
+          "merge_target": null,
+          "reason": "Assembled IKEA bookshelf ~two months ago; furniture + assemble action"
+        },
+        {
+          "unit_id": "kitchen_table",
+          "status": "included",
+          "merge_target": null,
+          "reason": "Fixed wobbly leg last weekend (tightened screw) = fix; furniture"
+        },
+        {
+          "unit_id": "coffee_table_s1",
+          "status": "merged",
+          "merge_target": "coffee_table",
+          "reason": "Same West Elm coffee table, session _1 ('delivered last Thursday')"
+        },
+        {
+          "unit_id": "coffee_table_s4",
+          "status": "merged",
+          "merge_target": "coffee_table",
+          "reason": "Same coffee table, session _4"
+        },
+        {
+          "unit_id": "coffee_table_s2",
+          "status": "merged",
+          "merge_target": "coffee_table",
+          "reason": "Same coffee table 'bought' from West Elm, session _2"
+        },
+        {
+          "unit_id": "sectional_sofa",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "'future sectional sofa' = plan, not acquired"
+        },
+        {
+          "unit_id": "table_lamp",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Lighting not furniture; recommendation request only"
+        },
+        {
+          "unit_id": "bedside_tables",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Exploring/recommendations only; none bought/assembled/sold/fixed"
+        },
+        {
+          "unit_id": "throw_pillows",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Not furniture; still shopping, none acquired"
+        },
+        {
+          "unit_id": "area_rug",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Not furniture; hypothetical consideration"
+        },
+        {
+          "unit_id": "navy_throw_blanket",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Not furniture; planned test buy, not asserted done"
+        },
+        {
+          "unit_id": "kitchen_cabinets",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "Reorg is planned ('thinking of'); not buy/assemble/sell/fix of furniture"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "action(user, coffee_table, buy)",
+        "action(user, casper_mattress, buy)",
+        "action(user, ikea_bookshelf, assemble)",
+        "action(user, kitchen_table, fix)",
+        "isa(coffee_table, furniture)",
+        "isa(casper_mattress, furniture)",
+        "isa(ikea_bookshelf, furniture)",
+        "isa(kitchen_table, furniture)",
+        "verb_alias(get, buy)",
+        "verb_alias(order, buy)",
+        "verb_alias(tighten_wobbly_leg, fix)",
+        "provenance(f1, answer_8858d9dc_3, \"just got a new coffee table\")",
+        "provenance(f2, answer_8858d9dc_3, \"ordered one from Casper\")",
+        "provenance(f3, answer_8858d9dc_2, \"assembled that IKEA bookshelf\")",
+        "provenance(f4, answer_8858d9dc_4, \"fixing the wobbly leg on my kitchen table\")",
+        "same_entity(coffee_table_s1, coffee_table)",
+        "same_entity(coffee_table_s2, coffee_table)",
+        "same_entity(coffee_table_s4, coffee_table)"
+      ],
+      "query": "answer(N) :- N = #count{ O : action(user,O,V), member(V,[buy,assemble,sell,fix]), isa(O,furniture) }.",
+      "computed_answer": 4,
+      "rationale": "Distinct furniture the user bought/assembled/fixed across sessions: coffee table, Casper mattress, IKEA bookshelf, kitchen table = 4; all recommendation/planned/non-furniture items excluded.",
+      "gold": 4,
+      "match": true,
+      "elapsed_s": 110.37
+    },
+    {
+      "id": "gpt4_2f8be40d",
+      "answer_variable": "event",
+      "individuation_policy": "event_instance",
+      "candidate_units": [
+        {
+          "unit_id": "w_user_own",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "user's own wedding is being planned (future), not attended"
+        },
+        {
+          "unit_id": "w_emily_sarah_rooftop",
+          "status": "included",
+          "merge_target": null,
+          "reason": "session _2: Emily wed Sarah, rooftop garden in the city; user 'just got back from' it"
+        },
+        {
+          "unit_id": "w_emily_cousin_rooftop",
+          "status": "merged",
+          "merge_target": "w_emily_sarah_rooftop",
+          "reason": "session _1 'cousin Emily's wedding in the city, rooftop garden' = same Emily+venue+location; roommate/friend/cousin label is a noisy attribute, not a separate occasion"
+        },
+        {
+          "unit_id": "w_rachel_vineyard",
+          "status": "included",
+          "merge_target": null,
+          "reason": "session _1: cousin Rachel's vineyard wedding in August, user was a bridesmaid"
+        },
+        {
+          "unit_id": "w_jen_tom_barn",
+          "status": "included",
+          "merge_target": null,
+          "reason": "session _3: friend Jen wed Tom at a rustic barn last weekend"
+        },
+        {
+          "unit_id": "w_few_recent_vague",
+          "status": "excluded",
+          "merge_target": null,
+          "reason": "'been to a few weddings recently' is a vague mention; only the named ones are distinct countable units"
+        }
+      ],
+      "aggregation": "count_distinct",
+      "facts": [
+        "event(w_emily, wedding)",
+        "participant(w_emily, spouse, emily)",
+        "participant(w_emily, spouse, sarah)",
+        "attribute(w_emily, venue, rooftop_garden)",
+        "attribute(w_emily, location, city)",
+        "action(user, w_emily, attended)",
+        "same_entity(w_emily_cousin_rooftop, w_emily)",
+        "event(w_rachel, wedding)",
+        "participant(w_rachel, spouse, rachel)",
+        "attribute(w_rachel, venue, vineyard)",
+        "attribute(w_rachel, month, august)",
+        "participant(w_rachel, bridesmaid, user)",
+        "action(user, w_rachel, attended)",
+        "event(w_jen, wedding)",
+        "participant(w_jen, spouse, jen)",
+        "participant(w_jen, spouse, tom)",
+        "attribute(w_jen, venue, rustic_barn)",
+        "action(user, w_jen, attended)",
+        "event(w_user_own, wedding)",
+        "attribute(w_user_own, status, planned_future)"
+      ],
+      "query": "answer(N) :- N = #count{ W : event(W, wedding), action(user, W, attended), not attribute(W, status, planned_future) }.",
+      "computed_answer": 3,
+      "rationale": "Three distinct attended weddings (Emily+Sarah rooftop/city, Rachel's vineyard, Jen+Tom barn); user's own is future, and the cross-session 'cousin Emily' rooftop mention merges into the Emily wedding.",
+      "gold": 3,
+      "match": true,
+      "elapsed_s": 91.43
+    }
+  ]
+}
