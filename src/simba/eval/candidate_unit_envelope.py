@@ -919,6 +919,42 @@ def _sum_duration_values(
     return sum(value for root in roots for value in _duration_values(bundles[root]))
 
 
+def _is_pickup_return_question(question: str) -> bool:
+    q = _text_blob(question)
+    return bool(
+        re.search(r"\b(pick up|pickup|collect)\b", q)
+        and re.search(r"\b(return|exchange)\b", q)
+    )
+
+
+def _pickup_return_obligation_weight(bundle: EntityBundle) -> float:
+    """Count actionable obligations, not wardrobe identities.
+
+    A replacement exchange can create two answer-bearing obligations for the same
+    clothing sortal: returning/exchanging the original and picking up the
+    replacement. Keep the rule narrow to pickup/return questions so normal
+    instance counts still count canonical entities.
+    """
+    evidence = _text_blob(
+        " ".join(f"{relation} {target}" for relation, target in bundle.relations),
+        " ".join(f"{verb} {status}" for verb, status in bundle.actions),
+    )
+    if re.search(r"\b(exchanged|exchange|exchanged for|replacement)\b", evidence):
+        return 2.0
+    return 1.0
+
+
+def _count_instances(
+    bundles: dict[str, EntityBundle],
+    roots: typing.Iterable[str],
+    *,
+    question: str = "",
+) -> float:
+    if _is_pickup_return_question(question):
+        return sum(_pickup_return_obligation_weight(bundles[root]) for root in roots)
+    return float(len(list(roots)))
+
+
 def _scalar_range(
     bundles: dict[str, EntityBundle],
     roots: typing.Iterable[str],
@@ -1021,10 +1057,8 @@ def aggregate_envelope(
         certain = certain_high
         possible = possible_high
     elif aggregation == AGGREGATION_INSTANCES:
-        certain = float(
-            len(certain_roots)
-        )  # one resolved entity = one distinct instance
-        possible = float(len(possible_roots))
+        certain = _count_instances(bundles, certain_roots, question=question)
+        possible = _count_instances(bundles, possible_roots, question=question)
     elif aggregation == AGGREGATION_DATE:
         certain_labels = _date_labels(bundles, certain_roots)
         possible_labels = _date_labels(bundles, possible_roots)

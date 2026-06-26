@@ -516,6 +516,48 @@ def test_envelope_instances_counts_distinct_certain_and_possible() -> None:
     assert result.consistent is True
 
 
+def test_pickup_return_counts_obligations_not_wardrobe_identity() -> None:
+    facts = [
+        fact("object_type", {"entity": "boots", "type": "boots"}),
+        fact(
+            "relation",
+            {"source": "boots", "relation": "exchanged_for", "target": "larger size"},
+        ),
+        fact("object_type", {"entity": "blazer", "type": "blazer"}),
+        fact(
+            "relation",
+            {"source": "blazer", "relation": "dry_cleaning_for", "target": "pickup"},
+        ),
+    ]
+    question = "How many items of clothing do I need to pick up or return from a store?"
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_INSTANCES, question=question)
+    judged = {"boots": "certain_in", "blazer": "contested"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_INSTANCES, cands, question=question
+    )
+    assert [result.certain, result.possible] == [2.0, 3.0]
+    assert result.pivot == ("blazer",)
+
+
+def test_exchange_does_not_double_count_ordinary_instance_questions() -> None:
+    facts = [
+        fact("object_type", {"entity": "boots", "type": "boots"}),
+        fact(
+            "relation",
+            {"source": "boots", "relation": "exchanged_for", "target": "larger size"},
+        ),
+    ]
+    question = "How many pairs of boots have I mentioned?"
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_INSTANCES, question=question)
+    judged = {"boots": "certain_in"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_INSTANCES, cands, question=question
+    )
+    assert [result.certain, result.possible] == [1.0, 1.0]
+
+
 def test_envelope_entity_select_returns_candidate_sets() -> None:
     facts = [
         fact(

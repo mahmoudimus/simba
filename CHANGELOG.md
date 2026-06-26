@@ -110,6 +110,12 @@
   weaker support, the lookup collapses to that value; otherwise it remains an
   interval. This narrows `9ee3ecd6` to `[100,100]` and raises fail18 endpoint
   exactness from 7/18 to 8/18 without changing 11/18 gold-in-envelope coverage.
+  Pickup/return clothing questions now count actionable obligations rather than
+  only canonical wardrobe identities, so an exchanged pair of boots can
+  contribute separate return/pickup obligations while ordinary instance-count
+  questions still count one resolved entity once. This moves `0a995998` from
+  `[1,2]` to `[2,3]`, raising fail18 gold-in-envelope coverage to 12/18 and
+  endpoint exactness to 9/18.
 
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments
