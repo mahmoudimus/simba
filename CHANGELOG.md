@@ -121,7 +121,13 @@
   aggregation instead of inferring duration from attribute-name strings. On the
   day-row target run, `edced276` moved to exact `[15,15]` and `b5ef892d` improved
   to `[5,5]`; a full fail18 rerun is still pending because the provider hung
-  during a relation reread after the prompt/schema change.
+  during a relation reread after the prompt/schema change. The envelope CLI now
+  exposes bounded measurement controls (`--reread-max-candidates` and
+  `--no-cross-session-resolution`), and membership provider parse failures
+  degrade to `contested` votes instead of false zero-vote collapses. These flags
+  confirmed relation rereads were not the only blocker: all-18 reruns can still
+  hang in formalization after schema changes, so a cached-facts replay mode is
+  the next measurement infrastructure gap.
 
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments

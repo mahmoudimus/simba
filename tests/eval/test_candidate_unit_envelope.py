@@ -1171,3 +1171,34 @@ def test_parse_membership_response_rejects_unknown_tag() -> None:
 def test_parse_membership_response_empty_and_garbage() -> None:
     assert env.parse_membership_response("").parse_status == "empty"
     assert env.parse_membership_response("no json here").parse_status == "invalid_json"
+
+
+def test_judge_membership_degrades_provider_failure_to_contested(monkeypatch) -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+        fact("object_type", {"entity": "trip_2", "type": "trip"}),
+    ]
+    bundles = env.resolve_entities(facts)
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        return ""
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    judged, votes, aggregation = env.judge_membership(
+        case_id="case",
+        question="How many trips?",
+        bundles=bundles,
+        candidates=("trip_1", "trip_2"),
+        samples=2,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=None,
+    )
+
+    assert judged == {"trip_1": "contested", "trip_2": "contested"}
+    assert votes == {
+        "trip_1": ["contested", "contested"],
+        "trip_2": ["contested", "contested"],
+    }
+    assert aggregation == ""

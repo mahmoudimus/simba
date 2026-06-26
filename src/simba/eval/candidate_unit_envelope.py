@@ -1561,6 +1561,10 @@ def judge_membership(
             prefix=f"membership_{sample_index}_",
         )
         parsed = parse_membership_response(raw, expected_case_id=case_id)
+        if parsed.parse_status != "parsed":
+            for handle in candidates:
+                votes[handle].append(MEMBERSHIP_CONTESTED)
+            continue
         if parsed.aggregation:
             aggregations.append(parsed.aggregation)
         for handle, membership, _reason in parsed.judgments:
@@ -1815,6 +1819,20 @@ def main(argv: list[str] | None = None) -> int:
         type=pathlib.Path,
         default=pathlib.Path(bench.envelope_cache_path),
     )
+    parser.add_argument(
+        "--reread-max-candidates",
+        type=int,
+        default=bench.envelope_reread_max_candidates,
+        help=(
+            "Maximum candidate relation re-read provider calls per row. "
+            "Use 0 for bounded aggregate-only measurement runs."
+        ),
+    )
+    parser.add_argument(
+        "--no-cross-session-resolution",
+        action="store_true",
+        help="Disable cross-session entity-resolution provider calls for bounded runs.",
+    )
     parser.add_argument("--report", type=pathlib.Path, default=None)
     args = parser.parse_args(argv)
 
@@ -1827,8 +1845,11 @@ def main(argv: list[str] | None = None) -> int:
             command=args.provider,
             timeout_seconds=args.timeout_seconds,
             cache_dir=args.cache_dir,
-            reread_max_candidates=bench.envelope_reread_max_candidates,
-            cross_session_resolution=bench.envelope_cross_session_resolution,
+            reread_max_candidates=args.reread_max_candidates,
+            cross_session_resolution=(
+                bench.envelope_cross_session_resolution
+                and not args.no_cross_session_resolution
+            ),
         )
         records.append(record)
         verdict = "COLLAPSE" if record["collapsed"] else "OPEN"
