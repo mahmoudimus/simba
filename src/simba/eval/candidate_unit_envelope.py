@@ -1466,6 +1466,70 @@ def _read_formalized_facts_cache(
     return [dict(fact) for fact in cached_facts if isinstance(fact, dict)]
 
 
+def _read_formalizer_cache_session_facts(
+    cache_dir: pathlib.Path,
+    case_id: str,
+    session_id: str,
+) -> list[dict[str, typing.Any]] | None:
+    """Load the latest cached formalizer output for a single case/session.
+
+    The formalizer payload cache can contain multiple provider variants for the
+    same tuple (case_id, session_id). Pick the newest file by ``mtime`` so the
+    latest cached provider run wins.
+    """
+    best_time = -1.0
+    best_facts: list[dict[str, typing.Any]] | None = None
+    for cache_file in cache_dir.glob("formalize_*.txt"):
+        try:
+            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(payload.get("case_id")) != case_id:
+            continue
+        if str(payload.get("evidence_session_id")) != session_id:
+            continue
+        errors: list[str] = []
+        parsed_facts = candidate_unit_formalizer._facts(
+            payload.get("facts"), errors
+        )
+        if errors:
+            continue
+        mtime = cache_file.stat().st_mtime_ns
+        if mtime <= best_time:
+            continue
+        best_time = mtime
+        best_facts = [fact.to_dict() for fact in parsed_facts]
+    return best_facts
+
+
+def _read_replayed_formalizer_facts(
+    *,
+    cache_dir: pathlib.Path,
+    case_id: str,
+    answer_sessions: dict[str, tuple[str, str | None]],
+) -> tuple[list[dict[str, typing.Any]], set[str]]:
+    """Replay cached per-session formalizer runs for sessions that already exist.
+
+    Returns a pair of `(facts, recovered_session_ids)`.
+    """
+    facts: list[dict[str, typing.Any]] = []
+    recovered_session_ids: set[str] = set()
+    for session_id, (text, _date) in answer_sessions.items():
+        session_facts = _read_formalizer_cache_session_facts(
+            cache_dir, case_id=case_id, session_id=session_id
+        )
+        if session_facts is None:
+            continue
+        for fact in session_facts:
+            record = dict(fact)
+            evidence_span = str(record.get("evidence_span", ""))
+            record["_session"] = session_id
+            record["_span_ok"] = evidence_span in text
+            facts.append(record)
+        recovered_session_ids.add(session_id)
+    return facts, recovered_session_ids
+
+
 def _write_formalized_facts_cache(
     *,
     facts_dir: pathlib.Path,
@@ -1548,6 +1612,10 @@ def extract_facts(
     facts_mode = _validate_facts_mode(facts_mode)
     if facts_mode in {"read", "rw", "write"} and facts_dir is None:
         raise ValueError("facts_mode requires --facts-dir")
+
+    facts: list[dict[str, typing.Any]] = []
+    replayed_sessions: set[str] = set()
+
     if facts_mode in {"read", "rw"} and facts_dir is not None:
         cached_facts = _read_formalized_facts_cache(
             facts_dir=facts_dir,
@@ -1557,12 +1625,26 @@ def extract_facts(
         )
         if cached_facts is not None:
             return cached_facts
-        if facts_mode == "read":
-            raise FileNotFoundError(
-                f"no matching formalized-facts cache for case {case_id!r}"
+        if cache_dir is not None:
+            replayed_facts, replayed_sessions = _read_replayed_formalizer_facts(
+                cache_dir=cache_dir,
+                case_id=case_id,
+                answer_sessions=answer_sessions,
             )
-    facts: list[dict[str, typing.Any]] = []
+            facts.extend(replayed_facts)
+        if facts_mode == "read":
+            missing_sessions = [
+                sid for sid in answer_sessions if sid not in replayed_sessions
+            ]
+            if missing_sessions:
+                raise FileNotFoundError(
+                    f"no matching formalized-facts cache for case {case_id!r}; "
+                    f"missing sessions: {', '.join(sorted(missing_sessions))}"
+                )
+
     for session_id, (text, date) in answer_sessions.items():
+        if session_id in {fact.get("_session") for fact in facts}:
+            continue
         payload = candidate_unit_formalizer.build_formalizer_payload(
             case_id=case_id,
             question=question,

@@ -7,6 +7,8 @@ collapse) and 5a7937c8 (day count).
 
 from __future__ import annotations
 
+import json
+import pathlib
 import typing
 
 import pytest
@@ -29,6 +31,27 @@ def fact(
         "_session": session,
         "_span_ok": span_ok,
     }
+
+
+def write_session_formalizer_cache(
+    *,
+    cache_dir: pathlib.Path,
+    case_id: str,
+    session_id: str,
+    facts: list[dict[str, typing.Any]],
+) -> None:
+    path = cache_dir / f"formalize_{case_id}_{session_id}.txt"
+    path.write_text(
+        json.dumps(
+            {
+                "case_id": case_id,
+                "evidence_session_id": session_id,
+                "facts": facts,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def gpt4_facts() -> list[dict[str, typing.Any]]:
@@ -1251,6 +1274,184 @@ def test_extract_facts_in_read_mode_requires_matching_cache(tmp_path) -> None:
             facts_dir=tmp_path,
             facts_mode="read",
         )
+
+
+def test_extract_facts_read_mode_replays_cached_session_formalizer_facts(
+    tmp_path, monkeypatch
+) -> None:
+    answer_sessions = {
+        "s1": ("USER: I currently have a bike tank and a scooter.", "2026-06-01"),
+        "s2": ("USER: My old tank was retired.", "2026-06-02"),
+    }
+    write_session_formalizer_cache(
+        cache_dir=tmp_path,
+        case_id="case_replay",
+        session_id="s1",
+        facts=[
+            {
+                "fact_id": "f1",
+                "predicate": "object_type",
+                "arguments": {"entity": "tank_1", "type": "tank"},
+                "evidence_span": "bike tank",
+                "confidence": 0.94,
+            }
+        ],
+    )
+    write_session_formalizer_cache(
+        cache_dir=tmp_path,
+        case_id="case_replay",
+        session_id="s2",
+        facts=[
+            {
+                "fact_id": "f2",
+                "predicate": "object_type",
+                "arguments": {"entity": "tank_2", "type": "tank"},
+                "evidence_span": "old tank",
+                "confidence": 0.93,
+            }
+        ],
+    )
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("provider should not be called with cached sessions")
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    facts = env.extract_facts(
+        case_id="case_replay",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=tmp_path,
+        facts_dir=tmp_path,
+        facts_mode="read",
+    )
+
+    assert len(facts) == 2
+    assert {fact["_session"] for fact in facts} == {"s1", "s2"}
+    assert all(fact["_span_ok"] is True for fact in facts)
+
+
+def test_extract_facts_read_mode_requires_all_sessions_replayed(
+    tmp_path, monkeypatch
+) -> None:
+    answer_sessions = {
+        "s1": ("USER: I currently have a tank.", "2026-06-01"),
+        "s2": ("USER: Another session with a spare tank.", "2026-06-02"),
+    }
+    write_session_formalizer_cache(
+        cache_dir=tmp_path,
+        case_id="case_partial",
+        session_id="s1",
+        facts=[
+            {
+                "fact_id": "f1",
+                "predicate": "object_type",
+                "arguments": {"entity": "tank_1", "type": "tank"},
+                "evidence_span": "tank",
+                "confidence": 0.91,
+            }
+        ],
+    )
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError(
+            "provider should not be called in read mode if replay is incomplete"
+        )
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    with pytest.raises(FileNotFoundError, match="missing sessions: s2"):
+        env.extract_facts(
+            case_id="case_partial",
+            question="How many tanks?",
+            answer_sessions=answer_sessions,
+            command="provider",
+            timeout_seconds=1,
+            cache_dir=tmp_path,
+            facts_dir=tmp_path,
+            facts_mode="read",
+        )
+
+
+def test_extract_facts_rw_mode_replays_cached_sessions_and_formalizes_missing(
+    tmp_path, monkeypatch
+) -> None:
+    answer_sessions = {
+        "s1": ("USER: I currently have a tank.", "2026-06-01"),
+        "s2": ("USER: I also have a bike rack.", "2026-06-02"),
+    }
+    write_session_formalizer_cache(
+        cache_dir=tmp_path,
+        case_id="case_rw",
+        session_id="s1",
+        facts=[
+            {
+                "fact_id": "f1",
+                "predicate": "object_type",
+                "arguments": {"entity": "tank_1", "type": "tank"},
+                "evidence_span": "tank",
+                "confidence": 0.91,
+            }
+        ],
+    )
+
+    calls: list[str] = []
+
+    def track_provider(prompt: str, **_: object) -> str:
+        calls.append(prompt)
+        return "raw"
+
+    parsed_missing = env.candidate_unit_formalizer.FormalizerParseResult(
+        formalizer_id="candidate_unit_envelope_formalizer",
+        case_id="case_rw",
+        evidence_session_id="s2",
+        parse_status=env.candidate_unit_formalizer.PARSE_STATUS_PARSED,
+        facts=(
+            env.candidate_unit_formalizer.FormalFact(
+                fact_id="f2",
+                predicate="object_type",
+                arguments={"entity": "rack_1", "type": "bike_rack"},
+                evidence_span="bike rack",
+                confidence=0.9,
+            ),
+        ),
+        notes="",
+        parse_errors=(),
+    )
+
+    monkeypatch.setattr(env, "_cached_provider", track_provider)
+    monkeypatch.setattr(
+        env.candidate_unit_formalizer,
+        "parse_formalizer_response",
+        lambda *_a, **_k: parsed_missing,
+    )
+
+    facts = env.extract_facts(
+        case_id="case_rw",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=tmp_path,
+        facts_dir=tmp_path,
+        facts_mode="rw",
+    )
+
+    assert len(facts) == 2
+    assert len(calls) == 1
+    sessions = {fact["_session"] for fact in facts}
+    assert sessions == {"s1", "s2"}
+
+    cached = env._read_formalized_facts_cache(
+        facts_dir=tmp_path,
+        case_id="case_rw",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+    )
+    assert cached is not None
+    assert {fact["_session"] for fact in cached} == {"s1", "s2"}
 
 
 def test_extract_facts_facts_mode_requires_facts_dir() -> None:
