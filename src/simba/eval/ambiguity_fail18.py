@@ -63,7 +63,7 @@ class Fail18Result:
     question_id: str
     question: str
     failure_mode: str
-    gold_numeric: int | None
+    gold_numeric: float | int | None
     answer_space: dict[str, int]
     contains_gold: bool | None
     backend: str
@@ -232,11 +232,11 @@ def summarize(
     )
 
 
-def numeric_gold(row: dict[str, typing.Any]) -> int | None:
+def numeric_gold(row: dict[str, typing.Any]) -> float | int | None:
     text = str(row.get("gold_answer", "")).lower()
-    candidates: list[tuple[int, int]] = []
+    candidates: list[tuple[int, float | int]] = []
     for match in re.finditer(r"\d[\d,]*(?:\.\d+)?", text):
-        candidates.append((match.start(), int(float(match.group().replace(",", "")))))
+        candidates.append((match.start(), _numeric_value(match.group())))
     for word, value in _NUMBER_WORDS.items():
         match = re.search(rf"\b{word}\b", text)
         if match:
@@ -251,7 +251,12 @@ def numeric_gold(row: dict[str, typing.Any]) -> int | None:
     return None
 
 
-def _contains(answer: dict[str, int], gold: int) -> bool:
+def _numeric_value(value: str) -> float | int:
+    numeric = float(value.replace(",", ""))
+    return int(numeric) if numeric.is_integer() else numeric
+
+
+def _contains(answer: dict[str, int], gold: float | int) -> bool:
     if "count" in answer:
         return int(answer["count"]) == gold
     return int(answer["lower"]) <= gold <= int(answer["upper"])

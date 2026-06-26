@@ -13,7 +13,7 @@ import typing
 import simba.eval.ambiguity_fail18 as ambiguity_fail18
 
 DEFAULT_OUT = pathlib.Path(".simba/lexicon/candidates.jsonl")
-PROMPT_VERSION = "seeded-graph-v4-composed-answer-normalized"
+PROMPT_VERSION = "seeded-graph-v6-variant-normalized"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -565,6 +565,8 @@ def _normalize_concept(
     text = _concept_text(concept)
     purpose = concept.purpose
 
+    if _is_count_measure_concept(text):
+        return (dataclasses.replace(concept, purpose="meta"),)
     if (
         _asks_for_time_amount(question)
         and _is_activity_constraint(text)
@@ -635,6 +637,17 @@ def _normalize_concept(
                 ("attend", "attended", "participation"),
                 "constraint",
                 ("schema",),
+            ),
+        )
+    if _is_wedding_concept(text):
+        return (
+            _concept(
+                "wedding",
+                "wedding",
+                "event",
+                ("marriage ceremony", "nuptials", "wedding event"),
+                purpose,
+                ("schema", "getty"),
             ),
         )
     if _is_baking_concept(text):
@@ -893,6 +906,10 @@ def _is_model_kit_concept(text: str) -> bool:
     return bool(re.search(r"\b(?:model_kit|model kits?|scale model|toy kit)\b", text))
 
 
+def _is_count_measure_concept(text: str) -> bool:
+    return bool(re.search(r"\b(?:[a-z_]+_count|count|number of [a-z ]+)\b", text))
+
+
 def _is_musical_instrument_concept(text: str) -> bool:
     return bool(
         re.search(
@@ -922,6 +939,15 @@ def _is_wedding_attendance_concept(text: str) -> bool:
     )
 
 
+def _is_wedding_concept(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:weddings?|marriage ceremony|nuptials)\b",
+            text,
+        )
+    )
+
+
 def _is_baking_concept(text: str) -> bool:
     return bool(
         re.search(
@@ -934,7 +960,7 @@ def _is_baking_concept(text: str) -> bool:
 def _is_points_threshold_concept(text: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:points_threshold|points_required|loyalty points?|"
+            r"\b(?:points_threshold|points_required|points_needed|loyalty points?|"
             r"reward points?|sephora points?)\b",
             text,
         )

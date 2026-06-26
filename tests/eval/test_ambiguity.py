@@ -164,6 +164,15 @@ def test_fail18_numeric_gold_prefers_earliest_human_number() -> None:
     assert ambiguity_fail18.numeric_gold(row) == 5
 
 
+def test_fail18_numeric_gold_preserves_decimal_human_answer() -> None:
+    row = {
+        "gold_answer": "0.5 hours",
+        "gold_count": 0,
+    }
+
+    assert ambiguity_fail18.numeric_gold(row) == 0.5
+
+
 def test_fail18_answer_type_router() -> None:
     cases = {
         "How many points do I need to earn to redeem a free skincare product?":

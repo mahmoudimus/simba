@@ -498,6 +498,35 @@ def test_normalize_schema_canonicalizes_composed_hours_answer() -> None:
     ) == ["hour"]
 
 
+def test_normalize_schema_marks_count_measure_as_meta() -> None:
+    schema = ontology_router.MicroSchema(
+        question="How many weddings have I attended in this year?",
+        concepts=(
+            ontology_router.MicroConcept(
+                id="wedding",
+                label="Wedding",
+                domain="event",
+                purpose="answer_bearing",
+            ),
+            ontology_router.MicroConcept(
+                id="wedding_count",
+                label="Wedding count",
+                domain="quantity",
+                aliases=("number of weddings",),
+                purpose="answer_bearing",
+            ),
+        ),
+    )
+
+    normalized = ontology_router.normalize_schema(schema)
+    concepts = {concept.id: concept for concept in normalized.concepts}
+
+    assert concepts["wedding_count"].purpose == "meta"
+    assert ontology_router._required_answer_concept_ids(
+        normalized, "count"
+    ) == ["wedding"]
+
+
 def test_schema_from_json_normalizes_llm_candidate() -> None:
     schema = ontology_router._schema_from_json(
         "How many products?",
