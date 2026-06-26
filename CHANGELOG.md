@@ -104,7 +104,12 @@
   thresholds over current balances. On fail18, the value-role rerun improved
   gold-in-envelope coverage from 9/18 to 11/18; `60036106` now collapses exactly
   to `[12000,12000]`, while `9ee3ecd6` moves from the wrong 300-point scalar to
-  a still-wide `[50,200]` threshold envelope.
+  a still-wide `[50,200]` threshold envelope. Lookup-scalar aggregation now also
+  applies a strict threshold-consensus selector: if one threshold value has
+  independent support from multiple resolved roots and every alternative has
+  weaker support, the lookup collapses to that value; otherwise it remains an
+  interval. This narrows `9ee3ecd6` to `[100,100]` and raises fail18 endpoint
+  exactness from 7/18 to 8/18 without changing 11/18 gold-in-envelope coverage.
 
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments

@@ -483,6 +483,49 @@ def _lookup_values_across_roots(
     return []
 
 
+def _lookup_threshold_support(
+    bundles: dict[str, EntityBundle], roots: typing.Iterable[str], *, question: str = ""
+) -> dict[float, set[str]]:
+    """Threshold values supported by distinct resolved roots.
+
+    Lookup questions often surface several scalar values of the right role. A
+    single broad reward tier should not outweigh repeated, entity-specific
+    product thresholds, but tied one-off thresholds should remain ambiguous.
+    """
+    support: dict[float, set[str]] = collections.defaultdict(set)
+    for root in roots:
+        for row in _classified_value_rows(bundles[root], question=question):
+            if (
+                row.role == VALUE_ROLE_THRESHOLD
+                and not _is_money_value(row.attribute, row.value, row.unit)
+            ):
+                support[row.numeric].add(root)
+    return dict(support)
+
+
+def _lookup_consensus_answer(
+    bundles: dict[str, EntityBundle], roots: typing.Iterable[str], *, question: str = ""
+) -> float | None:
+    """Strict threshold consensus, else ``None``.
+
+    This is deliberately narrow: collapse only when one threshold value has more
+    distinct-root support than every alternative and at least two independent
+    roots support it. Otherwise the lookup remains an interval.
+    """
+    support = _lookup_threshold_support(bundles, roots, question=question)
+    if not support:
+        return None
+    ranked = sorted(
+        ((len(roots_for_value), value) for value, roots_for_value in support.items()),
+        reverse=True,
+    )
+    top_count, top_value = ranked[0]
+    runner_up_count = ranked[1][0] if len(ranked) > 1 else 0
+    if top_count >= 2 and top_count > runner_up_count:
+        return top_value
+    return None
+
+
 def _stated_total_values(bundle: EntityBundle, *, question: str = "") -> list[float]:
     return _scalar_values(
         bundle,
@@ -909,6 +952,9 @@ def _lookup_answer(
     *,
     question: str = "",
 ) -> float:
+    consensus = _lookup_consensus_answer(bundles, roots, question=question)
+    if consensus is not None:
+        return consensus
     values = _lookup_values_across_roots(bundles, roots, question=question)
     if not values:
         return 0.0
@@ -954,10 +1000,17 @@ def aggregate_envelope(
         certain = _sum_duration_values(bundles, certain_roots)
         possible = _sum_duration_values(bundles, possible_roots)
     elif aggregation == AGGREGATION_LOOKUP:
-        certain_answer = _lookup_answer(bundles, certain_roots, question=question)
-        possible_answer = _lookup_answer(bundles, possible_roots, question=question)
-        certain = min(certain_answer, possible_answer)
-        possible = max(certain_answer, possible_answer)
+        possible_consensus = _lookup_consensus_answer(
+            bundles, possible_roots, question=question
+        )
+        if possible_consensus is not None:
+            certain = possible = possible_consensus
+            contested_roots = []
+        else:
+            certain_answer = _lookup_answer(bundles, certain_roots, question=question)
+            possible_answer = _lookup_answer(bundles, possible_roots, question=question)
+            certain = min(certain_answer, possible_answer)
+            possible = max(certain_answer, possible_answer)
     elif aggregation == AGGREGATION_STATED_TOTAL:
         _certain_low, certain_high = _scalar_range(
             bundles, certain_roots, question=question, stated_total=True

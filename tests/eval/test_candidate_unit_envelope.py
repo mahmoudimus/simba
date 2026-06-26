@@ -816,6 +816,100 @@ def test_9ee3ecd6_lookup_prefers_threshold_over_current_balance() -> None:
     assert [result.certain, result.possible] == [100.0, 100.0]
 
 
+def test_9ee3ecd6_lookup_collapses_to_supported_product_threshold() -> None:
+    facts = [
+        fact("object_type", {"entity": "free_skincare_reward", "type": "reward"}),
+        fact(
+            "value",
+            {
+                "entity": "free_skincare_reward",
+                "attribute": "points_required",
+                "value": "200",
+                "unit": "points",
+            },
+        ),
+        fact(
+            "value",
+            {
+                "entity": "free_skincare_reward",
+                "attribute": "points_required",
+                "value": "300",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "user", "type": "person"}),
+        fact(
+            "value",
+            {
+                "entity": "user",
+                "attribute": "total_points",
+                "value": "200",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "cleanser", "type": "skincare product"}),
+        fact(
+            "value",
+            {
+                "entity": "cleanser",
+                "attribute": "points_cost",
+                "value": "100",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "serum", "type": "skincare product"}),
+        fact(
+            "value",
+            {
+                "entity": "serum",
+                "attribute": "points_cost",
+                "value": "100",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "toner", "type": "skincare product"}),
+        fact(
+            "value",
+            {
+                "entity": "toner",
+                "attribute": "points_cost",
+                "value": "100",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "face_wash", "type": "skincare product"}),
+        fact(
+            "value",
+            {
+                "entity": "face_wash",
+                "attribute": "points_cost",
+                "value": "50",
+                "unit": "points",
+            },
+        ),
+    ]
+    question = (
+        "How many points do I need to earn to redeem a free skincare product "
+        "at Sephora?"
+    )
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_LOOKUP, question=question)
+    judged = {
+        "free_skincare_reward": "certain_in",
+        "user": "certain_in",
+        "cleanser": "contested",
+        "serum": "contested",
+        "toner": "contested",
+        "face_wash": "contested",
+    }
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_LOOKUP, cands, question=question
+    )
+    assert [result.certain, result.possible] == [100.0, 100.0]
+    assert result.pivot == ()
+    assert result.consistent is True
+
+
 def test_lookup_scalar_opens_when_lower_threshold_is_contested() -> None:
     facts = [
         fact("object_type", {"entity": "general_reward", "type": "reward"}),
