@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
+import simba.eval.ambiguity_fail18 as ambiguity_fail18
 import simba.eval.interpretation_prompts as interpretation_prompts
 
 
@@ -174,6 +177,8 @@ def test_fail18_payload_builder_applies_evidence_budget(
 
 
 def test_fail18_generation_artifact_is_payload_only() -> None:
+    if not ambiguity_fail18.DEFAULT_MANIFEST.exists():
+        pytest.skip("local clingo_fail18 fixture not present")
     artifact = interpretation_prompts.build_fail18_generation_artifact(limit=0)
 
     assert artifact["name"] == "fail18-ambiguous-nlidb-gate1-payloads"

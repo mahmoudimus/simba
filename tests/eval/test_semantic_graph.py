@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+import simba.eval.ambiguity_fail18 as ambiguity_fail18
 import simba.eval.semantic_graph as semantic_graph
 
 
@@ -79,6 +82,8 @@ def test_graph_value_alignment_sums_people_reached() -> None:
 
 
 def test_semantic_graph_fail18_probe_has_typed_coverage() -> None:
+    if not ambiguity_fail18.DEFAULT_MANIFEST.exists():
+        pytest.skip("local clingo_fail18 fixture not present")
     summary = semantic_graph.probe_fail18()
 
     assert summary.total == 18
