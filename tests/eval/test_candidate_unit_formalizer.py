@@ -127,6 +127,34 @@ def test_parse_formalizer_response_accepts_sortal_and_distinct() -> None:
     assert [fact.predicate for fact in result.facts] == ["sortal", "distinct"]
 
 
+def test_parse_formalizer_response_accepts_typed_quantity_dimension() -> None:
+    result = candidate_unit_formalizer.parse_formalizer_response(
+        json.dumps(
+            _valid_response(
+                facts=[
+                    {
+                        "fact_id": "quantity_1",
+                        "predicate": "quantity",
+                        "arguments": {
+                            "entity": "trip_hawaii",
+                            "dimension": "time.duration",
+                            "value": "15",
+                            "unit": "days",
+                        },
+                        "evidence_span": "15-day trip",
+                        "confidence": 0.91,
+                    }
+                ]
+            )
+        ),
+        expected_formalizer_id="q1::evidence_001",
+    )
+
+    assert result.parse_status == candidate_unit_formalizer.PARSE_STATUS_PARSED
+    assert result.facts[0].predicate == "quantity"
+    assert result.facts[0].arguments["dimension"] == "time.duration"
+
+
 def test_parse_formalizer_response_rejects_duplicate_fact_ids() -> None:
     result = candidate_unit_formalizer.parse_formalizer_response(
         json.dumps(

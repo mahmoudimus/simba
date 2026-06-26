@@ -115,7 +115,13 @@
   contribute separate return/pickup obligations while ordinary instance-count
   questions still count one resolved entity once. This moves `0a995998` from
   `[1,2]` to `[2,3]`, raising fail18 gold-in-envelope coverage to 12/18 and
-  endpoint exactness to 9/18.
+  endpoint exactness to 9/18. The formalizer schema now supports typed
+  `quantity(entity, dimension, value, unit)` facts, and the envelope consumes
+  `dimension="time.duration"` quantities directly for day and duration
+  aggregation instead of inferring duration from attribute-name strings. On the
+  day-row target run, `edced276` moved to exact `[15,15]` and `b5ef892d` improved
+  to `[5,5]`; a full fail18 rerun is still pending because the provider hung
+  during a relation reread after the prompt/schema change.
 
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments

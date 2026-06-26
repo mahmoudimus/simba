@@ -381,6 +381,56 @@ def test_envelope_days_collapses_to_3_when_food_drive_certain_in() -> None:
     assert result.collapsed is True
 
 
+def test_envelope_days_uses_typed_time_duration_quantity() -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+        fact(
+            "quantity",
+            {
+                "entity": "trip_1",
+                "dimension": "time.duration",
+                "value": "36",
+                "unit": "hours",
+            },
+        ),
+        fact("object_type", {"entity": "trip_2", "type": "trip"}),
+        fact(
+            "quantity",
+            {
+                "entity": "trip_2",
+                "dimension": "time.duration",
+                "value": "2",
+                "unit": "weeks",
+            },
+        ),
+    ]
+    bundles = env.resolve_entities(facts)
+    candidates = env.select_candidates(bundles, env.AGGREGATION_DAYS)
+    assert set(candidates) == {"trip_1", "trip_2"}
+    judged = {"trip_1": "certain_in", "trip_2": "contested"}
+    result = env.aggregate_envelope(bundles, judged, env.AGGREGATION_DAYS, candidates)
+    assert [result.certain, result.possible] == [1.5, 15.5]
+    assert result.pivot == ("trip_2",)
+
+
+def test_envelope_days_does_not_infer_duration_from_legacy_attribute_name() -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+        fact(
+            "value",
+            {
+                "entity": "trip_1",
+                "attribute": "duration",
+                "value": "15",
+                "unit": "days",
+            },
+        ),
+    ]
+    bundles = env.resolve_entities(facts)
+    candidates = env.select_candidates(bundles, env.AGGREGATION_DAYS)
+    assert candidates == []
+
+
 # --- fold_recovered_relations
 def test_fold_recovered_relations_keeps_only_verified_new_edges() -> None:
     bundle = env.EntityBundle(
@@ -389,6 +439,7 @@ def test_fold_recovered_relations_keeps_only_verified_new_edges() -> None:
         types=("helmet",),
         usd=120.0,
         values=(("price", "120", "USD"),),
+        quantities=(),
         dates=(),
         statuses=(),
         relations=(("purchased_at", "bike_shop_downtown"),),

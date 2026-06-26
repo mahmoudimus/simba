@@ -111,7 +111,7 @@ _PREDICATE_ROLE_ARGUMENTS = {
     "event": ("event", "type", "participants", "location"),
     "object_type": ("entity", "type"),
     "property": ("entity", "property", "value"),
-    "quantity": ("entity", "attribute", "value", "unit"),
+    "quantity": ("entity", "dimension", "attribute", "value", "unit"),
     "relation": ("source", "relation", "target"),
     "sortal": ("entity", "type", "source", "antecedent", "licensed_by"),
     "status": ("entity", "status"),
@@ -161,6 +161,16 @@ RECURSIVE_FACT_SCHEMA = (
         "predicate": "value",
         "meaning": "A scalar value or amount attached to an entity or event.",
         "arguments": ["entity", "attribute", "value", "unit"],
+    },
+    {
+        "predicate": "quantity",
+        "meaning": (
+            "A typed dimensional quantity attached to an entity or event. Use "
+            "dimension for the physical/semantic dimension, such as "
+            "time.duration, money.amount, count.cardinality, or points.loyalty. "
+            "Do not make the compiler infer duration from an attribute string."
+        ),
+        "arguments": ["entity", "dimension", "value", "unit"],
     },
     {
         "predicate": "time",
@@ -339,7 +349,8 @@ def build_formalizer_payload(
                 "Use recursive fact shapes such as action(subject, object, verb), "
                 "event(event, type), object_type(entity, type), "
                 "sortal(entity, type, source, antecedent, licensed_by), "
-                "relation(source, relation, target), value(entity, attribute, value)."
+                "relation(source, relation, target), value(entity, attribute, value), "
+                "quantity(entity, dimension, value, unit)."
             ),
             (
                 "Use coreference only for true same-entity identity. Do not use "

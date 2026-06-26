@@ -157,6 +157,7 @@ class EntityBundle:
     types: tuple[str, ...]
     usd: float | None
     values: tuple[tuple[str, str, str], ...]  # (attribute, value, unit)
+    quantities: tuple[tuple[str, str, str], ...]  # (dimension, value, unit)
     dates: tuple[str, ...]
     statuses: tuple[str, ...]
     relations: tuple[tuple[str, str], ...]  # (relation, target)
@@ -180,6 +181,14 @@ class ValueFact:
     unit: str
     numeric: float
     role: str
+
+
+@dataclasses.dataclass(frozen=True)
+class QuantityFact:
+    dimension: str
+    value: str
+    unit: str
+    numeric: float
 
 
 @dataclasses.dataclass(frozen=True)
@@ -270,6 +279,22 @@ def _value_rows(bundle: EntityBundle) -> list[tuple[str, str, str, float]]:
         numeric = numeric_value(value)
         if numeric is not None:
             rows.append((attribute.lower(), value, unit.lower(), numeric))
+    return rows
+
+
+def _quantity_rows(bundle: EntityBundle) -> list[QuantityFact]:
+    rows: list[QuantityFact] = []
+    for dimension, value, unit in bundle.quantities:
+        numeric = numeric_value(value)
+        if numeric is not None:
+            rows.append(
+                QuantityFact(
+                    dimension=dimension.lower(),
+                    value=value,
+                    unit=unit.lower(),
+                    numeric=numeric,
+                )
+            )
     return rows
 
 
@@ -405,6 +430,30 @@ def _duration_hours(attribute: str, unit: str, value: float) -> float | None:
     return value
 
 
+def _duration_quantity_hours(row: QuantityFact) -> float | None:
+    if row.dimension != "time.duration":
+        return None
+    unit = row.unit
+    if unit in {"second", "seconds", "sec", "secs", "s"}:
+        return row.numeric / 3600.0
+    if unit in {"minute", "minutes", "min", "mins", "m"}:
+        return row.numeric / 60.0
+    if unit in {"hour", "hours", "hr", "hrs", "h"}:
+        return row.numeric
+    if unit in {"day", "days", "d"}:
+        return row.numeric * 24.0
+    if unit in {"week", "weeks", "wk", "wks", "w"}:
+        return row.numeric * 7.0 * 24.0
+    return None
+
+
+def _duration_quantity_days(row: QuantityFact) -> float | None:
+    hours = _duration_quantity_hours(row)
+    if hours is None:
+        return None
+    return hours / 24.0
+
+
 def _quantity_value_rows(
     bundle: EntityBundle, *, question: str = ""
 ) -> list[ValueFact]:
@@ -432,11 +481,25 @@ def _quantity_values(bundle: EntityBundle, *, question: str = "") -> list[float]
 
 def _duration_values(bundle: EntityBundle) -> list[float]:
     values: list[float] = []
+    for row in _quantity_rows(bundle):
+        duration = _duration_quantity_hours(row)
+        if duration is not None:
+            values.append(duration)
+    if values:
+        return values
     for attribute, _value, unit, numeric in _value_rows(bundle):
         duration = _duration_hours(attribute, unit, numeric)
         if duration is not None:
             values.append(duration)
     return values
+
+
+def _duration_day_values(bundle: EntityBundle) -> list[float]:
+    return [
+        duration
+        for row in _quantity_rows(bundle)
+        if (duration := _duration_quantity_days(row)) is not None
+    ]
 
 
 def _scalar_values(
@@ -637,6 +700,7 @@ def resolve_entities(
                 "types": set(),
                 "usd": None,
                 "values": set(),
+                "quantities": set(),
                 "name": None,
                 "dates": set(),
                 "statuses": set(),
@@ -684,6 +748,15 @@ def resolve_entities(
                 and bundle["name"] is None
             ):
                 bundle["name"] = str(args["value"])
+        elif predicate == "quantity":
+            if args.get("value") is not None:
+                bundle["quantities"].add(
+                    (
+                        str(args.get("dimension", "")),
+                        str(args.get("value", "")),
+                        str(args.get("unit", "")),
+                    )
+                )
         elif predicate == "time":
             if args.get("date"):
                 bundle["dates"].add(str(args["date"]))
@@ -734,6 +807,7 @@ def _freeze_bundle(
         types=tuple(sorted(data["types"])),
         usd=data["usd"],
         values=tuple(sorted(data["values"])),
+        quantities=tuple(sorted(data["quantities"])),
         dates=tuple(sorted(data["dates"])),
         statuses=tuple(sorted(data["statuses"])),
         relations=tuple(sorted(data["relations"])),
@@ -848,7 +922,7 @@ def select_candidates(
             if _stated_total_values(bundle, question=question):
                 candidates.append(root)
         elif intent == AGGREGATION_DAYS:
-            if bundle.dates or bundle.events:
+            if bundle.dates or bundle.events or _duration_day_values(bundle):
                 candidates.append(root)
         elif intent == AGGREGATION_DATE:
             if bundle.dates:
@@ -864,6 +938,19 @@ def _distinct_days(
     bundles: dict[str, EntityBundle], roots: typing.Iterable[str]
 ) -> set[str]:
     return {norm_day(date) for root in roots for date in bundles[root].dates}
+
+
+def _count_days(
+    bundles: dict[str, EntityBundle],
+    roots: typing.Iterable[str],
+) -> float:
+    roots = list(roots)
+    duration_days = [
+        value for root in roots for value in _duration_day_values(bundles[root])
+    ]
+    if duration_days:
+        return sum(duration_days)
+    return float(len(_distinct_days(bundles, roots)))
 
 
 def _sum_quantity_values(
@@ -1027,8 +1114,8 @@ def aggregate_envelope(
     certain_labels: tuple[str, ...] = ()
     possible_labels: tuple[str, ...] = ()
     if aggregation == AGGREGATION_DAYS:
-        certain = float(len(_distinct_days(bundles, certain_roots)))
-        possible = float(len(_distinct_days(bundles, possible_roots)))
+        certain = _count_days(bundles, certain_roots)
+        possible = _count_days(bundles, possible_roots)
     elif aggregation == AGGREGATION_SUM_VALUE:
         certain = _sum_quantity_values(bundles, certain_roots, question=question)
         possible = _sum_quantity_values(bundles, possible_roots, question=question)
@@ -1164,6 +1251,10 @@ def build_membership_payload(
                         ),
                     }
                     for attr, value, unit in bundle.values
+                ],
+                "quantities": [
+                    {"dimension": dimension, "value": value, "unit": unit}
+                    for dimension, value, unit in bundle.quantities
                 ],
                 "dates": list(bundle.dates),
                 "statuses": list(bundle.statuses),
@@ -1676,6 +1767,14 @@ def run_envelope_case(
                         "role": row.role,
                     }
                     for row in _classified_value_rows(bundles[root], question=question)
+                ],
+                "quantities": [
+                    {
+                        "dimension": row.dimension,
+                        "value": row.value,
+                        "unit": row.unit,
+                    }
+                    for row in _quantity_rows(bundles[root])
                 ],
                 "dates": list(bundles[root].dates),
             }
