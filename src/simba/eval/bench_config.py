@@ -60,6 +60,20 @@ class BenchConfig:
     # (write Python date-arithmetic, exec in a sandboxed subprocess, finalize),
     # falling back to the direct reader on any failure.
     temporal_codegen: bool = False
+    # Typed-fact certain/possible envelope (docs/plans/31; candidate_unit_envelope).
+    # Membership is judged k times INDEPENDENTLY; contestability = instability
+    # across judges (split votes => contested). k=3 measured to kill single-pass
+    # false-contestability (helmet/food-drive both stably resolve) on gpt4_d84a3211
+    # + 5a7937c8. Cache dir holds sha1-keyed raw responses so re-runs are free.
+    envelope_membership_samples: int = 3
+    envelope_cache_path: str = ".simba/eval/envelope_cache"
+    # Cap on entity re-reads per case (one provider call each) so instance/entity
+    # questions with many typed candidates do not balloon cost.
+    envelope_reread_max_candidates: int = 8
+    # Cross-session entity resolution: an LLM coref pass groups handles that denote the
+    # same real-world thing across sessions (the per-session formalizer cannot),
+    # fixing the lights double-count and instance over-counting. Distinct-protected.
+    envelope_cross_session_resolution: bool = True
     default_k: int = 10
     default_n: int = 50
     results_path: str = ".simba/eval/results.jsonl"

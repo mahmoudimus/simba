@@ -59,6 +59,47 @@
   for WordNet/FrameNet resources and a micro-schema ontology router that can
   cache/append ratification candidates for Fail18-style ambiguity probes.
 
+- **Recursive fact formalizer boundary.** Candidate-unit formalizer payloads now
+  ask providers for neutral recursive facts (`action`, `event`, `object_type`,
+  `relation`, `value`, etc.) instead of answer-support labels or fail18-shaped
+  predicates; legacy polarity outputs remain parseable for historical artifacts.
+  A follow-up residual normalizer can now run over `other` facts only, converting
+  them to generic predicates when possible while keeping answer labels and
+  candidate-unit status out of the provider payload. A deterministic recursive
+  fact compiler now consumes the normalized facts directly and emits
+  candidate-unit rows for the five active fail18 candidate-unit cases, reaching
+  5/5 recomputed gold matches on that slice without using the old provider
+  candidate-unit outputs. The compiler now has adversarial/paraphrase tests for
+  action-obligation synonyms, attended-event wording, and negative charity-sum
+  controls. A full fail18 recursive-v2 formalizer payload artifact now covers all
+  18 fail18 rows / 122 evidence sessions with gold, failure-mode, and raw
+  session labels hidden. Candidate-unit labels now saturate incomplete
+  relational noun phrases such as `new pair` only from explicit `sortal` /
+  bridging facts, so answer units can display `new pair of boots` without
+  treating the replacement pair as identical to the exchanged pair. The formalizer
+  contract now keeps `coreference` for true identity and represents contrastive
+  replacement mentions with `distinct` plus ordinary `relation` facts. Recursive
+  fact compilation now hard-fails evidence-local fact sets that overload the
+  same bare symbol as both entity and type, while leaving future ontology/type
+  lattice namespaces separate. The provider contract also treats unknown optional
+  argument values as omitted/null rather than concrete empty strings. The
+  compiler now uses a local WordNet JSONL type-subsumption ratifier for target
+  matching, so evidence-local facts such as `sortal(new_pair_1, boots)` can
+  satisfy a `clothing` query without emitting ad hoc ontology edges; the ratifier
+  is noun-only and definition-gated to avoid homonym shortcuts such as
+  `book -> clothing`. Formalizer outputs may now use `facts: []` for irrelevant
+  evidence sessions, and the recursive compiler quarantines evidence sessions
+  with sorted-symbol or consistency violations instead of invalidating the whole
+  case. The compiler reports inclusion-mutation sensitivity so aggregate answer
+  scores expose balanced include/exclude compensation gaps. Fail18 numeric gold
+  parsing now preserves decimal human answers such as `0.5 hours` instead of
+  truncating them through integer `gold_count` fields. The typed-fact envelope
+  intent planner now uses a closed operation set for `sum_value`, `sum_duration`,
+  `lookup_scalar`, `date_answer`, and `stated_total` in addition to money, day,
+  instance-count, and entity-selection shapes, so obvious fail18 shape errors
+  are routed before membership aggregation rather than handled as free-form
+  arithmetic.
+
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments
   without mutating by default. `simba memory compact --run --older-than 24h`
