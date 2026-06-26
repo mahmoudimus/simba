@@ -46,6 +46,7 @@ import simba.config
 from simba.eval import bench_config, candidate_unit_formalizer, interpretation_runner
 
 ENVELOPE_PROMPT_VERSION = "candidate_unit_envelope_v1"
+FORMALIZED_FACTS_CACHE_VERSION = "candidate_unit_envelope_formalized_facts_v1"
 
 # A value/date emitted as a "relation" is a node property, not a new edge -- it
 # must not inflate recovered relations.
@@ -1418,6 +1419,82 @@ def _grab_json_array(text: str) -> list[typing.Any]:
 # ===========================================================================
 # Provider orchestration (live)
 # ===========================================================================
+def _facts_cache_path(facts_dir: pathlib.Path, case_id: str) -> pathlib.Path:
+    safe_case_id = re.sub(r"[^a-zA-Z0-9._-]", "_", str(case_id)).strip("._-")
+    if not safe_case_id:
+        safe_case_id = "case"
+    return facts_dir / f"{safe_case_id}.formalized_facts.json"
+
+
+def _hash_text(value: typing.Any) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
+def _answer_session_fingerprint(
+    answer_sessions: dict[str, tuple[str, str | None]]
+) -> tuple[tuple[str, str, str | None], ...]:
+    return tuple(
+        sorted(
+            (session_id, _hash_text(text), date)
+            for session_id, (text, date) in answer_sessions.items()
+        )
+    )
+
+
+def _read_formalized_facts_cache(
+    *,
+    facts_dir: pathlib.Path,
+    case_id: str,
+    question: str,
+    answer_sessions: dict[str, tuple[str, str | None]],
+) -> list[dict[str, typing.Any]] | None:
+    cache_file = _facts_cache_path(facts_dir, case_id)
+    if not cache_file.exists():
+        return None
+    payload = json.loads(cache_file.read_text(encoding="utf-8"))
+    if (
+        payload.get("cache_schema_version") != FORMALIZED_FACTS_CACHE_VERSION
+        or payload.get("case_id") != case_id
+        or payload.get("question_sha256") != _hash_text(question)
+        or payload.get("answer_session_fingerprint")
+        != [list(item) for item in _answer_session_fingerprint(answer_sessions)]
+    ):
+        return None
+    cached_facts = payload.get("facts")
+    if not isinstance(cached_facts, list):
+        return None
+    return [dict(fact) for fact in cached_facts if isinstance(fact, dict)]
+
+
+def _write_formalized_facts_cache(
+    *,
+    facts_dir: pathlib.Path,
+    case_id: str,
+    question: str,
+    answer_sessions: dict[str, tuple[str, str | None]],
+    facts: list[dict[str, typing.Any]],
+) -> None:
+    facts_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = _facts_cache_path(facts_dir, case_id)
+    payload = {
+        "cache_schema_version": FORMALIZED_FACTS_CACHE_VERSION,
+        "case_id": case_id,
+        "question_sha256": _hash_text(question),
+        "answer_session_fingerprint": list(
+            _answer_session_fingerprint(answer_sessions)
+        ),
+        "n_facts": len(facts),
+        "facts": facts,
+    }
+    cache_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _validate_facts_mode(value: str) -> str:
+    if value not in {"off", "read", "write", "rw"}:
+        raise ValueError("facts_mode must be one of: off, read, write, rw")
+    return value
+
+
 def _cached_provider(
     prompt: str,
     *,
@@ -1464,8 +1541,26 @@ def extract_facts(
     command: str,
     timeout_seconds: int,
     cache_dir: pathlib.Path | None,
+    facts_dir: pathlib.Path | None = None,
+    facts_mode: str = "off",
 ) -> list[dict[str, typing.Any]]:
     """Run the formalizer per answer-session; tag each fact session/span_ok."""
+    facts_mode = _validate_facts_mode(facts_mode)
+    if facts_mode in {"read", "rw", "write"} and facts_dir is None:
+        raise ValueError("facts_mode requires --facts-dir")
+    if facts_mode in {"read", "rw"} and facts_dir is not None:
+        cached_facts = _read_formalized_facts_cache(
+            facts_dir=facts_dir,
+            case_id=case_id,
+            question=question,
+            answer_sessions=answer_sessions,
+        )
+        if cached_facts is not None:
+            return cached_facts
+        if facts_mode == "read":
+            raise FileNotFoundError(
+                f"no matching formalized-facts cache for case {case_id!r}"
+            )
     facts: list[dict[str, typing.Any]] = []
     for session_id, (text, date) in answer_sessions.items():
         payload = candidate_unit_formalizer.build_formalizer_payload(
@@ -1489,6 +1584,14 @@ def extract_facts(
             record["_session"] = session_id
             record["_span_ok"] = fact.evidence_span in text
             facts.append(record)
+    if facts_mode in {"write", "rw"} and facts_dir is not None:
+        _write_formalized_facts_cache(
+            facts_dir=facts_dir,
+            case_id=case_id,
+            question=question,
+            answer_sessions=answer_sessions,
+            facts=facts,
+        )
     return facts
 
 
@@ -1671,6 +1774,8 @@ def run_envelope_case(
     command: str = interpretation_runner.DEFAULT_PROVIDER_COMMAND,
     timeout_seconds: int = interpretation_runner.DEFAULT_TIMEOUT_SECONDS,
     cache_dir: pathlib.Path | None = None,
+    facts_dir: pathlib.Path | None = None,
+    facts_mode: str = "off",
     reread_max_candidates: int = 8,
     cross_session_resolution: bool = True,
 ) -> dict[str, typing.Any]:
@@ -1697,6 +1802,8 @@ def run_envelope_case(
         command=command,
         timeout_seconds=timeout_seconds,
         cache_dir=cache_dir,
+        facts_dir=facts_dir,
+        facts_mode=facts_mode,
     )
     intent = detect_intent(question)
     bundles = resolve_entities(facts)
@@ -1820,6 +1927,20 @@ def main(argv: list[str] | None = None) -> int:
         default=pathlib.Path(bench.envelope_cache_path),
     )
     parser.add_argument(
+        "--facts-dir",
+        type=pathlib.Path,
+        default=pathlib.Path(".simba/formalized-facts"),
+    )
+    parser.add_argument(
+        "--facts-mode",
+        choices=("off", "read", "write", "rw"),
+        default="off",
+        help=(
+            "off = never use formalized-facts cache; read = require cache-only; "
+            "write = always overwrite cache; rw = reuse cache if present."
+        ),
+    )
+    parser.add_argument(
         "--reread-max-candidates",
         type=int,
         default=bench.envelope_reread_max_candidates,
@@ -1845,6 +1966,8 @@ def main(argv: list[str] | None = None) -> int:
             command=args.provider,
             timeout_seconds=args.timeout_seconds,
             cache_dir=args.cache_dir,
+            facts_dir=args.facts_dir,
+            facts_mode=args.facts_mode,
             reread_max_candidates=args.reread_max_candidates,
             cross_session_resolution=(
                 bench.envelope_cross_session_resolution

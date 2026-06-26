@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import typing
 
+import pytest
+
 from simba.eval import candidate_unit_envelope as env
 
 
@@ -1202,3 +1204,112 @@ def test_judge_membership_degrades_provider_failure_to_contested(monkeypatch) ->
         "trip_2": ["contested", "contested"],
     }
     assert aggregation == ""
+
+
+def test_extract_facts_reads_cached_formalized_facts_in_read_mode(
+    monkeypatch, tmp_path
+) -> None:
+    answer_sessions = {"s1": ("USER: I currently have a tank.", "2026-06-01")}
+    cached_facts = [
+        fact("object_type", {"entity": "tank_1", "type": "tank"}, session="s1")
+    ]
+    env._write_formalized_facts_cache(
+        facts_dir=tmp_path,
+        case_id="case_1",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+        facts=cached_facts,
+    )
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("provider should not be called in --facts-mode=read")
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    read_facts = env.extract_facts(
+        case_id="case_1",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=None,
+        facts_dir=tmp_path,
+        facts_mode="read",
+    )
+    assert read_facts == cached_facts
+
+
+def test_extract_facts_in_read_mode_requires_matching_cache(tmp_path) -> None:
+    with pytest.raises(FileNotFoundError):
+        env.extract_facts(
+            case_id="missing_case",
+            question="How many tanks?",
+            answer_sessions={"s1": ("USER: ...", None)},
+            command="provider",
+            timeout_seconds=1,
+            cache_dir=None,
+            facts_dir=tmp_path,
+            facts_mode="read",
+        )
+
+
+def test_extract_facts_facts_mode_requires_facts_dir() -> None:
+    with pytest.raises(ValueError, match="facts_mode requires"):
+        env.extract_facts(
+            case_id="case_1",
+            question="How many tanks?",
+            answer_sessions={"s1": ("USER: ...", None)},
+            command="provider",
+            timeout_seconds=1,
+            cache_dir=None,
+            facts_mode="read",
+        )
+
+
+def test_extract_facts_rw_mode_writes_cache_on_miss(tmp_path, monkeypatch) -> None:
+    answer_sessions = {"s1": ("USER: I currently have a tank.", "2026-06-01")}
+    parsed = env.candidate_unit_formalizer.FormalizerParseResult(
+        formalizer_id="candidate_unit_envelope_formalizer",
+        case_id="case_1",
+        evidence_session_id="s1",
+        parse_status=env.candidate_unit_formalizer.PARSE_STATUS_PARSED,
+        facts=(
+            env.candidate_unit_formalizer.FormalFact(
+                fact_id="f1",
+                predicate="object_type",
+                arguments={"entity": "tank_1", "type": "tank"},
+                evidence_span="currently",
+                confidence=1.0,
+            ),
+        ),
+        notes="",
+        parse_errors=(),
+    )
+    monkeypatch.setattr(env, "_cached_provider", lambda *_, **__: "{}")
+    monkeypatch.setattr(
+        env.candidate_unit_formalizer,
+        "parse_formalizer_response",
+        lambda *_a, **_k: parsed,
+    )
+
+    facts = env.extract_facts(
+        case_id="case_1",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=None,
+        facts_dir=tmp_path,
+        facts_mode="rw",
+    )
+
+    assert len(facts) == 1
+    assert facts[0]["_session"] == "s1"
+    assert facts[0]["_span_ok"] is True
+    cached = env._read_formalized_facts_cache(
+        facts_dir=tmp_path,
+        case_id="case_1",
+        question="How many tanks?",
+        answer_sessions=answer_sessions,
+    )
+    assert cached == facts
