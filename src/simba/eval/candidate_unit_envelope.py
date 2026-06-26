@@ -112,6 +112,22 @@ AGGREGATION_DURATION = "sum_duration"  # "how many hours/minutes"
 AGGREGATION_LOOKUP = "lookup_scalar"  # "points needed to redeem"
 AGGREGATION_DATE = "date_answer"  # "when did I..."
 AGGREGATION_STATED_TOTAL = "stated_total"  # "how many rare items do I have in total"
+VALUE_ROLE_ANSWER = "answer_value"
+VALUE_ROLE_CURRENT_BALANCE = "current_balance"
+VALUE_ROLE_THRESHOLD = "threshold"
+VALUE_ROLE_DISTRACTOR = "distractor_value"
+VALUE_ROLE_SUBTOTAL = "subtotal"
+VALUE_ROLE_HISTORICAL = "historical_value"
+_VALUE_ROLES = frozenset(
+    {
+        VALUE_ROLE_ANSWER,
+        VALUE_ROLE_CURRENT_BALANCE,
+        VALUE_ROLE_THRESHOLD,
+        VALUE_ROLE_DISTRACTOR,
+        VALUE_ROLE_SUBTOTAL,
+        VALUE_ROLE_HISTORICAL,
+    }
+)
 # Abstract / speaker handles that are never an answer instance.
 _NON_ANSWER_TYPE_HINTS = ("person", "user", "goal", "mileage")
 # value attributes that name an instance (distinguish same-type instances).
@@ -155,6 +171,15 @@ class EntityBundle:
         # entity_select can distinguish same-type instances.
         longest_type = max(self.types, key=len) if self.types else ""
         return self.name or longest_type or self.root
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueFact:
+    attribute: str
+    value: str
+    unit: str
+    numeric: float
+    role: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -248,6 +273,116 @@ def _value_rows(bundle: EntityBundle) -> list[tuple[str, str, str, float]]:
     return rows
 
 
+def _text_blob(*parts: typing.Any) -> str:
+    return " ".join(str(part).lower().replace("_", " ") for part in parts if part)
+
+
+def _bundle_value_context(bundle: EntityBundle | None) -> str:
+    if bundle is None:
+        return ""
+    return _text_blob(
+        bundle.root,
+        " ".join(bundle.handles),
+        " ".join(bundle.types),
+        " ".join(f"{relation} {target}" for relation, target in bundle.relations),
+        " ".join(f"{verb} {status}" for verb, status in bundle.actions),
+    )
+
+
+def classify_value_role(
+    attribute: str,
+    value: str,
+    unit: str,
+    *,
+    question: str = "",
+    bundle: EntityBundle | None = None,
+) -> str:
+    """Classify a scalar ``value`` fact by its answer role.
+
+    This is intentionally conservative. Explicit attribute names win. Generic
+    numbers are treated as distractors unless their unit/context matches the
+    question's answer variable strongly enough to be answer-bearing.
+    """
+    attr = _text_blob(attribute)
+    value_text = _text_blob(value)
+    unit_text = _text_blob(unit)
+    question_text = _text_blob(question)
+    context = _bundle_value_context(bundle)
+    local = _text_blob(attr, unit_text)
+    if _is_money_value(attr, value_text, unit_text) or _is_duration_value(
+        attr, unit_text
+    ):
+        return VALUE_ROLE_DISTRACTOR
+    if re.search(r"\b(previous|prev|prior|historical|formerly|old|past)\b", attr):
+        return VALUE_ROLE_HISTORICAL
+    if re.search(r"\b(subtotal|partial total|category total|line total)\b", attr):
+        return VALUE_ROLE_SUBTOTAL
+    if re.search(
+        r"\b(required|requirement|threshold|redeem|redemption|needed|need to|minimum|"
+        r"points cost|redemption cost|reward cost|cost in points)\b",
+        local,
+    ):
+        return VALUE_ROLE_THRESHOLD
+    if re.search(
+        r"\b(balance|current|currently|available|owned|holding|have now|on hand|"
+        r"total points|points earned|earned points)\b",
+        local,
+    ):
+        return VALUE_ROLE_CURRENT_BALANCE
+    if re.search(r"\b(points?)\b", unit_text) and re.search(
+        r"\b(cost|earn|need|required|redeem|redemption)\b", attr
+    ):
+        return VALUE_ROLE_THRESHOLD
+    if re.search(r"\b(points?)\b", unit_text) and re.search(
+        r"\b(balance|current|available|earned|have|total)\b", attr
+    ):
+        return VALUE_ROLE_CURRENT_BALANCE
+    if re.search(
+        r"\b(clicks?|click through|ctr|rate|percent|discount|age|years?|score|"
+        r"ranking|rank)\b",
+        local,
+    ):
+        return VALUE_ROLE_DISTRACTOR
+    if re.search(
+        r"\b(reach|reached|impressions?|views?|followers?|audience|customers?|"
+        r"users?|people)\b",
+        local,
+    ) and (
+        "people" in question_text
+        or re.search(
+            r"\b(reach|reached|audience|views?|users?|customers?)\b", question_text
+        )
+    ):
+        return VALUE_ROLE_ANSWER
+    if re.search(r"\b(count|number|total|quantity|item count)\b", attr) and not (
+        "price" in attr or "cost" in attr
+    ):
+        return VALUE_ROLE_ANSWER
+    if "prev" in context and re.search(r"\b(previous|prev)\b", context):
+        return VALUE_ROLE_HISTORICAL
+    return VALUE_ROLE_DISTRACTOR
+
+
+def _classified_value_rows(
+    bundle: EntityBundle, *, question: str = ""
+) -> list[ValueFact]:
+    rows: list[ValueFact] = []
+    for attribute, value, unit, numeric in _value_rows(bundle):
+        role = classify_value_role(
+            attribute, value, unit, question=question, bundle=bundle
+        )
+        rows.append(
+            ValueFact(
+                attribute=attribute,
+                value=value,
+                unit=unit,
+                numeric=numeric,
+                role=role,
+            )
+        )
+    return rows
+
+
 def _is_duration_value(attribute: str, unit: str) -> bool:
     return unit in _DURATION_UNITS or attribute in {"duration", "elapsed_time", "time"}
 
@@ -270,13 +405,29 @@ def _duration_hours(attribute: str, unit: str, value: float) -> float | None:
     return value
 
 
-def _quantity_values(bundle: EntityBundle) -> list[float]:
-    return [
-        numeric
-        for attribute, value, unit, numeric in _value_rows(bundle)
-        if not _is_money_value(attribute, value, unit)
-        and not _is_duration_value(attribute, unit)
+def _quantity_value_rows(
+    bundle: EntityBundle, *, question: str = ""
+) -> list[ValueFact]:
+    answer_values = [
+        row
+        for row in _classified_value_rows(bundle, question=question)
+        if row.role == VALUE_ROLE_ANSWER
+        and not _is_money_value(row.attribute, row.value, row.unit)
+        and not _is_duration_value(row.attribute, row.unit)
     ]
+    if answer_values:
+        return answer_values
+    return [
+        row
+        for row in _classified_value_rows(bundle, question=question)
+        if row.role == VALUE_ROLE_SUBTOTAL
+        and not _is_money_value(row.attribute, row.value, row.unit)
+        and not _is_duration_value(row.attribute, row.unit)
+    ]
+
+
+def _quantity_values(bundle: EntityBundle, *, question: str = "") -> list[float]:
+    return [row.numeric for row in _quantity_value_rows(bundle, question=question)]
 
 
 def _duration_values(bundle: EntityBundle) -> list[float]:
@@ -288,12 +439,56 @@ def _duration_values(bundle: EntityBundle) -> list[float]:
     return values
 
 
-def _scalar_values(bundle: EntityBundle) -> list[float]:
+def _scalar_values(
+    bundle: EntityBundle,
+    *,
+    question: str = "",
+    roles: typing.Container[str] = _VALUE_ROLES,
+) -> list[float]:
     return [
-        numeric
-        for attribute, value, unit, numeric in _value_rows(bundle)
-        if not _is_money_value(attribute, value, unit)
+        row.numeric
+        for row in _classified_value_rows(bundle, question=question)
+        if row.role in roles and not _is_money_value(row.attribute, row.value, row.unit)
     ]
+
+
+def _lookup_values(bundle: EntityBundle, *, question: str = "") -> list[float]:
+    for roles in (
+        {VALUE_ROLE_THRESHOLD},
+        {VALUE_ROLE_ANSWER, VALUE_ROLE_SUBTOTAL},
+        {VALUE_ROLE_CURRENT_BALANCE},
+    ):
+        values = _scalar_values(bundle, question=question, roles=roles)
+        if values:
+            return values
+    return []
+
+
+def _lookup_values_across_roots(
+    bundles: dict[str, EntityBundle], roots: typing.Iterable[str], *, question: str = ""
+) -> list[float]:
+    roots = list(roots)
+    for roles in (
+        {VALUE_ROLE_THRESHOLD},
+        {VALUE_ROLE_ANSWER, VALUE_ROLE_SUBTOTAL},
+        {VALUE_ROLE_CURRENT_BALANCE},
+    ):
+        values = sorted(
+            value
+            for root in roots
+            for value in _scalar_values(bundles[root], question=question, roles=roles)
+        )
+        if values:
+            return values
+    return []
+
+
+def _stated_total_values(bundle: EntityBundle, *, question: str = "") -> list[float]:
+    return _scalar_values(
+        bundle,
+        question=question,
+        roles={VALUE_ROLE_ANSWER, VALUE_ROLE_SUBTOTAL, VALUE_ROLE_CURRENT_BALANCE},
+    )
 
 
 def vote_tag(votes: typing.Sequence[str]) -> str | None:
@@ -583,7 +778,9 @@ def _is_abstract(types: typing.Iterable[str]) -> bool:
     )
 
 
-def select_candidates(bundles: dict[str, EntityBundle], intent: str) -> list[str]:
+def select_candidates(
+    bundles: dict[str, EntityBundle], intent: str, *, question: str = ""
+) -> list[str]:
     """Answer candidates by shape: priced/purchasable (sum), dated activities (days),
     or typed instances (instances / entity_select)."""
     candidates: list[str] = []
@@ -596,13 +793,16 @@ def select_candidates(bundles: dict[str, EntityBundle], intent: str) -> list[str
             if bundle.usd is not None or buyish:
                 candidates.append(root)
         elif intent == AGGREGATION_SUM_VALUE:
-            if _quantity_values(bundle):
+            if _quantity_values(bundle, question=question):
                 candidates.append(root)
         elif intent == AGGREGATION_DURATION:
             if _duration_values(bundle):
                 candidates.append(root)
-        elif intent in (AGGREGATION_LOOKUP, AGGREGATION_STATED_TOTAL):
-            if _scalar_values(bundle):
+        elif intent == AGGREGATION_LOOKUP:
+            if _lookup_values(bundle, question=question):
+                candidates.append(root)
+        elif intent == AGGREGATION_STATED_TOTAL:
+            if _stated_total_values(bundle, question=question):
                 candidates.append(root)
         elif intent == AGGREGATION_DAYS:
             if bundle.dates or bundle.events:
@@ -626,8 +826,47 @@ def _distinct_days(
 def _sum_quantity_values(
     bundles: dict[str, EntityBundle],
     roots: typing.Iterable[str],
+    *,
+    question: str = "",
 ) -> float:
-    return sum(value for root in roots for value in _quantity_values(bundles[root]))
+    total = 0.0
+    seen: list[tuple[float, str, frozenset[str]]] = []
+    for root in roots:
+        bundle = bundles[root]
+        context_tokens = normalize_tokens(
+            _text_blob(
+                root,
+                " ".join(bundle.handles),
+                " ".join(bundle.types),
+                " ".join(
+                    f"{relation} {target}" for relation, target in bundle.relations
+                ),
+            )
+        )
+        for row in _quantity_value_rows(bundle, question=question):
+            attr_key = _quantity_attribute_key(row.attribute, row.unit)
+            duplicate = any(
+                row.numeric == old_numeric
+                and attr_key == old_attr_key
+                and bool(context_tokens & old_context_tokens)
+                for old_numeric, old_attr_key, old_context_tokens in seen
+            )
+            if duplicate:
+                continue
+            seen.append((row.numeric, attr_key, context_tokens))
+            total += row.numeric
+    return total
+
+
+def _quantity_attribute_key(attribute: str, unit: str) -> str:
+    text = _text_blob(attribute, unit)
+    if re.search(r"\b(reach|reached|people)\b", text):
+        return "people_reached"
+    if re.search(r"\b(followers?|audience)\b", text):
+        return "audience_size"
+    if re.search(r"\b(views?|impressions?)\b", text):
+        return "impressions"
+    return text
 
 
 def _sum_duration_values(
@@ -640,11 +879,42 @@ def _sum_duration_values(
 def _scalar_range(
     bundles: dict[str, EntityBundle],
     roots: typing.Iterable[str],
+    *,
+    question: str = "",
+    lookup: bool = False,
+    stated_total: bool = False,
 ) -> tuple[float, float]:
-    values = sorted(value for root in roots for value in _scalar_values(bundles[root]))
+    if lookup:
+        values = _lookup_values_across_roots(bundles, roots, question=question)
+    elif stated_total:
+        values = sorted(
+            value
+            for root in roots
+            for value in _stated_total_values(bundles[root], question=question)
+        )
+    else:
+        values = sorted(
+            value
+            for root in roots
+            for value in _scalar_values(bundles[root], question=question)
+        )
     if not values:
         return 0.0, 0.0
     return values[0], values[-1]
+
+
+def _lookup_answer(
+    bundles: dict[str, EntityBundle],
+    roots: typing.Iterable[str],
+    *,
+    question: str = "",
+) -> float:
+    values = _lookup_values_across_roots(bundles, roots, question=question)
+    if not values:
+        return 0.0
+    # Requirement lookups ask for the qualifying threshold, not the largest
+    # scalar mentioned near the account or reward.
+    return min(values)
 
 
 def _date_labels(
@@ -661,6 +931,8 @@ def aggregate_envelope(
     judged: dict[str, str],
     aggregation: str,
     candidates: typing.Sequence[str],
+    *,
+    question: str = "",
 ) -> EnvelopeResult:
     """Deterministic certain/possible aggregate over LLM-tagged membership."""
     certain_roots = [
@@ -676,14 +948,23 @@ def aggregate_envelope(
         certain = float(len(_distinct_days(bundles, certain_roots)))
         possible = float(len(_distinct_days(bundles, possible_roots)))
     elif aggregation == AGGREGATION_SUM_VALUE:
-        certain = _sum_quantity_values(bundles, certain_roots)
-        possible = _sum_quantity_values(bundles, possible_roots)
+        certain = _sum_quantity_values(bundles, certain_roots, question=question)
+        possible = _sum_quantity_values(bundles, possible_roots, question=question)
     elif aggregation == AGGREGATION_DURATION:
         certain = _sum_duration_values(bundles, certain_roots)
         possible = _sum_duration_values(bundles, possible_roots)
-    elif aggregation in (AGGREGATION_LOOKUP, AGGREGATION_STATED_TOTAL):
-        _certain_low, certain_high = _scalar_range(bundles, certain_roots)
-        _possible_low, possible_high = _scalar_range(bundles, possible_roots)
+    elif aggregation == AGGREGATION_LOOKUP:
+        certain_answer = _lookup_answer(bundles, certain_roots, question=question)
+        possible_answer = _lookup_answer(bundles, possible_roots, question=question)
+        certain = min(certain_answer, possible_answer)
+        possible = max(certain_answer, possible_answer)
+    elif aggregation == AGGREGATION_STATED_TOTAL:
+        _certain_low, certain_high = _scalar_range(
+            bundles, certain_roots, question=question, stated_total=True
+        )
+        _possible_low, possible_high = _scalar_range(
+            bundles, possible_roots, question=question, stated_total=True
+        )
         certain = certain_high
         possible = possible_high
     elif aggregation == AGGREGATION_INSTANCES:
@@ -787,7 +1068,14 @@ def build_membership_payload(
                 "type": ", ".join(bundle.types) or "?",
                 "usd": bundle.usd,
                 "values": [
-                    {"attribute": attr, "value": value, "unit": unit}
+                    {
+                        "attribute": attr,
+                        "value": value,
+                        "unit": unit,
+                        "role": classify_value_role(
+                            attr, value, unit, question=question, bundle=bundle
+                        ),
+                    }
                     for attr, value, unit in bundle.values
                 ],
                 "dates": list(bundle.dates),
@@ -1241,7 +1529,7 @@ def run_envelope_case(
         )
         if merges:
             bundles = resolve_entities(facts, extra_unions=merges)
-    candidates = select_candidates(bundles, intent)
+    candidates = select_candidates(bundles, intent, question=question)
     bundles, recovered = complete_relations(
         bundles=bundles,
         candidates=candidates,
@@ -1264,7 +1552,9 @@ def run_envelope_case(
     )
     # detect_intent is authoritative for the shape; judged_aggregation is audit-only.
     aggregation = intent
-    envelope = aggregate_envelope(bundles, judged, aggregation, candidates)
+    envelope = aggregate_envelope(
+        bundles, judged, aggregation, candidates, question=question
+    )
     resolved, total = span_resolution(facts)
     return {
         "case_id": case_id,
@@ -1291,6 +1581,15 @@ def run_envelope_case(
                 "tag": judged.get(root),
                 "votes": votes.get(root, []),
                 "usd": bundles[root].usd,
+                "values": [
+                    {
+                        "attribute": row.attribute,
+                        "value": row.value,
+                        "unit": row.unit,
+                        "role": row.role,
+                    }
+                    for row in _classified_value_rows(bundles[root], question=question)
+                ],
                 "dates": list(bundles[root].dates),
             }
             for root in candidates

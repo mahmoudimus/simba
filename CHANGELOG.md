@@ -98,7 +98,13 @@
   `lookup_scalar`, `date_answer`, and `stated_total` in addition to money, day,
   instance-count, and entity-selection shapes, so obvious fail18 shape errors
   are routed before membership aggregation rather than handled as free-form
-  arithmetic.
+  arithmetic. The envelope now classifies scalar value facts into answer,
+  threshold, balance, subtotal, historical, and distractor roles so `sum_value`
+  ignores unrelated prices/clicks/rates and `lookup_scalar` prefers requirement
+  thresholds over current balances. On fail18, the value-role rerun improved
+  gold-in-envelope coverage from 9/18 to 11/18; `60036106` now collapses exactly
+  to `[12000,12000]`, while `9ee3ecd6` moves from the wrong 300-point scalar to
+  a still-wide `[50,200]` threshold envelope.
 
 - **LanceDB storage compaction CLI.** `simba memory compact` now reports live
   LanceDB bytes versus recursive on-disk bytes, retained versions, and fragments

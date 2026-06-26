@@ -169,6 +169,42 @@ def test_classify_relation_separates_values_and_times_from_real_edges() -> None:
     )  # date in target
 
 
+def test_classify_value_role_from_explicit_attributes() -> None:
+    assert (
+        env.classify_value_role(
+            "people_reached", "12000", "people", question="total people reached"
+        )
+        == env.VALUE_ROLE_ANSWER
+    )
+    assert (
+        env.classify_value_role(
+            "points_required", "100", "points", question="points needed to redeem"
+        )
+        == env.VALUE_ROLE_THRESHOLD
+    )
+    assert (
+        env.classify_value_role(
+            "redemption_cost", "100", "points", question="points needed to redeem"
+        )
+        == env.VALUE_ROLE_THRESHOLD
+    )
+    assert (
+        env.classify_value_role(
+            "points_balance", "300", "points", question="points needed to redeem"
+        )
+        == env.VALUE_ROLE_CURRENT_BALANCE
+    )
+    assert env.classify_value_role("subtotal", "50", "items") == env.VALUE_ROLE_SUBTOTAL
+    assert (
+        env.classify_value_role("previous_total", "50", "items")
+        == env.VALUE_ROLE_HISTORICAL
+    )
+    assert (
+        env.classify_value_role("clicks", "50", "clicks")
+        == env.VALUE_ROLE_DISTRACTOR
+    )
+
+
 # --- is_dup_edge
 def test_is_dup_edge_token_subset_matches_across_formatting() -> None:
     assert (
@@ -535,14 +571,135 @@ def test_envelope_sum_value_sums_people_reached() -> None:
             },
             session="s2",
         ),
+        fact(
+            "value",
+            {
+                "entity": "campaign_2",
+                "attribute": "clicks",
+                "value": "50",
+                "unit": "clicks",
+            },
+            session="s2",
+        ),
+        fact(
+            "value",
+            {
+                "entity": "campaign_2",
+                "attribute": "campaign_cost",
+                "value": "25",
+                "unit": "USD",
+            },
+            session="s2",
+        ),
     ]
     bundles = env.resolve_entities(facts)
-    cands = env.select_candidates(bundles, env.AGGREGATION_SUM_VALUE)
+    question = "What total number of people reached did the campaigns get?"
+    cands = env.select_candidates(bundles, env.AGGREGATION_SUM_VALUE, question=question)
     assert set(cands) == {"campaign_1", "campaign_2"}
     judged = {"campaign_1": "certain_in", "campaign_2": "contested"}
-    result = env.aggregate_envelope(bundles, judged, env.AGGREGATION_SUM_VALUE, cands)
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_SUM_VALUE, cands, question=question
+    )
     assert [result.certain, result.possible] == [12000.0, 12500.0]
     assert result.pivot == ("campaign_2",)
+
+
+def test_60036106_sum_value_ignores_unrelated_numeric_values() -> None:
+    facts = [
+        fact("object_type", {"entity": "facebook_ad", "type": "ad campaign"}),
+        fact(
+            "value",
+            {
+                "entity": "facebook_ad",
+                "attribute": "people_reached",
+                "value": "2000",
+                "unit": "people",
+            },
+        ),
+        fact(
+            "value",
+            {
+                "entity": "facebook_ad",
+                "attribute": "clicks",
+                "value": "50",
+                "unit": "clicks",
+            },
+        ),
+        fact(
+            "value",
+            {
+                "entity": "facebook_ad",
+                "attribute": "campaign_cost",
+                "value": "102.50",
+                "unit": "USD",
+            },
+        ),
+        fact("object_type", {"entity": "influencer", "type": "influencer"}),
+        fact(
+            "value",
+            {
+                "entity": "influencer",
+                "attribute": "followers",
+                "value": "10,000",
+                "unit": "people",
+            },
+        ),
+    ]
+    question = (
+        "What total number of people reached did my Facebook ad campaign and "
+        "Instagram influencer collaboration get?"
+    )
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_SUM_VALUE, question=question)
+    assert set(cands) == {"facebook_ad", "influencer"}
+    judged = {"facebook_ad": "certain_in", "influencer": "certain_in"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_SUM_VALUE, cands, question=question
+    )
+    assert [result.certain, result.possible] == [12000.0, 12000.0]
+
+
+def test_sum_value_collapses_duplicate_same_context_answer_values() -> None:
+    facts = [
+        fact("object_type", {"entity": "campaign_1", "type": "facebook campaign"}),
+        fact(
+            "value",
+            {
+                "entity": "campaign_1",
+                "attribute": "people_reached",
+                "value": "2000",
+                "unit": "people",
+            },
+        ),
+        fact("object_type", {"entity": "campaign_previous", "type": "ad campaign"}),
+        fact(
+            "value",
+            {
+                "entity": "campaign_previous",
+                "attribute": "people_reached",
+                "value": "2000",
+                "unit": "people",
+            },
+        ),
+        fact("object_type", {"entity": "influencer", "type": "influencer"}),
+        fact(
+            "value",
+            {
+                "entity": "influencer",
+                "attribute": "followers",
+                "value": "10000",
+                "unit": "people",
+            },
+        ),
+    ]
+    question = "What was the total number of people reached?"
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_SUM_VALUE, question=question)
+    judged = {candidate: "certain_in" for candidate in cands}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_SUM_VALUE, cands, question=question
+    )
+    assert [result.certain, result.possible] == [12000.0, 12000.0]
 
 
 def test_envelope_duration_sum_normalizes_minutes_to_hours() -> None:
@@ -612,11 +769,85 @@ def test_envelope_lookup_scalar_uses_candidate_value_range() -> None:
         ),
     ]
     bundles = env.resolve_entities(facts)
-    cands = env.select_candidates(bundles, env.AGGREGATION_LOOKUP)
-    judged = {"sephora_reward": "certain_in", "current_points": "certain_out"}
-    result = env.aggregate_envelope(bundles, judged, env.AGGREGATION_LOOKUP, cands)
+    question = "How many points do I need to earn to redeem a free product?"
+    cands = env.select_candidates(bundles, env.AGGREGATION_LOOKUP, question=question)
+    judged = {"sephora_reward": "certain_in", "current_points": "certain_in"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_LOOKUP, cands, question=question
+    )
     assert [result.certain, result.possible] == [100.0, 100.0]
     assert result.collapsed is True
+
+
+def test_9ee3ecd6_lookup_prefers_threshold_over_current_balance() -> None:
+    facts = [
+        fact("object_type", {"entity": "skincare_reward", "type": "reward"}),
+        fact(
+            "value",
+            {
+                "entity": "skincare_reward",
+                "attribute": "points_required",
+                "value": "100",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "beauty_insider_account", "type": "account"}),
+        fact(
+            "value",
+            {
+                "entity": "beauty_insider_account",
+                "attribute": "current_points",
+                "value": "300",
+                "unit": "points",
+            },
+        ),
+    ]
+    question = (
+        "How many points do I need to earn to redeem a free skincare product "
+        "at Sephora?"
+    )
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_LOOKUP, question=question)
+    assert set(cands) == {"beauty_insider_account", "skincare_reward"}
+    judged = {"skincare_reward": "certain_in", "beauty_insider_account": "certain_in"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_LOOKUP, cands, question=question
+    )
+    assert [result.certain, result.possible] == [100.0, 100.0]
+
+
+def test_lookup_scalar_opens_when_lower_threshold_is_contested() -> None:
+    facts = [
+        fact("object_type", {"entity": "general_reward", "type": "reward"}),
+        fact(
+            "value",
+            {
+                "entity": "general_reward",
+                "attribute": "points_required",
+                "value": "300",
+                "unit": "points",
+            },
+        ),
+        fact("object_type", {"entity": "skincare_reward", "type": "skincare product"}),
+        fact(
+            "value",
+            {
+                "entity": "skincare_reward",
+                "attribute": "redemption_cost",
+                "value": "100",
+                "unit": "points",
+            },
+        ),
+    ]
+    question = "How many points do I need to earn to redeem a free skincare product?"
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_LOOKUP, question=question)
+    judged = {"general_reward": "certain_in", "skincare_reward": "contested"}
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_LOOKUP, cands, question=question
+    )
+    assert [result.certain, result.possible] == [100.0, 300.0]
+    assert result.pivot == ("skincare_reward",)
 
 
 def test_envelope_date_answer_returns_date_sets() -> None:
