@@ -103,18 +103,16 @@ class MemoryConfig:
     diagnostics_after: int = 50
     # Max latency samples kept per endpoint for p50/p95 in /metrics.
     diagnostics_reservoir_size: int = 1000
-    # Per-recall LanceDB access-tracking write (accessCount/lastAccessedAt on the
-    # row). DEFAULT-OFF: ranking reads access stats from the authoritative sqlite
-    # `memory_usage` sidecar, not these row fields, so this write is redundant —
-    # and it creates a new LanceDB version per recall, which ballooned a real
-    # store to 37GB / 25k versions. Keep off unless something consumes the row
-    # fields directly.
-    access_tracking_lancedb_enabled: bool = False
-    # Periodic compaction prunes LanceDB versions older than this many seconds
-    # (0 = never prune, the legacy behavior that caused the 37GB bloat). The
-    # auto-compaction in DiagnosticsTracker.emit_report passes this as the
-    # optimize() cleanup window so version history self-bounds.
-    compact_cleanup_seconds: int = 86_400
+    # How tightly to bound LanceDB version growth (the single knob folding two
+    # behaviors). A real store hit 37GB / 25,183 versions for 31MiB of live data.
+    #   > 0 (default 24h): BOUNDED — suppress the redundant per-recall
+    #       access-tracking write (accessCount/lastAccessedAt; never read for
+    #       ranking — the sqlite `memory_usage` sidecar is authoritative, so each
+    #       write only adds a LanceDB version) AND prune versions older than this
+    #       in the periodic compaction.
+    #   = 0: LEGACY/unbounded — perform the per-recall write and never prune
+    #       (the behavior that caused the 37GB bloat). Escape hatch only.
+    lancedb_version_retention_seconds: int = 86_400
     # Memory hygiene (Phase 7 ops): expire stale TOOL_RULE memories older than
     # this many days (0 = disabled). Solves the stale false-warning injection.
     tool_rule_max_age_days: int = 30

@@ -1021,9 +1021,10 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
 
         # LanceDB access tracking (never read for ranking — the sqlite usage
-        # sidecar below is authoritative). DEFAULT-OFF: each write creates a new
-        # LanceDB version, which ballooned a real store to 37GB/25k versions.
-        if getattr(config, "access_tracking_lancedb_enabled", False):
+        # sidecar below is authoritative). Only in LEGACY mode (retention == 0):
+        # each write adds a LanceDB version, which ballooned a store to 37GB/25k
+        # versions. Bounded retention (the default) suppresses it.
+        if getattr(config, "lancedb_version_retention_seconds", 86_400) <= 0:
             task1 = asyncio.create_task(
                 simba.memory.vector_db.update_access_tracking(table, recalled_ids)
             )

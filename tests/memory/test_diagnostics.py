@@ -51,7 +51,7 @@ class TestDiagnosticsTracker:
         import asyncio
         import datetime
 
-        tracker = DiagnosticsTracker(compact_cleanup_seconds=3600)
+        tracker = DiagnosticsTracker(retention_seconds=3600)
         with (
             patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)),
             patch(
@@ -67,7 +67,7 @@ class TestDiagnosticsTracker:
     def test_emit_report_no_retention_when_zero(self) -> None:
         import asyncio
 
-        tracker = DiagnosticsTracker(compact_cleanup_seconds=0)
+        tracker = DiagnosticsTracker(retention_seconds=0)
         with (
             patch("simba.memory.vector_db.count_rows", new=AsyncMock(return_value=0)),
             patch(

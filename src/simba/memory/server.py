@@ -119,7 +119,7 @@ def create_app(
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
         reservoir_size=config.diagnostics_reservoir_size,
-        compact_cleanup_seconds=config.compact_cleanup_seconds,
+        retention_seconds=config.lancedb_version_retention_seconds,
     )
     # Non-blocking LLM rerank cache (daemon-process lifetime).
     app.state.rerank_cache = simba.memory.rerank_cache.RerankCache(

@@ -22,14 +22,15 @@ class DiagnosticsTracker:
         self,
         report_interval: int = 50,
         reservoir_size: int = 1000,
-        compact_cleanup_seconds: int = 0,
+        retention_seconds: int = 0,
     ) -> None:
         self.report_interval = report_interval
         self._total_requests = 0
         self._reservoir_size = reservoir_size
-        # Version-retention window for the periodic auto-compaction (0 = never
-        # prune). Passed as optimize()'s cleanup_older_than so versions self-bound.
-        self._compact_cleanup_seconds = compact_cleanup_seconds
+        # LanceDB version-retention window for the periodic auto-compaction
+        # (0 = never prune). Passed as optimize()'s cleanup_older_than so version
+        # history self-bounds.
+        self._retention_seconds = retention_seconds
         self.last_error: dict[str, str] | None = None
         self._latency_samples: dict[str, list[float]] = collections.defaultdict(list)
         # Cumulative client tallies survive report resets (like _total_requests)
@@ -129,8 +130,8 @@ class DiagnosticsTracker:
             # Compact fragments AND prune old versions so the table self-bounds
             # (None retention = merge-only, the legacy 37GB-bloat behavior).
             cleanup = (
-                datetime.timedelta(seconds=self._compact_cleanup_seconds)
-                if self._compact_cleanup_seconds > 0
+                datetime.timedelta(seconds=self._retention_seconds)
+                if self._retention_seconds > 0
                 else None
             )
             await simba.memory.vector_db.compact_table(
