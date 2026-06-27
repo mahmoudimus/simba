@@ -496,6 +496,75 @@ def test_envelope_days_does_not_infer_duration_from_legacy_attribute_name() -> N
     assert candidates == []
 
 
+def test_location_ratifier_upgrades_contested_us_trip() -> None:
+    facts = [
+        fact("object_type", {"entity": "big_sur_trip", "type": "camping trip"}),
+        fact(
+            "event",
+            {
+                "event": "big_sur_trip",
+                "type": "camping trip",
+                "location": "Big Sur",
+                "date": "early April 2023",
+                "status": "completed",
+            },
+        ),
+        fact(
+            "quantity",
+            {
+                "entity": "big_sur_trip",
+                "dimension": "time.duration",
+                "value": "3",
+                "unit": "days",
+            },
+        ),
+    ]
+    question = "How many days did I spend on camping trips in the United States?"
+    bundles = env.resolve_entities(facts)
+    candidates = env.select_candidates(bundles, env.AGGREGATION_DAYS)
+
+    judged, ratifications = env.apply_location_membership_ratifier(
+        question=question,
+        bundles=bundles,
+        candidates=candidates,
+        judged={"big_sur_trip": env.MEMBERSHIP_CONTESTED},
+    )
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_DAYS, candidates, question=question
+    )
+
+    assert judged["big_sur_trip"] == env.MEMBERSHIP_CERTAIN_IN
+    assert ratifications[0]["path"] == ["Big Sur", "California", "United States"]
+    assert [result.certain, result.possible] == [3.0, 3.0]
+
+
+def test_location_ratifier_does_not_override_certain_out() -> None:
+    facts = [
+        fact("object_type", {"entity": "roadtrip_1", "type": "road trip"}),
+        fact(
+            "event",
+            {
+                "event": "roadtrip_1",
+                "type": "road trip",
+                "location": "Utah",
+                "date": "February",
+                "status": "completed",
+            },
+        ),
+    ]
+    bundles = env.resolve_entities(facts)
+
+    judged, ratifications = env.apply_location_membership_ratifier(
+        question="How many days did I spend on camping trips in the United States?",
+        bundles=bundles,
+        candidates=("roadtrip_1",),
+        judged={"roadtrip_1": env.MEMBERSHIP_CERTAIN_OUT},
+    )
+
+    assert judged["roadtrip_1"] == env.MEMBERSHIP_CERTAIN_OUT
+    assert ratifications == []
+
+
 # --- fold_recovered_relations
 def test_fold_recovered_relations_keeps_only_verified_new_edges() -> None:
     bundle = env.EntityBundle(

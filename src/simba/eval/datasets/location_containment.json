@@ -1,0 +1,65 @@
+[
+  {
+    "id": "loc:united_states",
+    "label": "United States",
+    "aliases": ["US", "U.S.", "USA", "United States of America"],
+    "parents": [],
+    "provenance": ["simba.seed.location.country"]
+  },
+  {
+    "id": "loc:california",
+    "label": "California",
+    "aliases": ["CA"],
+    "parents": ["loc:united_states"],
+    "provenance": ["simba.seed.location.admin1"]
+  },
+  {
+    "id": "loc:utah",
+    "label": "Utah",
+    "aliases": ["UT"],
+    "parents": ["loc:united_states"],
+    "provenance": ["simba.seed.location.admin1"]
+  },
+  {
+    "id": "loc:wyoming",
+    "label": "Wyoming",
+    "aliases": ["WY"],
+    "parents": ["loc:united_states"],
+    "provenance": ["simba.seed.location.admin1"]
+  },
+  {
+    "id": "loc:montana",
+    "label": "Montana",
+    "aliases": ["MT"],
+    "parents": ["loc:united_states"],
+    "provenance": ["simba.seed.location.admin1"]
+  },
+  {
+    "id": "loc:idaho",
+    "label": "Idaho",
+    "aliases": ["ID"],
+    "parents": ["loc:united_states"],
+    "provenance": ["simba.seed.location.admin1"]
+  },
+  {
+    "id": "loc:big_sur",
+    "label": "Big Sur",
+    "aliases": ["Big Sur, California"],
+    "parents": ["loc:california"],
+    "provenance": ["simba.seed.location.place"]
+  },
+  {
+    "id": "loc:yellowstone_national_park",
+    "label": "Yellowstone National Park",
+    "aliases": ["Yellowstone"],
+    "parents": ["loc:wyoming", "loc:montana", "loc:idaho"],
+    "provenance": ["simba.seed.location.place"]
+  },
+  {
+    "id": "loc:new_zealand",
+    "label": "New Zealand",
+    "aliases": ["NZ"],
+    "parents": [],
+    "provenance": ["simba.seed.location.country"]
+  }
+]

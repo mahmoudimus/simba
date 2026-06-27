@@ -43,7 +43,12 @@ import re
 import typing
 
 import simba.config
-from simba.eval import bench_config, candidate_unit_formalizer, interpretation_runner
+from simba.eval import (
+    bench_config,
+    candidate_unit_formalizer,
+    interpretation_runner,
+    location_ontology,
+)
 
 ENVELOPE_PROMPT_VERSION = "candidate_unit_envelope_v1"
 FORMALIZED_FACTS_CACHE_VERSION = "candidate_unit_envelope_formalized_facts_v1"
@@ -1230,6 +1235,76 @@ def _count_instances(
     return float(len(list(roots)))
 
 
+def _question_target_location(question: str) -> str | None:
+    q = _text_blob(question)
+    if re.search(r"\b(?:in|inside|within)\s+(?:the\s+)?united states\b", q):
+        return "United States"
+    if re.search(r"\b(?:in|inside|within)\s+(?:the\s+)?(?:u s|us|usa)\b", q):
+        return "United States"
+    return None
+
+
+def _bundle_locations(bundle: EntityBundle) -> tuple[str, ...]:
+    locations: list[str] = []
+    for event in bundle.events:
+        location = event.get("location")
+        if location:
+            locations.append(str(location))
+    for relation, target in bundle.relations:
+        if relation.lower() in {
+            "destination",
+            "location",
+            "located_in",
+            "held_at",
+            "happened_in",
+            "place",
+        }:
+            locations.append(target)
+    return tuple(sorted(set(locations)))
+
+
+def apply_location_membership_ratifier(
+    *,
+    question: str,
+    bundles: dict[str, EntityBundle],
+    candidates: typing.Sequence[str],
+    judged: dict[str, str],
+) -> tuple[dict[str, str], list[dict[str, typing.Any]]]:
+    """Upgrade location-contested roots when a non-LLM ratifier closes the gap."""
+    target_location = _question_target_location(question)
+    if target_location is None:
+        return dict(judged), []
+
+    updated = dict(judged)
+    ratifications: list[dict[str, typing.Any]] = []
+    for root in candidates:
+        if judged.get(root) != MEMBERSHIP_CONTESTED:
+            continue
+        for source_location in _bundle_locations(bundles[root]):
+            result = location_ontology.ratify_location_containment(
+                source_location,
+                target_location,
+            )
+            if not result.ratified:
+                continue
+            updated[root] = MEMBERSHIP_CERTAIN_IN
+            ratifications.append(
+                {
+                    "handle": root,
+                    "ratifier": "location_containment",
+                    "source_location": source_location,
+                    "target_location": target_location,
+                    "path": list(result.path),
+                    "provenance": list(result.provenance),
+                    "reason": result.reason,
+                    "previous_membership": MEMBERSHIP_CONTESTED,
+                    "new_membership": MEMBERSHIP_CERTAIN_IN,
+                }
+            )
+            break
+    return updated, ratifications
+
+
 def _scalar_range(
     bundles: dict[str, EntityBundle],
     roots: typing.Iterable[str],
@@ -2150,6 +2225,12 @@ def run_envelope_case(
         cache_dir=cache_dir,
         membership_mode=membership_mode,
     )
+    judged, membership_ratifications = apply_location_membership_ratifier(
+        question=question,
+        bundles=bundles,
+        candidates=candidates,
+        judged=judged,
+    )
     # detect_intent is authoritative for the shape; judged_aggregation is audit-only.
     aggregation = intent
     envelope = aggregate_envelope(
@@ -2163,6 +2244,7 @@ def run_envelope_case(
         "aggregation": envelope.aggregation,
         "llm_aggregation": judged_aggregation,
         "cross_session_merges": [list(pair) for pair in merges],
+        "membership_ratifications": membership_ratifications,
         "n_facts": total,
         "spans_resolved": f"{resolved}/{total}",
         "zero_fact_sessions": zero_fact_sessions(facts, answer_ids),
