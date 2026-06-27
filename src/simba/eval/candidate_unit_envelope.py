@@ -2172,7 +2172,30 @@ def run_envelope_case(
 
 def _load_corpus(path: pathlib.Path) -> dict[str, dict[str, typing.Any]]:
     rows = json.loads(path.read_text(encoding="utf-8"))
-    return {str(row["question_id"]): row for row in rows}
+    if not rows:
+        return {}
+    first = rows[0]
+    if "haystack_session_ids" in first and "haystack_sessions" in first:
+        return {str(row["question_id"]): row for row in rows}
+
+    # Backward-compatibility path for legacy fail18-style manifests that carry only
+    # question IDs + answer sessions. This project's longmemeval corpus already has the
+    # full per-row structure needed by the runner.
+    bench: bench_config.BenchConfig = simba.config.load("bench")
+    longmemeval_path = pathlib.Path(
+        bench.longmemeval_path or ".simba/benchmarks/longmemeval_s.json"
+    )
+    longmemeval_rows = json.loads(longmemeval_path.read_text(encoding="utf-8"))
+    longmemeval_by_id = {str(row["question_id"]): row for row in longmemeval_rows}
+
+    expanded: dict[str, dict[str, typing.Any]] = {}
+    for row in rows:
+        qid = str(row["question_id"])
+        corpus_row = longmemeval_by_id.get(qid)
+        if corpus_row is None:
+            raise KeyError(f"question_id not found in longmemeval corpus: {qid}")
+        expanded[qid] = corpus_row
+    return expanded
 
 
 def main(argv: list[str] | None = None) -> int:

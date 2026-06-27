@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import pathlib
 import typing
+from types import SimpleNamespace
 
 import pytest
 
@@ -1798,3 +1799,56 @@ def test_extract_facts_rw_mode_writes_cache_on_miss(tmp_path, monkeypatch) -> No
         answer_sessions=answer_sessions,
     )
     assert cached == facts
+
+
+def test_load_corpus_expands_clingo_style_manifest(tmp_path, monkeypatch) -> None:
+    manifest = tmp_path / "clingo_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "question_id": "q1",
+                    "question": "How many tanks do I own?",
+                    "answer_session_ids": ["answer_1"],
+                    "gold_answer": 2,
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    longmemeval = tmp_path / "longmemeval.json"
+    longmemeval.write_text(
+        json.dumps(
+            [
+                {
+                    "question_id": "q1",
+                    "question_type": "multi-session",
+                    "question": "How many tanks do I own?",
+                    "answer": 2,
+                    "question_date": "2026/01/01 (Thu) 00:00",
+                    "haystack_dates": ["2026/01/01 (Thu) 00:00"],
+                    "haystack_session_ids": ["answer_1"],
+                    "haystack_sessions": [
+                        [{"role": "user", "content": "USER: I own two tanks"}]
+                    ],
+                    "answer_session_ids": ["answer_1"],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        env.simba.config,
+        "load",
+        lambda _name: SimpleNamespace(longmemeval_path=str(longmemeval)),
+    )
+
+    corpus = env._load_corpus(manifest)
+
+    assert set(corpus) == {"q1"}
+    assert corpus["q1"]["question"] == "How many tanks do I own?"
+    assert corpus["q1"]["haystack_sessions"][0][0]["content"] == "USER: I own two tanks"
