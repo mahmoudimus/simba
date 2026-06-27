@@ -1450,6 +1450,33 @@ def test_extra_unions_never_merge_a_distinct_pair() -> None:
 
 
 # --- membership parsing
+def test_membership_payload_includes_question_date() -> None:
+    bundles = env.resolve_entities(
+        [
+            fact("object_type", {"entity": "trip_1", "type": "camping trip"}),
+            fact(
+                "quantity",
+                {
+                    "entity": "trip_1",
+                    "dimension": "time.duration",
+                    "value": "3",
+                    "unit": "days",
+                },
+            ),
+        ]
+    )
+
+    payload = env.build_membership_payload(
+        case_id="case",
+        question="How many days did I spend camping this year?",
+        question_date="2023/04/29 (Sat) 23:45",
+        bundles=bundles,
+        candidates=("trip_1",),
+    )
+
+    assert payload["question_date"] == "2023/04/29 (Sat) 23:45"
+
+
 def test_parse_membership_response_parses_valid_object() -> None:
     raw = (
         '{"aggregation": "sum_amount", "entities": ['

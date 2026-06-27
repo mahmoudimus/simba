@@ -1423,6 +1423,7 @@ def build_membership_payload(
     *,
     case_id: str,
     question: str,
+    question_date: str | None = None,
     bundles: dict[str, EntityBundle],
     candidates: typing.Sequence[str],
 ) -> dict[str, typing.Any]:
@@ -1474,6 +1475,7 @@ def build_membership_payload(
         "prompt_version": ENVELOPE_PROMPT_VERSION,
         "case_id": case_id,
         "question": question,
+        "question_date": question_date,
         "membership_contract": [
             "certain_in: a listed relation/fact ties the entity to the question's "
             "subject.",
@@ -1913,6 +1915,7 @@ def judge_membership(
     *,
     case_id: str,
     question: str,
+    question_date: str | None = None,
     bundles: dict[str, EntityBundle],
     candidates: typing.Sequence[str],
     samples: int,
@@ -1933,6 +1936,7 @@ def judge_membership(
         payload = build_membership_payload(
             case_id=case_id,
             question=question,
+            question_date=question_date,
             bundles=bundles,
             candidates=candidates,
         )
@@ -2084,6 +2088,9 @@ def run_envelope_case(
         raise ValueError("membership_mode must be one of: llm, all_in, all_contested")
     case_id = str(row.get("question_id", ""))
     question = str(row.get("question", ""))
+    question_date = (
+        str(row["question_date"]) if row.get("question_date") is not None else None
+    )
     answer_ids = list(row.get("answer_session_ids", []))
     dates = row.get("haystack_dates", [None] * len(row.get("haystack_session_ids", [])))
     answer_sessions: dict[str, tuple[str, str | None]] = {}
@@ -2134,6 +2141,7 @@ def run_envelope_case(
     judged, votes, judged_aggregation = judge_membership(
         case_id=case_id,
         question=question,
+        question_date=question_date,
         bundles=bundles,
         candidates=candidates,
         samples=samples,
