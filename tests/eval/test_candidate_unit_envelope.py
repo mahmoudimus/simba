@@ -777,6 +777,166 @@ def test_60036106_sum_value_ignores_unrelated_numeric_values() -> None:
     assert [result.certain, result.possible] == [12000.0, 12000.0]
 
 
+def test_classify_quantity_role_people_count_for_sum_value() -> None:
+    bundle = env.EntityBundle(
+        root="campaign",
+        handles=("campaign",),
+        types=("campaign",),
+        usd=None,
+        values=(),
+        quantities=(("count.cardinality", "2000", "people"),),
+        dates=(),
+        statuses=(),
+        relations=(),
+        actions=(),
+        events=(),
+        sessions=("s1",),
+    )
+    assert (
+        env.classify_quantity_role(
+            "count.cardinality",
+            "2000",
+            "people",
+            question=(
+                "What total number of people reached did my Facebook ad "
+                "campaign get?"
+            ),
+            bundle=bundle,
+        )
+        == env.VALUE_ROLE_ANSWER
+    )
+
+
+def test_classify_quantity_role_non_answer_age_or_year_count() -> None:
+    bundle = env.EntityBundle(
+        root="customer_1",
+        handles=("customer_1",),
+        types=("female_person",),
+        usd=None,
+        values=(),
+        quantities=(("age.range", "25", "years"),),
+        dates=(),
+        statuses=(),
+        relations=(),
+        actions=(),
+        events=(),
+        sessions=("s1",),
+    )
+    assert (
+        env.classify_quantity_role(
+            "age.range",
+            "25",
+            "years",
+            question="What was the total number of people reached by my campaign?",
+            bundle=bundle,
+        )
+        == env.VALUE_ROLE_DISTRACTOR
+    )
+
+
+def test_classify_quantity_role_poll_count_is_distractor_for_reach_question() -> None:
+    bundle = env.EntityBundle(
+        root="poll_1",
+        handles=("poll_1",),
+        types=("poll",),
+        usd=None,
+        values=(),
+        quantities=(("count.cardinality", "50", "people"),),
+        dates=(),
+        statuses=(),
+        relations=(("voted_by", "around 50 people"), ("asked_to_vote", "my followers")),
+        actions=(),
+        events=(),
+        sessions=("s1",),
+    )
+    assert (
+        env.classify_quantity_role(
+            "count.cardinality",
+            "50",
+            "people",
+            question=(
+                "What total number of people reached by my Facebook ad campaign "
+                "and Instagram influencer collaboration?"
+            ),
+            bundle=bundle,
+        )
+        == env.VALUE_ROLE_DISTRACTOR
+    )
+
+
+def test_classify_quantity_role_points_current_balance_when_total_handle() -> None:
+    bundle = env.EntityBundle(
+        root="user_points_total",
+        handles=("user_points_total",),
+        types=(),
+        usd=None,
+        values=(),
+        quantities=(("points.loyalty", "300", "points"),),
+        dates=(),
+        statuses=(),
+        relations=(("belongs_to_program", "sephora_rewards"),),
+        actions=(),
+        events=(),
+        sessions=("s1",),
+    )
+    assert (
+        env.classify_quantity_role(
+            "points.loyalty",
+            "300",
+            "points",
+            question=(
+                "How many points do I need to earn to redeem a free "
+                "skincare product?"
+            ),
+            bundle=bundle,
+        )
+        == env.VALUE_ROLE_CURRENT_BALANCE
+    )
+
+
+def test_sum_value_candidates_exclude_age_based_count_row() -> None:
+    facts = [
+        fact(
+            "object_type",
+            {"entity": "campaign", "type": "ad campaign"},
+            session="s1",
+        ),
+        fact(
+            "quantity",
+            {
+                "entity": "campaign",
+                "dimension": "count.cardinality",
+                "value": "2000",
+                "unit": "people",
+            },
+            session="s1",
+        ),
+        fact(
+            "object_type",
+            {"entity": "customer", "type": "female_person"},
+            session="s1",
+        ),
+        fact(
+            "quantity",
+            {
+                "entity": "customer",
+                "dimension": "age.range",
+                "value": "25-45",
+                "unit": "years",
+            },
+            session="s1",
+        ),
+    ]
+    question = (
+        "What was the total number of people reached by my Facebook ad "
+        "campaign and influencer collaboration?"
+    )
+    bundles = env.resolve_entities(facts)
+    assert env.select_candidates(
+        bundles, env.AGGREGATION_SUM_VALUE, question=question
+    ) == ["campaign"]
+
+
 def test_sum_value_collapses_duplicate_same_context_answer_values() -> None:
     facts = [
         fact("object_type", {"entity": "campaign_1", "type": "facebook campaign"}),
@@ -1227,6 +1387,94 @@ def test_judge_membership_degrades_provider_failure_to_contested(monkeypatch) ->
         "trip_2": ["contested", "contested"],
     }
     assert aggregation == ""
+
+
+def test_judge_membership_supports_deterministic_all_in(monkeypatch) -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+        fact("object_type", {"entity": "trip_2", "type": "trip"}),
+    ]
+    bundles = env.resolve_entities(facts)
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError(
+            "provider should not be used in deterministic membership mode"
+        )
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    judged, votes, aggregation = env.judge_membership(
+        case_id="case",
+        question="How many trips?",
+        bundles=bundles,
+        candidates=("trip_1", "trip_2"),
+        samples=2,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=None,
+        membership_mode=env.MEMBERSHIP_MODE_ALL_IN,
+    )
+
+    assert judged == {"trip_1": "certain_in", "trip_2": "certain_in"}
+    assert votes == {
+        "trip_1": ["certain_in", "certain_in"],
+        "trip_2": ["certain_in", "certain_in"],
+    }
+    assert aggregation == ""
+
+
+def test_judge_membership_supports_deterministic_all_contested(monkeypatch) -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+        fact("object_type", {"entity": "trip_2", "type": "trip"}),
+    ]
+    bundles = env.resolve_entities(facts)
+
+    def fail_provider(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError(
+            "provider should not be used in deterministic membership mode"
+        )
+
+    monkeypatch.setattr(env, "_cached_provider", fail_provider)
+
+    judged, votes, aggregation = env.judge_membership(
+        case_id="case",
+        question="How many trips?",
+        bundles=bundles,
+        candidates=("trip_1", "trip_2"),
+        samples=3,
+        command="provider",
+        timeout_seconds=1,
+        cache_dir=None,
+        membership_mode=env.MEMBERSHIP_MODE_ALL_CONTESTED,
+    )
+
+    assert judged == {"trip_1": "contested", "trip_2": "contested"}
+    assert votes == {
+        "trip_1": ["contested", "contested", "contested"],
+        "trip_2": ["contested", "contested", "contested"],
+    }
+    assert aggregation == ""
+
+
+def test_judge_membership_rejects_unknown_mode() -> None:
+    facts = [
+        fact("object_type", {"entity": "trip_1", "type": "trip"}),
+    ]
+    bundles = env.resolve_entities(facts)
+
+    with pytest.raises(ValueError, match="unknown membership mode"):
+        env.judge_membership(
+            case_id="case",
+            question="How many trips?",
+            bundles=bundles,
+            candidates=("trip_1",),
+            samples=2,
+            command="provider",
+            timeout_seconds=1,
+            cache_dir=None,
+            membership_mode="invalid",
+        )
 
 
 def test_extract_facts_reads_cached_formalized_facts_in_read_mode(

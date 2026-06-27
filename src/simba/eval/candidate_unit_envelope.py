@@ -134,7 +134,31 @@ _NON_ANSWER_TYPE_HINTS = ("person", "user", "goal", "mileage")
 # value attributes that name an instance (distinguish same-type instances).
 _NAME_ATTRS = frozenset({"name", "brand_model", "model", "title", "label", "brand"})
 _DURATION_UNITS = frozenset(
-    {"hour", "hours", "hr", "hrs", "minute", "minutes", "min", "mins", "day", "days"}
+    {
+        "second",
+        "seconds",
+        "sec",
+        "secs",
+        "s",
+        "minute",
+        "minutes",
+        "min",
+        "mins",
+        "m",
+        "hour",
+        "hours",
+        "hr",
+        "hrs",
+        "h",
+        "day",
+        "days",
+        "d",
+        "week",
+        "weeks",
+        "wk",
+        "wks",
+        "w",
+    }
 )
 _MONEY_UNITS = frozenset({"usd", "$", "dollar", "dollars"})
 
@@ -143,6 +167,12 @@ MEMBERSHIP_CERTAIN_OUT = "certain_out"
 MEMBERSHIP_CONTESTED = "contested"
 _MEMBERSHIP_TAGS = frozenset(
     {MEMBERSHIP_CERTAIN_IN, MEMBERSHIP_CERTAIN_OUT, MEMBERSHIP_CONTESTED}
+)
+MEMBERSHIP_MODE_LLM = "llm"
+MEMBERSHIP_MODE_ALL_IN = "all_in"
+MEMBERSHIP_MODE_ALL_CONTESTED = "all_contested"
+_MEMBERSHIP_MODES = frozenset(
+    {MEMBERSHIP_MODE_LLM, MEMBERSHIP_MODE_ALL_IN, MEMBERSHIP_MODE_ALL_CONTESTED}
 )
 
 
@@ -389,6 +419,128 @@ def classify_value_role(
     return VALUE_ROLE_DISTRACTOR
 
 
+def classify_quantity_role(
+    dimension: str,
+    value: str,
+    unit: str,
+    *,
+    question: str = "",
+    bundle: EntityBundle | None = None,
+) -> str:
+    """Classify ``quantity`` facts by answer role.
+
+    This keeps the same role semantics as value-role classification but starts
+    from structured dimension/unit tuples instead of free-form attributes.
+    """
+    dimension = _text_blob(dimension)
+    value_text = _text_blob(value)
+    unit_text = _text_blob(unit)
+    question_text = _text_blob(question)
+    context = _bundle_value_context(bundle)
+
+    if dimension.startswith("time.duration") or _is_duration_value(
+        dimension, unit_text
+    ):
+        return VALUE_ROLE_DISTRACTOR
+    if dimension.startswith("money") or _is_money_value(
+        dimension, value_text, unit_text
+    ):
+        return VALUE_ROLE_DISTRACTOR
+
+    local = _text_blob(dimension, unit_text)
+    context = _text_blob(context)
+
+    if re.search(
+        r"\b(vote|voted|voting|poll|survey|surveyed|survey\-response|polling|asked_to_vote|voted_by)\b",
+        local + " " + context,
+    ):
+        return VALUE_ROLE_DISTRACTOR
+
+    if re.search(r"\b(point|points)\b", local) or re.search(
+        r"\b(point|points)\b", unit_text
+    ):
+        if re.search(
+            r"\b(total|current|currently|available|on hand|"
+            r"owning|owned|holding|have|earned)\b",
+            local + " " + context,
+        ):
+            return VALUE_ROLE_CURRENT_BALANCE
+        if re.search(r"\b(per|/|each)\b", local):
+            return VALUE_ROLE_DISTRACTOR
+        if re.search(
+            r"\b(redeem|redemption|threshold|required|need|needed|minimum|"
+            r"points cost|redemption cost|reward cost|cost in points)\b",
+            question_text,
+        ):
+            return VALUE_ROLE_THRESHOLD
+        if re.search(
+            r"\b(total|current|currently|available|on hand|owned|holding|"
+            r"have|have now)\b",
+            context,
+        ):
+            return VALUE_ROLE_CURRENT_BALANCE
+        return VALUE_ROLE_DISTRACTOR
+
+    if re.search(r"\b(count|quantity|cardinality)\b", dimension):
+        if re.search(
+            r"\b(reach|reached|audience|followers?|customers?|users?|"
+            r"views?|people)\b",
+            local,
+        ) and re.search(
+            r"\b(reach|reached|audience|followers?|customers?|users?|"
+            r"views?|people)\b",
+            question_text,
+        ):
+            return VALUE_ROLE_ANSWER
+        if re.search(
+            r"\b(clicks?|click through|ctr|impressions?|signups?)\b", local,
+        ):
+            return VALUE_ROLE_DISTRACTOR
+        if re.search(
+            r"\b(age|year|years|months?|price|amount|usd|dollar|rival|ranking)\b",
+            local,
+        ):
+            return VALUE_ROLE_DISTRACTOR
+        if re.search(
+            r"\b(people|followers?|audience|customers?|users?|views?|reached|reach|"
+            r"participants?|attendees?|leads|impressions?)\b",
+            local + " " + question_text,
+        ):
+            return VALUE_ROLE_ANSWER
+        if re.search(
+            r"\b(total|people|user|users|customer|customers|reach|audience)\b",
+            question_text,
+        ):
+            return VALUE_ROLE_ANSWER
+        if re.search(
+            r"\b(how many|number of|total|count|amount|sum)\b", question_text
+        ):
+            return VALUE_ROLE_ANSWER
+        return VALUE_ROLE_DISTRACTOR
+
+    return VALUE_ROLE_DISTRACTOR
+
+
+def _classified_quantity_rows(
+    bundle: EntityBundle, *, question: str = ""
+) -> list[ValueFact]:
+    rows: list[ValueFact] = []
+    for row in _quantity_rows(bundle):
+        role = classify_quantity_role(
+            row.dimension, row.value, row.unit, question=question, bundle=bundle
+        )
+        rows.append(
+            ValueFact(
+                attribute=row.dimension,
+                value=row.value,
+                unit=row.unit,
+                numeric=row.numeric,
+                role=role,
+            )
+        )
+    return rows
+
+
 def _classified_value_rows(
     bundle: EntityBundle, *, question: str = ""
 ) -> list[ValueFact]:
@@ -458,9 +610,13 @@ def _duration_quantity_days(row: QuantityFact) -> float | None:
 def _quantity_value_rows(
     bundle: EntityBundle, *, question: str = ""
 ) -> list[ValueFact]:
+    all_rows = (
+        _classified_value_rows(bundle, question=question)
+        + _classified_quantity_rows(bundle, question=question)
+    )
     answer_values = [
         row
-        for row in _classified_value_rows(bundle, question=question)
+        for row in all_rows
         if row.role == VALUE_ROLE_ANSWER
         and not _is_money_value(row.attribute, row.value, row.unit)
         and not _is_duration_value(row.attribute, row.unit)
@@ -469,7 +625,7 @@ def _quantity_value_rows(
         return answer_values
     return [
         row
-        for row in _classified_value_rows(bundle, question=question)
+        for row in all_rows
         if row.role == VALUE_ROLE_SUBTOTAL
         and not _is_money_value(row.attribute, row.value, row.unit)
         and not _is_duration_value(row.attribute, row.unit)
@@ -512,6 +668,7 @@ def _scalar_values(
     return [
         row.numeric
         for row in _classified_value_rows(bundle, question=question)
+        + _classified_quantity_rows(bundle, question=question)
         if row.role in roles and not _is_money_value(row.attribute, row.value, row.unit)
     ]
 
@@ -558,7 +715,11 @@ def _lookup_threshold_support(
     """
     support: dict[float, set[str]] = collections.defaultdict(set)
     for root in roots:
-        for row in _classified_value_rows(bundles[root], question=question):
+        rows = (
+            _classified_value_rows(bundles[root], question=question)
+            + _classified_quantity_rows(bundles[root], question=question)
+        )
+        for row in rows:
             if (
                 row.role == VALUE_ROLE_THRESHOLD
                 and not _is_money_value(row.attribute, row.value, row.unit)
@@ -1727,42 +1888,67 @@ def judge_membership(
     command: str,
     timeout_seconds: int,
     cache_dir: pathlib.Path | None,
+    membership_mode: str = MEMBERSHIP_MODE_LLM,
 ) -> tuple[dict[str, str], dict[str, list[str]], str]:
-    """k independent membership passes; aggregate by ``vote_tag``."""
-    payload = build_membership_payload(
-        case_id=case_id, question=question, bundles=bundles, candidates=candidates
-    )
-    votes: dict[str, list[str]] = collections.defaultdict(list)
-    aggregations: list[str] = []
-    for sample_index in range(samples):
-        prompt = build_membership_prompt(
-            payload, sample_index=sample_index, samples=samples
+    """k independent membership passes; aggregate by ``vote_tag``.
+
+    ``membership_mode`` lets non-LLM slices test deterministic aggregation quickly:
+
+    - ``llm``: run the normal prompt-based judge.
+    - ``all_in``: force all candidates to ``certain_in``.
+    - ``all_contested``: force all candidates to ``contested``.
+    """
+    if membership_mode == MEMBERSHIP_MODE_LLM:
+        payload = build_membership_payload(
+            case_id=case_id,
+            question=question,
+            bundles=bundles,
+            candidates=candidates,
         )
-        raw = _cached_provider(
-            prompt,
-            command=command,
-            timeout_seconds=timeout_seconds,
-            cache_dir=cache_dir,
-            prefix=f"membership_{sample_index}_",
+        votes: dict[str, list[str]] = collections.defaultdict(list)
+        aggregations: list[str] = []
+        for sample_index in range(samples):
+            prompt = build_membership_prompt(
+                payload, sample_index=sample_index, samples=samples
+            )
+            raw = _cached_provider(
+                prompt,
+                command=command,
+                timeout_seconds=timeout_seconds,
+                cache_dir=cache_dir,
+                prefix=f"membership_{sample_index}_",
+            )
+            parsed = parse_membership_response(raw, expected_case_id=case_id)
+            if parsed.parse_status != "parsed":
+                for handle in candidates:
+                    votes[handle].append(MEMBERSHIP_CONTESTED)
+                continue
+            if parsed.aggregation:
+                aggregations.append(parsed.aggregation)
+            for handle, membership, _reason in parsed.judgments:
+                votes[handle].append(membership)
+        judged = {
+            root: tag
+            for root in candidates
+            if (tag := vote_tag(votes.get(root, []))) is not None
+        }
+        aggregation = (
+            collections.Counter(aggregations).most_common(1)[0][0]
+            if aggregations
+            else ""
         )
-        parsed = parse_membership_response(raw, expected_case_id=case_id)
-        if parsed.parse_status != "parsed":
-            for handle in candidates:
-                votes[handle].append(MEMBERSHIP_CONTESTED)
-            continue
-        if parsed.aggregation:
-            aggregations.append(parsed.aggregation)
-        for handle, membership, _reason in parsed.judgments:
-            votes[handle].append(membership)
-    judged = {
-        root: tag
-        for root in candidates
-        if (tag := vote_tag(votes.get(root, []))) is not None
-    }
-    aggregation = (
-        collections.Counter(aggregations).most_common(1)[0][0] if aggregations else ""
-    )
-    return judged, dict(votes), aggregation
+        return judged, dict(votes), aggregation
+
+    if membership_mode == MEMBERSHIP_MODE_ALL_IN:
+        tag = MEMBERSHIP_CERTAIN_IN
+    elif membership_mode == MEMBERSHIP_MODE_ALL_CONTESTED:
+        tag = MEMBERSHIP_CONTESTED
+    else:
+        raise ValueError(f"unknown membership mode: {membership_mode!r}")
+
+    votes = {root: [tag for _ in range(max(1, samples))] for root in candidates}
+    judged = {root: tag for root in candidates}
+    return judged, votes, ""
 
 
 _RESOLUTION_PROMPT = """Question: {question}
@@ -1860,8 +2046,11 @@ def run_envelope_case(
     facts_mode: str = "off",
     reread_max_candidates: int = 8,
     cross_session_resolution: bool = True,
+    membership_mode: str = MEMBERSHIP_MODE_LLM,
 ) -> dict[str, typing.Any]:
     """Run the full pipeline on one LongMemEval row; return an envelope record."""
+    if membership_mode not in _MEMBERSHIP_MODES:
+        raise ValueError("membership_mode must be one of: llm, all_in, all_contested")
     case_id = str(row.get("question_id", ""))
     question = str(row.get("question", ""))
     answer_ids = list(row.get("answer_session_ids", []))
@@ -1920,6 +2109,7 @@ def run_envelope_case(
         command=command,
         timeout_seconds=timeout_seconds,
         cache_dir=cache_dir,
+        membership_mode=membership_mode,
     )
     # detect_intent is authoritative for the shape; judged_aggregation is audit-only.
     aggregation = intent
@@ -2036,6 +2226,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Disable cross-session entity-resolution provider calls for bounded runs.",
     )
+    parser.add_argument(
+        "--membership-mode",
+        choices=sorted(_MEMBERSHIP_MODES),
+        default=MEMBERSHIP_MODE_LLM,
+        help=(
+            "llm=normal membership voting; all_in=deterministic include-all; "
+            "all_contested=deterministic contested all"
+        ),
+    )
     parser.add_argument("--report", type=pathlib.Path, default=None)
     args = parser.parse_args(argv)
 
@@ -2051,6 +2250,7 @@ def main(argv: list[str] | None = None) -> int:
             facts_dir=args.facts_dir,
             facts_mode=args.facts_mode,
             reread_max_candidates=args.reread_max_candidates,
+            membership_mode=args.membership_mode,
             cross_session_resolution=(
                 bench.envelope_cross_session_resolution
                 and not args.no_cross_session_resolution
