@@ -576,8 +576,12 @@ def _is_money_value(attribute: str, value: str, unit: str) -> bool:
 def _duration_hours(attribute: str, unit: str, value: float) -> float | None:
     if not _is_duration_value(attribute, unit):
         return None
+    if unit in {"second", "seconds", "sec", "secs", "s"}:
+        return value / 3600.0
     if unit in {"minute", "minutes", "min", "mins"}:
         return value / 60.0
+    if unit in {"week", "weeks", "wk", "wks", "w"}:
+        return value * 7.0 * 24.0
     if unit in {"day", "days"}:
         return value * 24.0
     return value

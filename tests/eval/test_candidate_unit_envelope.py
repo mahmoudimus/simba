@@ -1013,6 +1013,42 @@ def test_envelope_duration_sum_normalizes_minutes_to_hours() -> None:
     assert result.pivot == ("yoga_1",)
 
 
+def test_envelope_duration_sum_normalizes_seconds_to_hours() -> None:
+    facts = [
+        fact("object_type", {"entity": "jog_1", "type": "jogging"}, session="s1"),
+        fact(
+            "value",
+            {
+                "entity": "jog_1",
+                "attribute": "duration",
+                "value": "120",
+                "unit": "seconds",
+            },
+            session="s1",
+        ),
+        fact("object_type", {"entity": "yoga_1", "type": "yoga"}, session="s2"),
+        fact(
+            "value",
+            {
+                "entity": "yoga_1",
+                "attribute": "duration",
+                "value": "2",
+                "unit": "weeks",
+            },
+            session="s2",
+        ),
+    ]
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_DURATION)
+    judged = {"jog_1": "certain_in", "yoga_1": "contested"}
+    result = env.aggregate_envelope(bundles, judged, env.AGGREGATION_DURATION, cands)
+    # 120 seconds = 0.0333h, 2 weeks = 336h -> interval includes both when contested
+    assert [round(result.certain, 4), round(result.possible, 4)] == [
+        0.0333,
+        336.0333,
+    ]
+
+
 def test_envelope_lookup_scalar_uses_candidate_value_range() -> None:
     facts = [
         fact(
