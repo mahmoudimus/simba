@@ -377,6 +377,45 @@ def test_envelope_money_opens_when_an_item_is_contested() -> None:
     assert result.consistent is True
 
 
+def test_envelope_money_uses_typed_money_quantities() -> None:
+    facts = [
+        fact("object_type", {"entity": "food_bank_run", "type": "charity run"}),
+        fact(
+            "quantity",
+            {
+                "entity": "food_bank_run",
+                "dimension": "money.amount",
+                "value": "250",
+                "unit": "USD",
+            },
+            span="raised $250 for a local food bank",
+        ),
+        fact("object_type", {"entity": "hospital_bake_sale", "type": "bake sale"}),
+        fact(
+            "quantity",
+            {
+                "entity": "hospital_bake_sale",
+                "dimension": "money.amount",
+                "value": "1000",
+                "unit": "USD",
+            },
+            span="we raised $1,000",
+        ),
+    ]
+    bundles = env.resolve_entities(facts)
+    candidates = env.select_candidates(bundles, env.AGGREGATION_SUM)
+    assert set(candidates) == {"food_bank_run", "hospital_bake_sale"}
+    judged = {
+        "food_bank_run": env.MEMBERSHIP_CERTAIN_IN,
+        "hospital_bake_sale": env.MEMBERSHIP_CERTAIN_IN,
+    }
+
+    result = env.aggregate_envelope(bundles, judged, env.AGGREGATION_SUM, candidates)
+
+    assert result.certain == 1250.0
+    assert result.possible == 1250.0
+
+
 def test_envelope_days_opens_to_2_3_with_food_drive_pivot() -> None:
     bundles = env.resolve_entities(faith_facts())
     candidates = env.select_candidates(bundles, env.AGGREGATION_DAYS)
@@ -979,6 +1018,59 @@ def test_sum_value_collapses_duplicate_same_context_answer_values() -> None:
         bundles, judged, env.AGGREGATION_SUM_VALUE, cands, question=question
     )
     assert [result.certain, result.possible] == [12000.0, 12000.0]
+    assert result.pivot == ()
+    assert result.consistent is True
+
+
+def test_sum_value_clears_non_answer_changing_contested_pivot() -> None:
+    facts = [
+        fact("object_type", {"entity": "campaign_1", "type": "facebook campaign"}),
+        fact(
+            "value",
+            {
+                "entity": "campaign_1",
+                "attribute": "people_reached",
+                "value": "2000",
+                "unit": "people",
+            },
+        ),
+        fact("object_type", {"entity": "campaign_previous", "type": "ad campaign"}),
+        fact(
+            "value",
+            {
+                "entity": "campaign_previous",
+                "attribute": "people_reached",
+                "value": "2000",
+                "unit": "people",
+            },
+        ),
+        fact("object_type", {"entity": "influencer", "type": "influencer"}),
+        fact(
+            "value",
+            {
+                "entity": "influencer",
+                "attribute": "followers",
+                "value": "10000",
+                "unit": "people",
+            },
+        ),
+    ]
+    question = "What was the total number of people reached?"
+    bundles = env.resolve_entities(facts)
+    cands = env.select_candidates(bundles, env.AGGREGATION_SUM_VALUE, question=question)
+    judged = {
+        "campaign_1": env.MEMBERSHIP_CERTAIN_IN,
+        "campaign_previous": env.MEMBERSHIP_CONTESTED,
+        "influencer": env.MEMBERSHIP_CERTAIN_IN,
+    }
+
+    result = env.aggregate_envelope(
+        bundles, judged, env.AGGREGATION_SUM_VALUE, cands, question=question
+    )
+
+    assert [result.certain, result.possible] == [12000.0, 12000.0]
+    assert result.pivot == ()
+    assert result.consistent is True
 
 
 def test_envelope_duration_sum_normalizes_minutes_to_hours() -> None:

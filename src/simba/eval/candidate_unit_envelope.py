@@ -569,8 +569,17 @@ def _is_money_value(attribute: str, value: str, unit: str) -> bool:
     return (
         unit in _MONEY_UNITS
         or "$" in value
-        or attribute in {"price", "cost", "amount_paid", "money_spent"}
+        or attribute
+        in {"price", "cost", "amount_paid", "money_spent", "money.amount"}
     )
+
+
+def _money_quantity_usd(row: QuantityFact) -> float | None:
+    if row.dimension != "money.amount":
+        return None
+    if row.unit not in _MONEY_UNITS:
+        return None
+    return row.numeric
 
 
 def _duration_hours(attribute: str, unit: str, value: float) -> float | None:
@@ -923,6 +932,19 @@ def resolve_entities(
                         str(args.get("unit", "")),
                     )
                 )
+            numeric = numeric_value(args.get("value"))
+            row = (
+                QuantityFact(
+                    dimension=str(args.get("dimension", "")).lower(),
+                    value=str(args.get("value", "")),
+                    unit=str(args.get("unit", "")).lower(),
+                    numeric=numeric,
+                )
+                if numeric is not None
+                else None
+            )
+            if row is not None and (amount := _money_quantity_usd(row)) is not None:
+                bundle["usd"] = amount
         elif predicate == "time":
             if args.get("date"):
                 bundle["dates"].add(str(args["date"]))
@@ -1325,6 +1347,11 @@ def aggregate_envelope(
     else:  # AGGREGATION_SUM
         certain = sum(bundles[root].usd or 0.0 for root in certain_roots)
         possible = sum(bundles[root].usd or 0.0 for root in possible_roots)
+    if (
+        certain == possible
+        and aggregation not in {AGGREGATION_DATE, AGGREGATION_ENTITY}
+    ):
+        contested_roots = []
     return EnvelopeResult(
         aggregation=aggregation,
         certain=certain,
