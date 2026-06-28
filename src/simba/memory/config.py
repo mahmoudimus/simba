@@ -103,6 +103,11 @@ class MemoryConfig:
     diagnostics_after: int = 50
     # Max latency samples kept per endpoint for p50/p95 in /metrics.
     diagnostics_reservoir_size: int = 1000
+    # Soft RLIMIT_NOFILE the daemon raises itself to at startup (capped at the
+    # hard limit; 0 = leave the OS default). A full LanceDB scan opens many
+    # fragment/version files at once and the macOS default (256) hit
+    # "Too many open files (os error 24)" on GET /list against a bloated table.
+    daemon_fd_limit: int = 65_536
     # How tightly to bound LanceDB version growth (the single knob folding two
     # behaviors). A real store hit 37GB / 25,183 versions for 31MiB of live data.
     #   > 0 (default 24h): BOUNDED — suppress the redundant per-recall

@@ -32,6 +32,29 @@ import simba.memory.routes
 _DEFAULT_DB_DIR = ".simba/memory"
 
 
+def _raise_fd_limit(target: int) -> int | None:
+    """Raise the process soft RLIMIT_NOFILE toward ``target`` (capped at the hard
+    limit). Returns the resulting soft limit, or ``None`` if left unchanged.
+
+    A full LanceDB scan opens many fragment/version files at once; the macOS
+    default soft limit (256) is easily exhausted on a large table -> ``os error
+    24``. Fail-soft: any platform refusal leaves the OS default in place.
+    """
+    if target <= 0:
+        return None
+    import resource
+
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        new_soft = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if new_soft <= soft:
+            return soft
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+        return new_soft
+    except (ValueError, OSError):
+        return None
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     """Manage startup/shutdown for the memory daemon."""
@@ -41,9 +64,16 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     # already exported SIMBA_CLIENT — the daemon's own identity is always
     # "daemon". Only the real server boots the lifespan; tests pass
     # create_app(use_lifespan=False).
+    import logging
     import os
 
     os.environ["SIMBA_CLIENT"] = "daemon"
+    # Raise the FD limit before opening the DB / serving scans (fail-soft).
+    new_soft = _raise_fd_limit(getattr(app.state.config, "daemon_fd_limit", 65_536))
+    if new_soft is not None:
+        logging.getLogger("simba.memory").info(
+            "[startup] soft FD limit raised to %d", new_soft
+        )
     await init_database(app)
     await init_embeddings(app)
     sync_task = await _start_sync_scheduler(app)
