@@ -31,6 +31,7 @@ import simba.memory.fts
 import simba.memory.hybrid
 import simba.memory.provenance
 import simba.memory.query_filters
+import simba.memory.recall_cache
 import simba.memory.recall_plan
 import simba.memory.scoring
 import simba.memory.supersession
@@ -590,6 +591,12 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             detail=f"content too long (max {max_len} chars, got {got_len})",
         )
 
+    # A store mutates the corpus (new memory, supersession annotation), so drop
+    # cached recalls to keep the short-TTL cache from serving pre-store results.
+    recall_cache = getattr(request.app.state, "recall_cache", None)
+    if recall_cache is not None:
+        recall_cache.clear()
+
     # Normalize the scope path to an absolute, symlink-resolved path (spec 26) so
     # the client's resolved ancestor chain can match it by string membership. An
     # empty (global) path stays empty.
@@ -848,6 +855,34 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     parsed_query = simba.memory.query_filters.parse(body.query)
     recall_query = parsed_query.query
 
+    # Short-TTL recall cache: collapse identical-query storms (multi-runtime
+    # hooks + reasoning/conflict loops) before the expensive embed + the
+    # LLAMA_LOCK-serialized cross-encoder rerank.
+    recall_cache = getattr(request.app.state, "recall_cache", None)
+    cache_key = None
+    if recall_cache is not None:
+        cache_key = simba.memory.recall_cache.RecallCache.key(
+            query=body.query,
+            project_path=body.project_path,
+            min_similarity=body.min_similarity,
+            max_results=body.max_results,
+            filters=body.filters,
+            project_scopes=body.project_scopes,
+        )
+        cached = recall_cache.get(cache_key, now=time.time())
+        if cached is not None:
+            logger.info(
+                '[recall] client=%s cached project=%s query="%s" -> %d memories',
+                getattr(request.state, "client", "unknown"),
+                body.project_path or "(global)",
+                recall_query[:50],
+                len(cached),
+            )
+            diag = getattr(request.app.state, "diagnostics", None)
+            if diag is not None:
+                diag.record_recall(body.query, len(cached))
+            return {"memories": cached, "queryTimeMs": 0, "cached": True}
+
     start_time = time.time()
     try:
         embedding = await embed_query(recall_query)
@@ -1035,6 +1070,9 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         task2 = asyncio.create_task(_bump_usage(recalled_ids, now_epoch, cwd))
         _background_tasks.add(task2)
         task2.add_done_callback(_background_tasks.discard)
+
+    if recall_cache is not None and cache_key is not None:
+        recall_cache.put(cache_key, results, now=time.time())
 
     return {"memories": results, "queryTimeMs": query_time_ms}
 

@@ -61,6 +61,9 @@ def memory_config():
         max_content_length=200,
         duplicate_threshold=0.92,
         lancedb_version_retention_seconds=0,
+        # Disable the recall cache: this suite asserts per-recall access bumps,
+        # which the cache intentionally collapses for identical repeat queries.
+        recall_cache_ttl_seconds=0.0,
     )
 
 

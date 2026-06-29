@@ -103,6 +103,12 @@ class MemoryConfig:
     diagnostics_after: int = 50
     # Max latency samples kept per endpoint for p50/p95 in /metrics.
     diagnostics_reservoir_size: int = 1000
+    # Short-TTL recall result cache (default-ON). Collapses identical-query
+    # storms — multi-runtime hooks + a reasoning/conflict loop recalling the same
+    # text — which otherwise each re-run search + the LLAMA_LOCK-serialized
+    # cross-encoder rerank, backing the queue up to 30-60s. 0 disables it.
+    recall_cache_ttl_seconds: float = 5.0
+    recall_cache_size: int = 256
     # Soft RLIMIT_NOFILE the daemon raises itself to at startup (capped at the
     # hard limit; 0 = leave the OS default). A full LanceDB scan opens many
     # fragment/version files at once and the macOS default (256) hit

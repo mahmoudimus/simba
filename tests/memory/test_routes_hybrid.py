@@ -18,6 +18,22 @@ import simba.memory.supersession
 import simba.memory.vector_db
 
 
+@pytest.fixture
+def memory_config():
+    """Disable the recall cache for hybrid tests.
+
+    These assert immediate freshness after store/supersede/delete mutations
+    (some via direct DB calls that bypass the /store cache-invalidation), which
+    the short-TTL recall cache intentionally trades away. The cache is verified
+    in test_recall_cache.py.
+    """
+    return simba.memory.config.MemoryConfig(
+        max_content_length=200,
+        duplicate_threshold=0.92,
+        recall_cache_ttl_seconds=0.0,
+    )
+
+
 @pytest_asyncio.fixture
 async def hybrid_client(memory_config, lance_table, mock_embed, tmp_path):
     """Async client backed by a real LanceDB table + a real FTS mirror."""

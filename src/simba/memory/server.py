@@ -26,6 +26,7 @@ import simba.memory.embedding_cache
 import simba.memory.embeddings
 import simba.memory.fts
 import simba.memory.hyde_cache
+import simba.memory.recall_cache
 import simba.memory.rerank_cache
 import simba.memory.routes
 
@@ -158,6 +159,16 @@ def create_app(
     # Non-blocking HyDE answer cache (daemon-process lifetime).
     app.state.hyde_cache = simba.memory.hyde_cache.HydeCache(
         max_entries=config.hyde_cache_size,
+    )
+    # Short-TTL recall result cache: collapses identical-query storms (None when
+    # disabled via recall_cache_ttl_seconds=0).
+    app.state.recall_cache = (
+        simba.memory.recall_cache.RecallCache(
+            max_entries=config.recall_cache_size,
+            ttl_seconds=config.recall_cache_ttl_seconds,
+        )
+        if config.recall_cache_ttl_seconds > 0
+        else None
     )
 
     return app
