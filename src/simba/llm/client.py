@@ -35,6 +35,11 @@ _KNOWN_PROVIDERS = frozenset(
 )
 _warned_providers: set[str] = set()
 
+# Set on any LLM subprocess simba spawns; a nested LlmClient (a hook fired inside
+# that subprocess) then reports unavailable, breaking the hook -> LLM -> hook
+# recursion universally. See LlmClient.available()/_env().
+REENTRY_ENV = "SIMBA_INTERNAL_LLM"
+
 
 def _extract_json(text: str) -> typing.Any | None:
     """Best-effort: parse the first JSON value embedded in ``text``."""
@@ -121,6 +126,14 @@ class LlmClient:
         self._cfg = cfg
 
     def available(self) -> bool:
+        # Re-entrancy backstop: when simba spawns its own LLM subprocess it stamps
+        # REENTRY_ENV on that process (and its children inherit it). A hook fired
+        # INSIDE that subprocess therefore sees the client as unavailable, so
+        # conflict/reasoning/pitfall detection no-ops and never spawns another
+        # `claude -p` -> recursion is impossible, regardless of provider or which
+        # settings scope the hooks live in (the 2026-07-01 fork-bomb backstop).
+        if os.environ.get(REENTRY_ENV):
+            return False
         provider = self._cfg.provider
         if provider in _HTTP_PROVIDERS:
             # OpenAI-compatible HTTP endpoint (mlx_lm.server / remote Ollama / …) —
@@ -140,6 +153,9 @@ class LlmClient:
 
     def _env(self) -> dict[str, str]:
         env = os.environ.copy()
+        # Mark this subprocess as simba-internal so any hook it fires no-ops its
+        # own LLM calls (see available()). Children inherit it.
+        env[REENTRY_ENV] = "1"
         if self._cfg.base_url:
             env["ANTHROPIC_BASE_URL"] = self._cfg.base_url
             env["ANTHROPIC_AUTH_TOKEN"] = os.environ.get(self._cfg.api_key_env, "")

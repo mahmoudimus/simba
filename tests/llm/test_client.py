@@ -20,6 +20,33 @@ def _completed(stdout: str, code: int = 0):
     return types.SimpleNamespace(stdout=stdout, stderr="", returncode=code)
 
 
+class TestReentryGuard:
+    """Universal backstop: an LLM call spawned by simba marks its subprocess env;
+    any nested LlmClient (a hook fired inside that subprocess) is unavailable, so
+    conflict/reasoning/pitfall no-op -> no nested `claude -p` -> no recursion."""
+
+    def test_available_false_when_reentry_env_set(self, monkeypatch) -> None:
+        monkeypatch.setenv("SIMBA_INTERNAL_LLM", "1")
+        # Even a normally-available provider reports unavailable inside the guard.
+        assert llm.LlmClient(_cfg(provider="claude-cli")).available() is False
+
+    def test_available_normal_when_env_unset(self, monkeypatch) -> None:
+        monkeypatch.delenv("SIMBA_INTERNAL_LLM", raising=False)
+        assert llm.LlmClient(_cfg(provider="claude-cli")).available() is True
+
+    def test_complete_stamps_reentry_env_on_subprocess(self, monkeypatch) -> None:
+        monkeypatch.delenv("SIMBA_INTERNAL_LLM", raising=False)
+        captured = {}
+
+        def fake_run(argv, **kw):
+            captured["env"] = kw.get("env")
+            return _completed('{"type":"result","is_error":false,"result":"x"}')
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        llm.LlmClient(_cfg(provider="claude-cli")).complete("hi")
+        assert captured["env"]["SIMBA_INTERNAL_LLM"] == "1"
+
+
 class TestAvailable:
     def test_none_provider_unavailable(self) -> None:
         assert llm.LlmClient(_cfg(provider="none")).available() is False
