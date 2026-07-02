@@ -159,6 +159,15 @@ class LlmClient:
                 "--model", self._cfg.model,
                 "--output-format", "json",
                 "--max-turns", "1",
+                # Load ONLY user settings (not project/local) so simba's own
+                # hooks — registered at project/local scope — don't fire when
+                # simba spawns its internal `claude -p`, which would re-enter the
+                # UserPromptSubmit hook -> conflict detection -> another
+                # `claude -p` -> infinite recursion (the 2026-07-01 fork bomb).
+                # Preferred over --bare because it keeps keychain/OAuth auth
+                # (--bare skips keychain -> "Not logged in"). Caveat: if simba
+                # hooks are installed at USER scope this won't exclude them.
+                "--setting-sources", "user",
                 *self._extra(),
             ]
         if provider == "llm-cli":

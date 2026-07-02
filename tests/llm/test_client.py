@@ -164,6 +164,11 @@ class TestCompleteClaudeCli:
         argv = captured["argv"]
         assert argv[0] == "claude" and "-p" in argv
         assert argv[argv.index("--model") + 1] == "haiku"
+        # Load ONLY user settings so simba's own project/local-scoped hooks don't
+        # fire when simba spawns its internal `claude -p` -> conflict-detect ->
+        # claude -p recursion (the 2026-07-01 fork bomb). Unlike --bare this keeps
+        # keychain/OAuth auth.
+        assert argv[argv.index("--setting-sources") + 1] == "user"
 
     def test_is_error_returns_empty(self, monkeypatch) -> None:
         monkeypatch.setattr(
