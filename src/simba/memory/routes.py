@@ -1223,7 +1223,11 @@ async def normalize_scopes(
     folds: dict[str, dict] = {}
     for row in rows:
         old = row.get("projectPath") or ""
-        if not old:
+        # Only absolute filesystem paths are candidates: the corpus also
+        # carries opaque project-id hashes (the rules keying), and resolving
+        # one relative to the daemon cwd would corrupt the scope — caught by
+        # the first live dry-run.
+        if not old or not pathlib.PurePath(old).is_absolute():
             continue
         new = simba.memory.vector_db.normalize_project_path(old, resolve_worktrees=True)
         if new != old:
