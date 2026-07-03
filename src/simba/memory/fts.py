@@ -134,6 +134,18 @@ def set_project(memory_id: str, project_path: str) -> None:
     ).execute()
 
 
+def retarget_project(old: str, new: str) -> int:
+    """Bulk-move every row from one scope to another (spec 33 worktree fold).
+
+    Returns the number of rows moved.
+    """
+    return (
+        MemoryFTS.update(project_path=new or "")
+        .where(MemoryFTS.project_path == (old or ""))
+        .execute()
+    )
+
+
 def count() -> int:
     """Return the number of indexed rows."""
     return MemoryFTS.select().count()

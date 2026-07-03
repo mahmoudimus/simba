@@ -26,6 +26,8 @@ Usage:
     simba memory update    Update memory metadata (--project-path, --session-source)
     simba memory reindex   Rebuild the hybrid-recall BM25 keyword mirror
     simba memory maintain  Run one decay+hygiene pass (shadow unless --apply)
+    simba memory normalize-scopes
+                           Fold worktree scopes onto repo roots (--run applies)
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
@@ -1669,6 +1671,7 @@ Subcommands:
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
     maintain Run one decay+hygiene maintenance pass (shadow unless --apply)
+    normalize-scopes Fold worktree scopes onto repo roots (dry-run unless --run)
     supersession Inspect append-only supersession lineage for one memory
 
 store options:
@@ -1780,6 +1783,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_feedback(rest)
     elif subcmd == "maintain":
         return _memory_maintain(rest)
+    elif subcmd == "normalize-scopes":
+        return _memory_normalize_scopes(rest)
     elif subcmd == "supersession":
         return _memory_supersession(rest)
     else:
@@ -2202,6 +2207,51 @@ def _memory_maintain(args: list[str]) -> int:
         print(
             f"  hygiene: expired={hygiene.get('expired_count', 0)} "
             f"checked={hygiene.get('checked_count', 0)}"
+        )
+    return 0
+
+
+def _memory_normalize_scopes(args: list[str]) -> int:
+    """Fold linked-worktree scopes onto their main repo root (spec 33).
+
+    Usage: simba memory normalize-scopes [--run]
+
+    Dry-run by default: prints the fold plan without touching anything.
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+
+    payload: dict[str, object] = {}
+    if "--run" in args:
+        payload["run"] = True
+        args = [a for a in args if a != "--run"]
+    if args:
+        print("Usage: simba memory normalize-scopes [--run]", file=sys.stderr)
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(f"{url}/scopes/normalize", json=payload, timeout=120.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    mode = "applied" if body.get("run") else "dry-run"
+    folds = body.get("folds") or []
+    if not folds:
+        print(f"scope normalize ({mode}): nothing to fold")
+        return 0
+    print(f"scope normalize ({mode}): {body.get('changed', 0)} memories")
+    for fold in folds:
+        print(
+            f"  {fold.get('from', '?')} -> {fold.get('to', '?')} "
+            f"({fold.get('count', 0)} memories)"
         )
     return 0
 

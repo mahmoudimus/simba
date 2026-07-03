@@ -447,6 +447,26 @@ class MemoryConfig:
     # 0 (default) = unlimited, behavior unchanged. The audited inflow was
     # ~400 stores/day with no cap; ~25/session is the spec's suggested target.
     store_budget_per_session: int = 0
+    # Worktree scope fold (spec 33 Phase 3): store + recall resolve a linked
+    # git worktree onto its MAIN repository root, so one repo's memories share
+    # one scope across all its worktrees. The audit found one repo sharded 4
+    # ways (5,674/273/165/127), the smaller shards invisible from the main
+    # checkout. Detection is pure filesystem (a linked worktree's .git is a
+    # file pointing at <main>/.git/worktrees/<name>); existing rows migrate
+    # via `simba memory normalize-scopes --run` (dry-run default). A
+    # recall-behavior change → DEFAULT-OFF until measured.
+    scope_normalize_worktrees: bool = False
+    # Cross-project user lane (spec 33 Phase 3): ONE extra PREFERENCE slot per
+    # prompt, recalled across ALL projects at a high floor — the portable user
+    # model. The audit: PREFERENCE is 4% of the corpus, almost all project
+    # directives, recallable only inside the project that learned them — the
+    # harness knows the codebases deeply and the human thinly. Distinct from
+    # hierarchical_recall (whose measured dilution was ancestor:child noise):
+    # this is a single, type-filtered, high-floor slot. UNMEASURED →
+    # DEFAULT-OFF.
+    user_lane_enabled: bool = False
+    user_lane_min_similarity: float = 0.55
+    user_lane_max_results: int = 1
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:
