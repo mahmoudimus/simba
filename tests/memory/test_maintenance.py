@@ -36,9 +36,117 @@ def _cfg(**kw):
         maintenance_apply=False,
         maintenance_interval_hours=24.0,
         maintenance_startup_delay_seconds=0.0,
+        supersession_adjudication_enabled=False,
+        supersession_adjudication_max_age_days=30.0,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
+
+
+def _pending_event(old_id: str, new_id: str, *, age_days: float):
+    import simba.memory.supersession as ss
+
+    return ss.append_event(
+        old_id=old_id,
+        new_id=new_id,
+        project_path="",
+        memory_type="GOTCHA",
+        similarity=0.9,
+        reason="near_duplicate_same_type",
+        provenance="{}",
+        status=ss.STATUS_PENDING,
+        now=_NOW - age_days * _DAY,
+    )
+
+
+def test_adjudication_confirms_stale_pendings_on_apply(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Spec 33 Phase 4: pendings older than the max age resolve newest-wins —
+    the supersession is confirmed and the superseded memory goes dormant."""
+    import simba.memory.supersession as ss
+
+    with simba.db.connect(tmp_path):
+        _pending_event("mem_old", "mem_new", age_days=40)
+        _pending_event("mem_old2", "mem_new2", age_days=5)
+    result = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True, supersession_adjudication_enabled=True),
+        daemon_url="http://unused",
+    )
+    assert result["adjudication"]["confirmed"] == 1
+    with simba.db.connect(tmp_path):
+        assert usage.get_many(["mem_old"])["mem_old"].dormant is True
+        assert usage.get_many(["mem_old2"]) == {}  # fresh pending untouched
+        assert ss.latest_successors(["mem_old"])["mem_old"].new_id == "mem_new"
+        assert "mem_old2" in ss.latest_pending(["mem_old2"])
+
+
+def test_adjudication_shadow_counts_without_writing(
+    tmp_path: pathlib.Path,
+) -> None:
+    import simba.memory.supersession as ss
+
+    with simba.db.connect(tmp_path):
+        _pending_event("mem_old", "mem_new", age_days=40)
+    result = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(supersession_adjudication_enabled=True),  # shadow default
+        daemon_url="http://unused",
+    )
+    assert result["adjudication"]["confirmed"] == 1
+    assert result["adjudication"]["dry_run"] is True
+    with simba.db.connect(tmp_path):
+        assert usage.get_many(["mem_old"]) == {}
+        assert "mem_old" in ss.latest_pending(["mem_old"])
+
+
+def test_adjudication_disabled_reports_skip(tmp_path: pathlib.Path) -> None:
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["adjudication"] == {"skipped": True}
+
+
+def test_maintenance_runs_episodes_and_reflection_on_apply(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Spec 33 Phase 4 re-arm: episodes + reflection knobs pointed at the sync
+    scheduler that never ran (episode_jobs froze 2026-06-08). The heartbeat is
+    their driver now — dispatching only when applying."""
+    import simba.episodes.consolidate
+    import simba.reflection.pass_
+
+    monkeypatch.setattr(
+        simba.episodes.consolidate,
+        "consolidate_eligible",
+        lambda cwd, **kw: {"dispatched": ["s1"], "skipped": 0},
+    )
+    monkeypatch.setattr(
+        simba.reflection.pass_,
+        "reflect_pass",
+        lambda **kw: types.SimpleNamespace(status="ok", dispatched=True),
+    )
+    result = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True),
+        daemon_url="http://unused",
+    )
+    assert result["episodes"]["dispatched"] == ["s1"]
+    assert result["reflection"]["status"] == "ok"
+
+
+def test_maintenance_shadow_skips_episodes_and_reflection(
+    tmp_path: pathlib.Path,
+) -> None:
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["episodes"]["skipped"] is True
+    assert result["reflection"]["skipped"] is True
 
 
 def test_run_maintenance_is_shadow_by_default(tmp_path: pathlib.Path) -> None:
