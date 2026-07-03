@@ -255,3 +255,11 @@ class HooksConfig:
     noise_feedback_weight: float = 0.1
     # Injections within one session before an unused memory counts as noise.
     noise_min_injects: int = 2
+    # Rule-TTL refresh (spec 33 Phase 2): when on, the rule-age window keys
+    # off max(createdAt, lastUsedAt) instead of createdAt alone — a rule stays
+    # alive by FIRING (gate-fire feedback stamps last_used; the daemon
+    # surfaces it as lastUsedAt on recall), junk expires on schedule, and
+    # nothing has to be re-learned to survive. The audit found the top rule at
+    # 17k fires on the same 14-day creation clock as raw `ls: No such file`
+    # junk. UNMEASURED → DEFAULT-OFF (off ⇒ the legacy created-at window).
+    rule_ttl_refresh_enabled: bool = False

@@ -274,9 +274,7 @@ def test_stop_posts_good_feedback_for_cited_memory(tmp_path, monkeypatch) -> Non
     assert us.read_turn("sess-s") == []  # turn record consumed
 
 
-def test_stop_noise_sweep_posts_bad_after_repeat_unused(
-    tmp_path, monkeypatch
-) -> None:
+def test_stop_noise_sweep_posts_bad_after_repeat_unused(tmp_path, monkeypatch) -> None:
     import simba.hooks.stop as stop
 
     cfg = hooks_config.HooksConfig(usage_signals_enabled=True)
@@ -332,6 +330,51 @@ def test_pre_tool_use_gate_fire_posts_use_feedback(tmp_path, monkeypatch) -> Non
         }
     )
     assert ("mem_rule", "good") in posted
+
+
+def _iso_days_ago(days: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days * 86400))
+
+
+def test_rule_ttl_refresh_keeps_recently_used_rule(tmp_path, monkeypatch) -> None:
+    """Spec 33 Phase 2: freshness = max(createdAt, lastUsedAt) when the
+    refresh lever is on — a rule stays alive by firing, not by re-learning."""
+    import simba.hooks.pre_tool_use as ptu
+
+    cfg = hooks_config.HooksConfig(rule_ttl_refresh_enabled=True, rule_count_ttl=0)
+    monkeypatch.setattr(ptu, "_hooks_cfg", lambda: cfg)
+    rule = {
+        "id": "r1",
+        "type": "TOOL_RULE",
+        "content": "x",
+        "similarity": 0.9,
+        "createdAt": _iso_days_ago(30),
+        "lastUsedAt": _iso_days_ago(1),
+    }
+    monkeypatch.setattr(
+        "simba.hooks._memory_client.recall_memories", lambda *a, **kw: [rule]
+    )
+    mems = ptu._recall_tool_rules("Bash", {"command": "x"}, str(tmp_path))
+    assert [m["id"] for m in mems] == ["r1"]
+
+
+def test_rule_ttl_without_refresh_drops_stale_created(tmp_path, monkeypatch) -> None:
+    import simba.hooks.pre_tool_use as ptu
+
+    cfg = hooks_config.HooksConfig(rule_count_ttl=0)  # refresh lever default-off
+    monkeypatch.setattr(ptu, "_hooks_cfg", lambda: cfg)
+    rule = {
+        "id": "r1",
+        "type": "TOOL_RULE",
+        "content": "x",
+        "similarity": 0.9,
+        "createdAt": _iso_days_ago(30),
+        "lastUsedAt": _iso_days_ago(1),
+    }
+    monkeypatch.setattr(
+        "simba.hooks._memory_client.recall_memories", lambda *a, **kw: [rule]
+    )
+    assert ptu._recall_tool_rules("Bash", {"command": "x"}, str(tmp_path)) == []
 
 
 def test_pre_tool_use_gate_fire_off_by_default(tmp_path, monkeypatch) -> None:

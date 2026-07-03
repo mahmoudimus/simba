@@ -432,6 +432,21 @@ class MemoryConfig:
     # memories), so True graduates only via a measured no-regression on the
     # recall benchmarks (SoTA-lever policy).
     maintenance_apply: bool = False
+    # Type-aware decay half-life multipliers (spec 33 Phase 2), applied on top
+    # of decay_half_life_days. The spec's recommended table: "EPISODE:0.5,
+    # FAILURE:1,GOTCHA:1.5,WORKING_SOLUTION:1.5,PATTERN:4,DECISION:4,
+    # PREFERENCE:12" — episodic digests age fastest; architectural facts and
+    # the user model persist. Empty (default) = every type at the base
+    # half-life, behavior unchanged. The maintenance pass joins ids to types
+    # via GET /list; unknown types use 1.0. TOOL_RULE freshness is handled by
+    # the hygiene/rule-TTL path (use-it-and-keep-it), not strength decay.
+    decay_type_multipliers: str = ""
+    # Per-session store budget (spec 33 Phase 2): max non-EPISODE stores one
+    # sessionSource may make (daemon-lifetime counters; EPISODE consolidation
+    # is exempt — the budget should push toward consolidation, not block it).
+    # 0 (default) = unlimited, behavior unchanged. The audited inflow was
+    # ~400 stores/day with no cap; ~25/session is the spec's suggested target.
+    store_budget_per_session: int = 0
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

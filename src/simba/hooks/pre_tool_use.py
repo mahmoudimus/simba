@@ -212,6 +212,25 @@ def _within_max_age(created_at: str | None, max_age_days: int) -> bool:
     return age_seconds <= max_age_days * 86400
 
 
+def _rule_freshness(memory: dict, cfg) -> str | None:
+    """Timestamp the rule-age window keys off.
+
+    Legacy (default): ``createdAt`` — a rule dies N days after creation no
+    matter how often it fired, so a good rule survives only by being
+    RE-LEARNED. With ``hooks.rule_ttl_refresh_enabled`` (spec 33 Phase 2):
+    ``max(createdAt, lastUsedAt)`` — use-it-and-keep-it (``lastUsedAt`` is the
+    daemon-surfaced consumption stamp written by gate-fire/citation feedback).
+    ISO-8601 Z strings compare lexicographically = chronologically.
+    """
+    created = memory.get("createdAt")
+    if not getattr(cfg, "rule_ttl_refresh_enabled", False):
+        return created
+    last_used = memory.get("lastUsedAt") or ""
+    if created and last_used:
+        return max(created, last_used)
+    return last_used or created
+
+
 def _project_has_tool_rules(project_id: str, cfg) -> bool:
     """True if the project has >=1 ``TOOL_RULE`` memory (TTL-cached, fail-open).
 
@@ -293,11 +312,14 @@ def _recall_tool_rules(
         return []
 
     # Recency gate: stale rules (e.g. a "no such file" probe recorded weeks ago
-    # against a since-moved path) age out of the warning injection.
+    # against a since-moved path) age out of the warning injection. Freshness
+    # is createdAt, or max(createdAt, lastUsedAt) with the spec-33 refresh on.
     max_age_days = getattr(cfg, "rule_max_age_days", 0)
     if max_age_days and max_age_days > 0:
         memories = [
-            m for m in memories if _within_max_age(m.get("createdAt"), max_age_days)
+            m
+            for m in memories
+            if _within_max_age(_rule_freshness(m, cfg), max_age_days)
         ]
     return memories
 
@@ -552,9 +574,7 @@ def run(hook_input: dict) -> CanonicalResult:
                     for m in rule_memories:
                         rule_id = m.get("id")
                         if rule_id:
-                            simba.hooks._memory_client.post_feedback(
-                                rule_id, "good"
-                            )
+                            simba.hooks._memory_client.post_feedback(rule_id, "good")
         # A strong match escalates to a hard block on block-only harnesses (pi);
         # Claude/Codex ignore this — the warning above is what they act on.
         escalated_block = _strong_tool_rule_block(rule_memories)

@@ -16,6 +16,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 if typing.TYPE_CHECKING:
+    import pathlib
+
     from simba.memory.config import MemoryConfig
 
 logger = logging.getLogger("simba.memory.hygiene")
@@ -37,16 +39,36 @@ def _memory_cfg() -> MemoryConfig:
     return simba.config.load("memory")
 
 
+def _last_used_epochs(cwd: pathlib.Path) -> dict[str, float]:
+    """``memory_id -> last_used`` epoch from the usage sidecar. Fail-soft {}."""
+    try:
+        import simba.db
+        import simba.memory.usage
+
+        with simba.db.connect(cwd):
+            rows = simba.memory.usage.MemoryUsage.select(
+                simba.memory.usage.MemoryUsage.memory_id,
+                simba.memory.usage.MemoryUsage.last_used,
+            ).where(simba.memory.usage.MemoryUsage.last_used > 0)
+            return {r.memory_id: float(r.last_used) for r in rows}
+    except Exception:
+        logger.debug("hygiene: last_used read failed", exc_info=True)
+        return {}
+
+
 def run_hygiene_pass(
     *,
     daemon_url: str,
     cfg: MemoryConfig | None = None,
     dry_run: bool = False,
+    cwd: pathlib.Path | None = None,
 ) -> HygieneResult:
     """Expire stale TOOL_RULE memories via daemon DELETE. Never raises.
 
     ``dry_run`` (spec 33 shadow mode) counts would-expire rules without
-    issuing any DELETE.
+    issuing any DELETE. When ``cwd`` is supplied, a rule whose sidecar
+    ``last_used`` is fresher than the cutoff survives — use-it-and-keep-it:
+    expiry keys off consumption, not creation.
     """
     cfg = cfg or _memory_cfg()
     if cfg.tool_rule_max_age_days == 0:
@@ -54,6 +76,8 @@ def run_hygiene_pass(
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=cfg.tool_rule_max_age_days)
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+    last_used_map = _last_used_epochs(cwd) if cwd is not None else {}
+    cutoff_epoch = cutoff.timestamp()
 
     try:
         resp = httpx.get(
@@ -80,6 +104,8 @@ def run_hygiene_pass(
         mid = mem.get("id")
         if not mid:
             continue
+        if last_used_map.get(mid, 0.0) >= cutoff_epoch:
+            continue  # consumed recently — spec 33 use-it-and-keep-it
         if dry_run:
             expired += 1
             continue

@@ -33,6 +33,28 @@ logger = logging.getLogger("simba.memory")
 _STRENGTH_TOLERANCE = 1e-6
 
 
+def parse_type_multipliers(raw: str) -> dict[str, float]:
+    """Parse ``"PATTERN:4,GOTCHA:1.5"`` → ``{"PATTERN": 4.0, "GOTCHA": 1.5}``.
+
+    Malformed entries are skipped (fail-open to the base half-life); names
+    are upper-cased; non-positive multipliers are dropped. Empty/garbage → {}
+    (every type at the base half-life).
+    """
+    out: dict[str, float] = {}
+    for part in (raw or "").split(","):
+        name, sep, value = part.partition(":")
+        if not sep:
+            continue
+        name = name.strip().upper()
+        try:
+            mult = float(value.strip())
+        except ValueError:
+            continue
+        if name and mult > 0:
+            out[name] = mult
+    return out
+
+
 @dataclasses.dataclass
 class DecayResult:
     processed: int = 0  # total rows visited
@@ -49,6 +71,7 @@ def run_decay_pass(
     cwd: pathlib.Path,
     cfg: typing.Any,
     dry_run: bool = False,
+    type_map: dict[str, str] | None = None,
 ) -> DecayResult | None:
     """Recompute strength + dormancy for every ``memory_usage`` row.
 
@@ -59,12 +82,20 @@ def run_decay_pass(
     ``dry_run`` (spec 33 shadow mode) computes and counts every would-be
     strength update / dormancy transition but persists nothing — the
     maintenance heartbeat runs shadow until ``maintenance_apply`` is measured.
+
+    ``type_map`` (``memory_id -> TYPE``) enables the type-aware half-life
+    multipliers from ``cfg.decay_type_multipliers`` (spec 33 Phase 2) — types
+    live only in LanceDB, so the caller supplies the join. Without a map (or
+    with no multipliers configured) every row decays at the base half-life.
     """
     if not getattr(cfg, "decay_enabled", True):
         return None
 
     result = DecayResult(dry_run=dry_run)
     half_life = float(getattr(cfg, "decay_half_life_days", 30.0))
+    multipliers = parse_type_multipliers(
+        getattr(cfg, "decay_type_multipliers", "") or ""
+    )
     scale = float(getattr(cfg, "reinforcement_scale", 0.5))
     fb_weight = float(getattr(cfg, "feedback_weight", 0.2))
     outcome_weight = float(getattr(cfg, "outcome_quality_weight", 0.0))
@@ -76,12 +107,17 @@ def run_decay_pass(
         for row in rows:
             result.processed += 1
             try:
+                row_half_life = half_life
+                if multipliers and type_map:
+                    row_half_life = half_life * multipliers.get(
+                        type_map.get(row.memory_id, ""), 1.0
+                    )
                 new_strength = simba.memory.strength.compute_strength(
                     created_at_epoch=row.created_at,
                     now=now,
                     access_count=row.access_count,
                     feedback_score=_effective_feedback(row, outcome_weight),
-                    half_life=half_life,
+                    half_life=row_half_life,
                     reinforcement_scale=scale,
                     feedback_weight=fb_weight,
                     arousal_decay_multiplier=arousal_mult,

@@ -187,6 +187,31 @@ async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> N
     await asyncio.to_thread(_sync)
 
 
+def _last_used_map(memory_ids: list[str], cwd: pathlib.Path) -> dict[str, float]:
+    """Consumption freshness (``usage.last_used``) for recalled ids (spec 33).
+
+    Only ids with a non-zero ``last_used`` appear. Fail-soft {} — recall never
+    breaks on a sidecar read.
+    """
+    if not memory_ids:
+        return {}
+
+    import simba.db
+    import simba.memory.usage
+
+    try:
+        with simba.db.connect(cwd):
+            rows = simba.memory.usage.get_many(memory_ids)
+    except Exception:
+        logger.debug("[recall] last_used read failed", exc_info=True)
+        return {}
+    return {
+        mid: float(row.last_used)
+        for mid, row in rows.items()
+        if float(getattr(row, "last_used", 0.0) or 0.0) > 0
+    }
+
+
 async def _bump_quality(
     memory_id: str,
     now: float,
@@ -595,6 +620,28 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             detail=f"content too long (max {max_len} chars, got {got_len})",
         )
 
+    # Per-session inflow throttle (spec 33 Phase 2). Over-capture is real
+    # (~400 stores/day audited, raw error output stored as rules): when a
+    # budget is set, non-EPISODE stores beyond it for one sessionSource are
+    # rejected before the embed. EPISODE is exempt — the budget should push
+    # toward consolidation, not block it. Counted on successful add below.
+    budget = int(getattr(config, "store_budget_per_session", 0) or 0)
+    budget_session = (body.session_source or "").strip()
+    budget_applies = budget > 0 and bool(budget_session) and body.type != "EPISODE"
+    if budget_applies:
+        store_counts = getattr(request.app.state, "store_session_counts", None)
+        if store_counts is None:
+            store_counts = {}
+            request.app.state.store_session_counts = store_counts
+        if store_counts.get(budget_session, 0) >= budget:
+            raise fastapi.HTTPException(
+                status_code=429,
+                detail=(
+                    f"session store budget exhausted ({budget}); consolidate "
+                    "into an EPISODE or raise memory.store_budget_per_session"
+                ),
+            )
+
     # A store mutates the corpus (new memory, supersession annotation), so drop
     # cached recalls to keep the short-TTL cache from serving pre-store results.
     recall_cache = getattr(request.app.state, "recall_cache", None)
@@ -707,6 +754,12 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             }
         ]
     )
+
+    if budget_applies:
+        store_counts = request.app.state.store_session_counts
+        if len(store_counts) > 4096:  # daemon-lifetime bound; sessions churn
+            store_counts.clear()
+        store_counts[budget_session] = store_counts.get(budget_session, 0) + 1
 
     logger.info(
         '[store] project=%s type=%s content="%s" -> stored %s',
@@ -1008,6 +1061,12 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     memories = simba.memory.query_filters.apply(memories, parsed_query.post_filters)
     memories = await _mark_superseded(memories, recall_cwd)
 
+    # Consumption freshness (spec 33): lets rule-TTL refresh and other clients
+    # key off max(createdAt, lastUsedAt) instead of creation alone.
+    last_used = await asyncio.to_thread(
+        _last_used_map, [m["id"] for m in memories], recall_cwd
+    )
+
     results = [
         {
             "id": m["id"],
@@ -1017,6 +1076,15 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             "similarity": round(m["similarity"], 2),
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
+            **(
+                {
+                    "lastUsedAt": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_used[m["id"]])
+                    )
+                }
+                if m["id"] in last_used
+                else {}
+            ),
             **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
             **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
             **({"supersededBy": m["supersededBy"]} if m.get("supersededBy") else {}),

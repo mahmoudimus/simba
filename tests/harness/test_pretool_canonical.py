@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import time
 
 import pytest
 
@@ -163,12 +164,16 @@ def test_render_ignores_escalated_block() -> None:
 
 
 def _strong_rule_memories(sim: float) -> list[dict]:
+    # createdAt must be generated fresh: a hardcoded date silently ages past
+    # hooks.rule_max_age_days and the recency gate drops the rule (this test
+    # time-bombed exactly that way once).
+    created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return [
         {
             "content": "never run rm -rf /",
             "context": json.dumps({"correction": "use a scoped path"}),
             "similarity": sim,
-            "createdAt": "2026-06-15T00:00:00Z",
+            "createdAt": created,
         }
     ]
 

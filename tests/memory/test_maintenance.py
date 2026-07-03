@@ -109,6 +109,31 @@ def test_run_maintenance_hygiene_disabled_reports_skip(
     assert result["hygiene"] == {"skipped": True}
 
 
+def test_run_maintenance_fetches_type_map_for_multipliers(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Type-aware decay (spec 33 Phase 2): configured multipliers pull the
+    id→type map from the daemon and slow the configured types."""
+    import simba.memory.maintenance as maint
+
+    calls: dict = {}
+
+    def _fake_fetch(daemon_url: str):
+        calls["url"] = daemon_url
+        return {"mem_p": "PATTERN"}
+
+    monkeypatch.setattr(maint, "_fetch_type_map", _fake_fetch)
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_p", now=_NOW - 45 * _DAY)
+        usage.get_or_create("mem_g", now=_NOW - 45 * _DAY)
+    cfg = _cfg(maintenance_apply=True, decay_type_multipliers="PATTERN:4")
+    run_maintenance(now=_NOW, cwd=tmp_path, cfg=cfg, daemon_url="http://x")
+    with simba.db.connect(tmp_path):
+        rows = usage.get_many(["mem_p", "mem_g"])
+    assert calls["url"] == "http://x"
+    assert rows["mem_p"].strength > rows["mem_g"].strength
+
+
 @pytest.mark.asyncio
 async def test_scheduler_run_once_stores_and_reports(tmp_path: pathlib.Path) -> None:
     with simba.db.connect(tmp_path):

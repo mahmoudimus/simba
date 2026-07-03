@@ -17,6 +17,7 @@ Pure + deterministic. ``high_entropy_terms`` selects the tokens; ``exact_boost``
 re-orders a candidate pool so memories containing one (whole-word) rank first. Off by
 default at the call site; this module never raises.
 """
+
 from __future__ import annotations
 
 import math
@@ -91,8 +92,7 @@ def _is_common_english(token: str, zipf_common: float) -> bool:
     return low in COMMON_WORDS
 
 
-def is_lexically_novel(token: str,
-                       *, zipf_common: float = DEFAULT_ZIPF_COMMON) -> bool:
+def is_lexically_novel(token: str, *, zipf_common: float = DEFAULT_ZIPF_COMMON) -> bool:
     """Lexical (general-English) novelty: identifier-shaped, OR not a common English
     word. Kills common-English pollution (how/internal); keeps codes/symbols/CamelCase
     and rare proper nouns (Tigress/Hodur)."""
