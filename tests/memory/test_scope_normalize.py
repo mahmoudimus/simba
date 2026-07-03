@@ -167,6 +167,39 @@ async def test_recall_from_worktree_finds_root_scoped_memory(
 
 
 @pytest.mark.asyncio
+async def test_scope_migration_skips_non_path_scopes(
+    tmp_path, lance_table, mock_embed
+) -> None:
+    """Opaque project-id hashes (the rules table's keying) are NOT filesystem
+    paths — resolving one relative to the daemon cwd would corrupt the scope.
+    Caught live by the first dry-run against the real corpus."""
+    cfg = simba.memory.config.MemoryConfig(duplicate_threshold=1.01)
+    await lance_table.add(
+        [
+            {
+                "id": "mem_hash",
+                "type": "TOOL_RULE",
+                "content": "rule scoped by project id",
+                "context": "",
+                "tags": "[]",
+                "confidence": 0.9,
+                "sessionSource": "",
+                "projectPath": "2e6aaefe98e043f5897ae377b78958ac",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "lastAccessedAt": "2026-01-01T00:00:00Z",
+                "accessCount": 0,
+                "vector": [0.1] * 768,
+            }
+        ]
+    )
+    async with _client(tmp_path, lance_table, mock_embed, cfg) as ac:
+        dry = await ac.post("/scopes/normalize", json={})
+        assert dry.status_code == 200
+        assert dry.json()["folds"] == []
+        assert dry.json()["changed"] == 0
+
+
+@pytest.mark.asyncio
 async def test_scope_migration_dry_run_then_run(
     tmp_path, lance_table, mock_embed
 ) -> None:
