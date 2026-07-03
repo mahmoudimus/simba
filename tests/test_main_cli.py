@@ -1226,6 +1226,155 @@ def test_memory_normalize_scopes_run_flag(monkeypatch, capsys) -> None:
     assert "nothing to fold" in capsys.readouterr().out
 
 
+def test_memory_promote_lists_candidates(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "total": 1,
+                "minUses": 3,
+                "maxNoiseRatio": 0.5,
+                "candidates": [
+                    {
+                        "id": "mem_hot",
+                        "type": "GOTCHA",
+                        "useCount": 4,
+                        "noiseCount": 1,
+                        "content": "always run the docker test runner",
+                    }
+                ],
+            }
+
+    def _fake_get(url, params=None, timeout=0.0):
+        captured["url"] = url
+        captured["params"] = params
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    rc = cli._memory_promote([])
+
+    assert rc == 0
+    assert captured["url"] == "http://x/promotions/candidates"
+    out = capsys.readouterr().out
+    assert "mem_hot" in out
+    assert "use=4" in out
+    assert "docker test runner" in out
+
+
+def test_memory_promote_empty(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"total": 0, "minUses": 3, "maxNoiseRatio": 0.5, "candidates": []}
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _Resp())
+    rc = cli._memory_promote([])
+    assert rc == 0
+    assert "no promotion candidates" in capsys.readouterr().out
+
+
+def _write_curated(tmp_path) -> None:
+    (tmp_path / "MEMORY.md").write_text("# Memory Index\n- ignored\n")
+    (tmp_path / "triage-table.md").write_text(
+        "---\n"
+        "name: triage-table\n"
+        "description: User requires a triage table before batch-acting\n"
+        "metadata:\n"
+        "  type: user\n"
+        "---\n\n"
+        "Full details about the triage-table requirement.\n"
+    )
+    (tmp_path / "push-trap.md").write_text(
+        "---\n"
+        "name: push-trap\n"
+        "description: git push.default=upstream lands on MAIN from worktrees\n"
+        "metadata:\n"
+        "  type: project\n"
+        "---\n\n"
+        "Always push branch:refs/heads/branch.\n"
+    )
+
+
+def test_memory_import_curated_dry_run(tmp_path, monkeypatch, capsys) -> None:
+    import httpx
+
+    _write_curated(tmp_path)
+
+    def _boom(*a, **kw):  # pragma: no cover - must not be reached
+        raise AssertionError("dry run must not POST")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    rc = cli._memory_import_curated(["--dir", str(tmp_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert "PREFERENCE" in out and "triage table" in out
+    assert "DECISION" in out and "push.default" in out
+    assert "MEMORY.md" not in out
+
+
+def test_memory_import_curated_run_posts(tmp_path, monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    _write_curated(tmp_path)
+    posted: list[dict] = []
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"id": "mem_new", "status": "stored"}
+
+    def _fake_post(url, json=None, timeout=0.0):
+        posted.append({"url": url, "json": json})
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    rc = cli._memory_import_curated(["--dir", str(tmp_path), "--run"])
+    assert rc == 0
+    assert len(posted) == 2
+    payloads = {p["json"]["content"]: p["json"] for p in posted}
+    pref = payloads["User requires a triage table before batch-acting"]
+    assert pref["type"] == "PREFERENCE"
+    assert pref["trustSource"] == "user_confirmed"
+    assert pref["captureOrigin"] == "curated_import"
+    assert "stored 2" in capsys.readouterr().out
+
+
+def test_memory_import_curated_requires_dir(capsys) -> None:
+    rc = cli._memory_import_curated([])
+    assert rc == 1
+    assert "Usage" in capsys.readouterr().err
+
+
 def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
     import httpx
 

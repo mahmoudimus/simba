@@ -1672,6 +1672,8 @@ Subcommands:
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
     maintain Run one decay+hygiene maintenance pass (shadow unless --apply)
     normalize-scopes Fold worktree scopes onto repo roots (dry-run unless --run)
+    promote  List usage-triggered promotion candidates (spec 33)
+    import-curated Mirror curated markdown memories into the daemon
     supersession Inspect append-only supersession lineage for one memory
 
 store options:
@@ -1785,6 +1787,10 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_maintain(rest)
     elif subcmd == "normalize-scopes":
         return _memory_normalize_scopes(rest)
+    elif subcmd == "promote":
+        return _memory_promote(rest)
+    elif subcmd == "import-curated":
+        return _memory_import_curated(rest)
     elif subcmd == "supersession":
         return _memory_supersession(rest)
     else:
@@ -2209,6 +2215,195 @@ def _memory_maintain(args: list[str]) -> int:
             f"checked={hygiene.get('checked_count', 0)}"
         )
     return 0
+
+
+def _memory_promote(args: list[str]) -> int:
+    """List usage-triggered promotion candidates (spec 33 Phase 5).
+
+    Usage: simba memory promote [--limit N]
+
+    Candidates = use_count >= memory.promotion_min_uses with noise/use below
+    memory.promotion_max_noise_ratio and not dormant. The promotion itself
+    stays human: turn a candidate into a TOOL_RULE / CLAUDE.md bullet / skill.
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+
+    limit_raw = _parse_opt_value(args, "--limit") or "20"
+    try:
+        limit = int(limit_raw)
+    except ValueError:
+        print(f"Error: invalid --limit: {limit_raw}", file=sys.stderr)
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.get(
+            f"{url}/promotions/candidates", params={"limit": limit}, timeout=30.0
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    candidates = body.get("candidates") or []
+    if not candidates:
+        print("no promotion candidates (yet — usage signals feed this)")
+        return 0
+    print(
+        f"{body.get('total', len(candidates))} promotion candidate(s) "
+        f"(use>={body.get('minUses', '?')}, "
+        f"noise/use<{body.get('maxNoiseRatio', '?')}):"
+    )
+    for c in candidates:
+        content = (c.get("content") or "")[:80]
+        print(
+            f"  {c.get('id', '?')} [{c.get('type', '?')}] "
+            f"use={c.get('useCount', 0)} noise={c.get('noiseCount', 0)} — {content}"
+        )
+    return 0
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse a curated memory file's ``---`` frontmatter (tolerant, no YAML dep).
+
+    Returns ``(meta, body)`` where meta carries flat ``key: value`` lines plus
+    the nested ``metadata.type``. Files without frontmatter → ({}, full text).
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    meta: dict[str, str] = {}
+    body_start = len(lines)
+    for i, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            body_start = i + 1
+            break
+        stripped = line.strip()
+        if ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "type" and value:  # the nested metadata.type line
+            meta["type"] = value
+        elif value:
+            meta.setdefault(key, value)
+    return meta, "\n".join(lines[body_start:]).strip()
+
+
+# Curated-layer types → daemon memory types (spec 33 Phase 6 bridge).
+_CURATED_TYPE_MAP = {
+    "user": "PREFERENCE",
+    "feedback": "PREFERENCE",
+    "project": "DECISION",
+    "reference": "PATTERN",
+}
+
+
+def _memory_import_curated(args: list[str]) -> int:
+    """Mirror curated markdown memories into the daemon (spec 33 Phase 6).
+
+    Usage: simba memory import-curated --dir DIR [--project-path P] [--run]
+
+    The audit's disjoint-brain fix: the curated layer (one fact per .md with
+    name/description frontmatter) is the sharpest knowledge in the harness
+    and was unsearchable from every other runtime. One-way mirror, dry-run by
+    default, idempotent via the daemon's duplicate detection. MEMORY.md (the
+    index) is skipped.
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+    import simba.memory.config as memory_config
+
+    usage_line = (
+        "Usage: simba memory import-curated --dir DIR [--project-path P] [--run]"
+    )
+    directory = _parse_opt_value(args, "--dir")
+    project_path = _parse_opt_value(args, "--project-path") or ""
+    run = "--run" in args
+    if not directory:
+        print(usage_line, file=sys.stderr)
+        return 1
+    root = pathlib.Path(directory).expanduser()
+    if not root.is_dir():
+        print(f"Error: not a directory: {root}", file=sys.stderr)
+        return 1
+
+    max_len = memory_config.resolve_max_content_length()
+    plan: list[dict] = []
+    for path in sorted(root.glob("*.md")):
+        if path.name == "MEMORY.md":
+            continue
+        try:
+            meta, body = _parse_frontmatter(path.read_text())
+        except OSError:
+            continue
+        description = (meta.get("description") or "").strip()
+        if not description:
+            # Fall back to the first non-empty body line.
+            description = next(
+                (ln.strip() for ln in body.split("\n") if ln.strip()), ""
+            )
+        if not description:
+            continue
+        mtype = _CURATED_TYPE_MAP.get((meta.get("type") or "").lower(), "PATTERN")
+        plan.append(
+            {
+                "file": path.name,
+                "type": mtype,
+                "content": description[:max_len],
+                "context": body[:400],
+            }
+        )
+
+    if not plan:
+        print("no curated memories found")
+        return 0
+
+    if not run:
+        print(f"import-curated (dry-run): {len(plan)} memories from {root}")
+        for item in plan:
+            print(f"  {item['type']:<11} {item['file']} — {item['content'][:70]}")
+        print("re-run with --run to store")
+        return 0
+
+    url = simba.hooks._memory_client.daemon_url()
+    stored = 0
+    duplicates = 0
+    errors = 0
+    for item in plan:
+        payload = {
+            "type": item["type"],
+            "content": item["content"],
+            "context": item["context"],
+            "confidence": 0.95,
+            "projectPath": project_path,
+            "trustSource": "user_confirmed",
+            "captureOrigin": "curated_import",
+        }
+        try:
+            resp = httpx.post(f"{url}/store", json=payload, timeout=30.0)
+            resp.raise_for_status()
+            body_json = resp.json()
+        except (httpx.HTTPError, ValueError):
+            errors += 1
+            continue
+        if body_json.get("status") == "duplicate":
+            duplicates += 1
+        else:
+            stored += 1
+    print(
+        f"import-curated: stored {stored}, duplicates {duplicates}, "
+        f"errors {errors} (of {len(plan)})"
+    )
+    return 0 if errors == 0 else 1
 
 
 def _memory_normalize_scopes(args: list[str]) -> int:
