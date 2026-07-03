@@ -25,7 +25,9 @@ async def test_bump_usage_writes_to_sqlite(tmp_path: pathlib.Path) -> None:
         assert rows["mem_a"].access_count == 1
         assert rows["mem_a"].last_accessed == 1000.0
         assert rows["mem_a"].match_count == 1
-        assert rows["mem_a"].inject_count == 1
+        # Spec 33 ledger split: recall knows a memory was RETURNED (match);
+        # only the hook's POST /recall/ack knows it reached context (inject).
+        assert rows["mem_a"].inject_count == 0
 
 
 @pytest.mark.asyncio
@@ -40,7 +42,7 @@ async def test_bump_usage_increments_on_repeated_recall(
         assert rows["mem_x"].access_count == 2
         assert rows["mem_x"].last_accessed == 200.0
         assert rows["mem_x"].match_count == 2
-        assert rows["mem_x"].inject_count == 2
+        assert rows["mem_x"].inject_count == 0  # inject arrives only via ack
 
 
 @pytest.mark.asyncio

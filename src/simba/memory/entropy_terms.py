@@ -151,6 +151,12 @@ def _contains_whole(text: str, term: str) -> bool:
     return re.search(pat, text or "", re.IGNORECASE) is not None
 
 
+def contains_whole(text: str, term: str) -> bool:
+    """Public whole-token containment (the usage-signal citation check shares
+    exact_boost's matching semantics — spec 33)."""
+    return _contains_whole(text, term)
+
+
 def _rarity(term: str) -> float:
     """Rarity weight: rarer (lower Zipf) terms weigh more. wordfreq when available,
     else a flat 1.0 (so scoring degrades to a plain match count)."""

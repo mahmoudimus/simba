@@ -286,6 +286,25 @@ def run(hook_input: dict) -> CanonicalResult:
                 )
             )
 
+    # 2c. Usage signals (spec 33 Phase 1): record this turn's injected ids +
+    #     distinctive terms for the Stop citation check, and ack the inject to
+    #     the daemon ledger (match/inject split). v1 treats the recalled set as
+    #     injected — lanes trim only when context_lanes_enabled. Both levers
+    #     default-off; fail-soft.
+    if memories and getattr(cfg, "usage_signals_enabled", False):
+        with contextlib.suppress(Exception):
+            # `as` form: a bare `import simba.hooks.usage_signals` would bind
+            # the local name `simba` and shadow the module-level import for
+            # the rest of this function.
+            import simba.hooks.usage_signals as usage_signals
+
+            usage_signals.record_turn_injections(session_id, memories)
+    if memories and getattr(cfg, "recall_ack_enabled", False):
+        with contextlib.suppress(Exception):
+            simba.hooks._memory_client.ack_injected(
+                [m.get("id", "") for m in memories]
+            )
+
     # 2b. Intent priming (spec 28): prime matched doctrine + applicable gates from
     #     the stated intent. Default-OFF → "" (byte-identical to today).
     prime_ctx = _intent_prime(prompt, cwd_str, cfg, session_id)

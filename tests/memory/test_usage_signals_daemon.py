@@ -76,3 +76,19 @@ async def test_recall_ack_empty_is_noop(async_client) -> None:
     resp = await async_client.post("/recall/ack", json={"ids": []})
     assert resp.status_code == 200
     assert resp.json()["acked"] == 0
+
+
+def test_bump_quality_use_sets_last_used(tmp_path) -> None:
+    """A ``use`` signal stamps ``last_used`` — the freshness rules (rule TTL
+    refresh, spec 33 Phase 2) key off consumption, not retrieval."""
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("mem_u", 123.0, use=1)
+        row = usage.get_many(["mem_u"])["mem_u"]
+    assert row.last_used == 123.0
+
+
+def test_bump_quality_noise_leaves_last_used(tmp_path) -> None:
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("mem_n", 123.0, noise=1)
+        row = usage.get_many(["mem_n"])["mem_n"]
+    assert row.last_used == 0.0

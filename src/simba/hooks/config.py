@@ -229,3 +229,29 @@ class HooksConfig:
     # stays observe-only, `SubagentStop`/pi hooks no-op). Enable:
     # `simba config set hooks.reasoning_verify_enabled 1`.
     reasoning_verify_enabled: bool = False
+
+    # Usage signals (spec 33 Phase 1) — the WRITERS for the ledger's use/noise
+    # counters. The 2026-07-03 audit found them at zero across all 5,731 usage
+    # rows (and feedback_score never non-zero): decay had no consumption signal
+    # to act on. When on: UserPromptSubmit records this turn's injected ids +
+    # distinctive terms, Stop detects citations (whole-token term overlap in
+    # the response → POST feedback good) and sweeps repeat-injected-never-used
+    # ids (→ ONE weak feedback bad per session at noise_feedback_weight), and
+    # a fired TOOL_RULE gate posts a use directly (gate hits ARE uses — the
+    # audit's only live consumption signal was the top rule's 17k gate probes).
+    # UNMEASURED → DEFAULT-OFF (off ⇒ byte-identical: no files, no POSTs).
+    usage_signals_enabled: bool = False
+    # Also ack injected ids to the daemon (POST /recall/ack → inject counter),
+    # separating "returned by search" (match) from "reached the model's
+    # context" (inject) — the phase-0 ledger split's client half.
+    recall_ack_enabled: bool = False
+    # Distinctive terms that must appear (whole-token) in the response for a
+    # memory to count as cited/used. Memories with fewer terms need all of
+    # them; zero-term (pure-prose) memories never citation-match.
+    citation_min_term_overlap: int = 2
+    # Weak, asymmetric penalty for surfaced-but-never-used (vs the good
+    # signal's memory.feedback_default_weight): noise evidence is
+    # circumstantial, a citation is direct.
+    noise_feedback_weight: float = 0.1
+    # Injections within one session before an unused memory counts as noise.
+    noise_min_injects: int = 2

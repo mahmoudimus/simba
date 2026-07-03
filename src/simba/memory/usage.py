@@ -43,21 +43,20 @@ def _init_index(conn: sqlite3.Connection) -> None:
         "inject_count INTEGER NOT NULL DEFAULT 0, "
         "use_count INTEGER NOT NULL DEFAULT 0, "
         "noise_count INTEGER NOT NULL DEFAULT 0, "
-        "save_count INTEGER NOT NULL DEFAULT 0)"
+        "save_count INTEGER NOT NULL DEFAULT 0, "
+        "last_used REAL NOT NULL DEFAULT 0.0)"
     )
     existing = {row[1] for row in conn.execute("PRAGMA table_info(memory_usage)")}
-    for name in (
-        "match_count",
-        "inject_count",
-        "use_count",
-        "noise_count",
-        "save_count",
+    for name, ddl in (
+        ("match_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("inject_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("use_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("noise_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("save_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_used", "REAL NOT NULL DEFAULT 0.0"),
     ):
         if name not in existing:
-            conn.execute(
-                f"ALTER TABLE memory_usage ADD COLUMN {name} "
-                "INTEGER NOT NULL DEFAULT 0"
-            )
+            conn.execute(f"ALTER TABLE memory_usage ADD COLUMN {name} {ddl}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memory_usage_dormant "
         "ON memory_usage(dormant, strength)"
@@ -80,6 +79,10 @@ class MemoryUsage(simba.db.BaseModel):
     use_count = pw.IntegerField(default=0)
     noise_count = pw.IntegerField(default=0)
     save_count = pw.IntegerField(default=0)
+    # Epoch of the most recent USE (gate fire / citation / explicit good
+    # feedback) — the consumption-freshness the rule TTL keys off (spec 33).
+    # Distinct from last_accessed, which mere retrieval bumps.
+    last_used = pw.FloatField(default=0.0)
 
     class Meta:
         table_name = "memory_usage"
@@ -119,15 +122,24 @@ def bump_quality(
     noise: int = 0,
     save: int = 0,
 ) -> None:
-    """Increment explicit quality counters. Upserts when missing."""
+    """Increment explicit quality counters. Upserts when missing.
+
+    A ``use`` additionally stamps ``last_used=now`` — freshness follows
+    consumption (spec 33), so a rule that keeps firing stays alive.
+    """
     get_or_create(memory_id, now)
-    MemoryUsage.update(
-        match_count=MemoryUsage.match_count + match,
-        inject_count=MemoryUsage.inject_count + inject,
-        use_count=MemoryUsage.use_count + use,
-        noise_count=MemoryUsage.noise_count + noise,
-        save_count=MemoryUsage.save_count + save,
-    ).where(MemoryUsage.memory_id == memory_id).execute()
+    updates: dict = {
+        "match_count": MemoryUsage.match_count + match,
+        "inject_count": MemoryUsage.inject_count + inject,
+        "use_count": MemoryUsage.use_count + use,
+        "noise_count": MemoryUsage.noise_count + noise,
+        "save_count": MemoryUsage.save_count + save,
+    }
+    if use > 0:
+        updates["last_used"] = now
+    MemoryUsage.update(**updates).where(
+        MemoryUsage.memory_id == memory_id
+    ).execute()
 
 
 def set_dormant(memory_id: str, *, dormant: bool) -> None:
