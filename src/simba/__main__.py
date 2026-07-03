@@ -2290,6 +2290,10 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
         key, _, value = stripped.partition(":")
         key = key.strip()
         value = value.strip()
+        # YAML-style quoted scalars keep their quotes through the tolerant
+        # parse; strip a MATCHING pair so content never carries stray quotes.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1].strip()
         if key == "type" and value:  # the nested metadata.type line
             meta["type"] = value
         elif value:
