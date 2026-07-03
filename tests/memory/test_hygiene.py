@@ -76,3 +76,38 @@ def test_hygiene_http_error_is_fail_open(monkeypatch) -> None:
         )
     assert result.errors >= 1
     assert result.expired_count == 0
+
+
+def test_hygiene_dry_run_counts_without_delete(monkeypatch) -> None:
+    """Shadow mode (spec 33): count would-expire rules, never DELETE."""
+    from simba.memory.config import MemoryConfig
+    from simba.memory.hygiene import run_hygiene_pass
+
+    old = _iso(_now() - timedelta(days=40))
+    memories = [{"id": "m1", "type": "TOOL_RULE", "createdAt": old}]
+    deleted: list[str] = []
+
+    def fake_get(url, **kw):
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        r.json.return_value = {"memories": memories, "total": 1}
+        return r
+
+    def fake_delete(url, **kw):
+        deleted.append(url.split("/")[-1])
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    with (
+        patch("httpx.get", side_effect=fake_get),
+        patch("httpx.delete", side_effect=fake_delete),
+    ):
+        result = run_hygiene_pass(
+            daemon_url="http://localhost:8741",
+            cfg=MemoryConfig(tool_rule_max_age_days=30),
+            dry_run=True,
+        )
+    assert result.dry_run is True
+    assert result.expired_count == 1
+    assert deleted == []

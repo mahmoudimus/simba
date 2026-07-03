@@ -40,6 +40,7 @@ class DecayResult:
     newly_dormant: int = 0  # rows transitioned to dormant=True this pass
     revived: int = 0  # rows transitioned dormant=True -> False this pass
     errors: int = 0
+    dry_run: bool = False  # shadow pass: counts reflect WOULD-BE changes
 
 
 def run_decay_pass(
@@ -47,17 +48,22 @@ def run_decay_pass(
     now: float,
     cwd: pathlib.Path,
     cfg: typing.Any,
+    dry_run: bool = False,
 ) -> DecayResult | None:
     """Recompute strength + dormancy for every ``memory_usage`` row.
 
     Returns ``None`` when ``cfg.decay_enabled`` is false (the master switch).
     Otherwise returns a :class:`DecayResult` summarising the pass. Per-row
     failures are caught and counted in ``result.errors`` without aborting.
+
+    ``dry_run`` (spec 33 shadow mode) computes and counts every would-be
+    strength update / dormancy transition but persists nothing — the
+    maintenance heartbeat runs shadow until ``maintenance_apply`` is measured.
     """
     if not getattr(cfg, "decay_enabled", True):
         return None
 
-    result = DecayResult()
+    result = DecayResult(dry_run=dry_run)
     half_life = float(getattr(cfg, "decay_half_life_days", 30.0))
     scale = float(getattr(cfg, "reinforcement_scale", 0.5))
     fb_weight = float(getattr(cfg, "feedback_weight", 0.2))
@@ -81,13 +87,16 @@ def run_decay_pass(
                     arousal_decay_multiplier=arousal_mult,
                 )
                 if abs(new_strength - row.strength) > _STRENGTH_TOLERANCE:
-                    simba.memory.usage.set_strength(row.memory_id, new_strength)
+                    if not dry_run:
+                        simba.memory.usage.set_strength(row.memory_id, new_strength)
                     result.updated += 1
                 if new_strength < threshold and not row.dormant:
-                    simba.memory.usage.set_dormant(row.memory_id, dormant=True)
+                    if not dry_run:
+                        simba.memory.usage.set_dormant(row.memory_id, dormant=True)
                     result.newly_dormant += 1
                 elif new_strength >= threshold and row.dormant:
-                    simba.memory.usage.set_dormant(row.memory_id, dormant=False)
+                    if not dry_run:
+                        simba.memory.usage.set_dormant(row.memory_id, dormant=False)
                     result.revived += 1
             except Exception:
                 result.errors += 1
@@ -95,7 +104,7 @@ def run_decay_pass(
 
     if getattr(cfg, "decay_capacity_per_type", 0) > 0:
         try:
-            _apply_capacity_cap(cfg, cwd)
+            _apply_capacity_cap(cfg, cwd, dry_run=dry_run)
         except Exception:
             logger.debug("[decay] capacity cap failed", exc_info=True)
 
@@ -117,12 +126,15 @@ def _effective_feedback(row: typing.Any, outcome_weight: float) -> float:
     return max(-1.0, min(1.0, blended))
 
 
-def _apply_capacity_cap(cfg: typing.Any, cwd: pathlib.Path) -> tuple[int, int]:
+def _apply_capacity_cap(
+    cfg: typing.Any, cwd: pathlib.Path, *, dry_run: bool = False
+) -> tuple[int, int]:
     """Demote the weakest non-dormant memories per ``(type, project_path)``.
 
     ``memory_type`` and ``project_path`` live only in LanceDB, so this bulk-fetches
     them via the daemon's ``GET /list``. When the daemon is unreachable the step
     is skipped silently. Returns ``(groups_processed, memories_demoted)``.
+    ``dry_run`` counts would-be demotions without writing.
     """
     cap = int(getattr(cfg, "decay_capacity_per_type", 0))
     if cap <= 0:
@@ -166,7 +178,8 @@ def _apply_capacity_cap(cfg: typing.Any, cwd: pathlib.Path) -> tuple[int, int]:
             # Weakest first; demote everything beyond the cap.
             members.sort(key=lambda r: r.strength)
             for row in members[: len(members) - cap]:
-                simba.memory.usage.set_dormant(row.memory_id, dormant=True)
+                if not dry_run:
+                    simba.memory.usage.set_dormant(row.memory_id, dormant=True)
                 demoted += 1
 
     return (groups_processed, demoted)

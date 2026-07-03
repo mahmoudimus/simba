@@ -25,6 +25,7 @@ Usage:
     simba memory delete    Delete a memory by ID
     simba memory update    Update memory metadata (--project-path, --session-source)
     simba memory reindex   Rebuild the hybrid-recall BM25 keyword mirror
+    simba memory maintain  Run one decay+hygiene pass (shadow unless --apply)
     simba search <cmd>     Project memory operations
     simba sync <cmd>       Sync SQLite, LanceDB, and QMD
     simba stats            Show token economics and project statistics
@@ -1667,6 +1668,7 @@ Subcommands:
     reembed  Re-embed the whole corpus with the current model (after a swap)
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
+    maintain Run one decay+hygiene maintenance pass (shadow unless --apply)
     supersession Inspect append-only supersession lineage for one memory
 
 store options:
@@ -1776,6 +1778,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_consolidate(rest)
     elif subcmd == "feedback":
         return _memory_feedback(rest)
+    elif subcmd == "maintain":
+        return _memory_maintain(rest)
     elif subcmd == "supersession":
         return _memory_supersession(rest)
     else:
@@ -2141,6 +2145,64 @@ def _memory_delete(args: list[str]) -> int:
         return 1
 
     print(f"deleted: {body.get('id', memory_id)}")
+    return 0
+
+
+def _memory_maintain(args: list[str]) -> int:
+    """Run one maintenance pass (decay + hygiene) via the daemon (spec 33).
+
+    Usage: simba memory maintain [--apply]
+
+    Shadow (the config default) counts every would-be strength change /
+    dormancy transition / rule expiry without persisting; ``--apply``
+    persists this pass regardless of ``memory.maintenance_apply``.
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+
+    payload: dict[str, object] = {}
+    if "--apply" in args:
+        payload["apply"] = True
+        args = [a for a in args if a != "--apply"]
+    if args:
+        print("Usage: simba memory maintain [--apply]", file=sys.stderr)
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(f"{url}/maintenance/run", json=payload, timeout=120.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    mode = "apply" if body.get("apply") else "shadow (dry-run)"
+    print(f"maintenance @ {body.get('at', '?')} — {mode}")
+    decay = body.get("decay") or {}
+    if decay.get("skipped"):
+        print("  decay: skipped")
+    else:
+        print(
+            "  decay: processed={} updated={} newly_dormant={} revived={}".format(
+                decay.get("processed", 0),
+                decay.get("updated", 0),
+                decay.get("newly_dormant", 0),
+                decay.get("revived", 0),
+            )
+        )
+    hygiene = body.get("hygiene") or {}
+    if hygiene.get("skipped"):
+        print("  hygiene: skipped")
+    else:
+        print(
+            f"  hygiene: expired={hygiene.get('expired_count', 0)} "
+            f"checked={hygiene.get('checked_count', 0)}"
+        )
     return 0
 
 

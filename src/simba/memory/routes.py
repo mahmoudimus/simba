@@ -164,6 +164,10 @@ async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> N
     The sqlite ``memory_usage`` table is the authoritative ranking sidecar; this
     runs alongside the LanceDB fire-and-forget ``update_access_tracking``. Any
     failure is swallowed (recall must never break on a usage write).
+
+    ``match`` only (spec 33): the daemon knows a memory was RETURNED, not that
+    it reached the model's context — only the hook knows what survived its
+    lane/budget trim, and it acks via ``POST /recall/ack`` (→ ``inject``).
     """
     if not memory_ids:
         return
@@ -176,7 +180,7 @@ async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> N
             with simba.db.connect(cwd):
                 for mid in memory_ids:
                     simba.memory.usage.bump_access(mid, now)
-                    simba.memory.usage.bump_quality(mid, now, match=1, inject=1)
+                    simba.memory.usage.bump_quality(mid, now, match=1)
         except Exception:
             logger.debug("[recall] usage bump failed", exc_info=True)
 
@@ -1077,6 +1081,74 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     return {"memories": results, "queryTimeMs": query_time_ms}
 
 
+class RecallAckRequest(pydantic.BaseModel):
+    ids: list[str] = pydantic.Field(default_factory=list)
+
+
+@router.post("/recall/ack")
+async def recall_ack(body: RecallAckRequest, request: fastapi.Request) -> dict:
+    """Hook-side acknowledgment that recalled ids were actually INJECTED (spec 33).
+
+    Recall bumps ``match`` (returned by search); only the client knows which
+    memories survived its lane/budget trim into real context, so it acks them
+    here → ``inject``. Bounded and fail-soft: sidecar trouble never breaks the
+    calling hook.
+    """
+    ids = [i for i in body.ids if isinstance(i, str) and i][:100]
+    if not ids:
+        return {"status": "ok", "acked": 0}
+
+    import simba.db
+    import simba.memory.usage
+
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    now = time.time()
+
+    def _sync() -> None:
+        with simba.db.connect(cwd):
+            for mid in ids:
+                simba.memory.usage.bump_quality(mid, now, inject=1)
+
+    try:
+        await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[recall/ack] inject bump failed", exc_info=True)
+        return {"status": "error", "acked": 0}
+    return {"status": "ok", "acked": len(ids)}
+
+
+class MaintenanceRunRequest(pydantic.BaseModel):
+    # None → defer to memory.maintenance_apply (shadow by default).
+    apply: bool | None = None
+
+
+@router.post("/maintenance/run")
+async def maintenance_run(
+    body: MaintenanceRunRequest, request: fastapi.Request
+) -> dict:
+    """Run one maintenance pass (decay + hygiene) now (spec 33).
+
+    The manual counterpart of the heartbeat — everything the scheduler does
+    must be runnable by hand. ``apply`` overrides ``memory.maintenance_apply``
+    for this pass only. The result is surfaced in ``GET /stats``.
+    """
+    import simba.memory.maintenance
+
+    config = request.app.state.config
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    daemon_url = f"http://127.0.0.1:{getattr(config, 'port', 8741)}"
+    result = await asyncio.to_thread(
+        simba.memory.maintenance.run_maintenance,
+        now=time.time(),
+        cwd=cwd,
+        cfg=config,
+        daemon_url=daemon_url,
+        apply=body.apply,
+    )
+    request.app.state.last_maintenance = result
+    return result
+
+
 class EmbedRequest(pydantic.BaseModel):
     text: str
 
@@ -1311,6 +1383,8 @@ async def stats(request: fastapi.Request) -> dict:
         "newestMemory": newest,
         # Cumulative per-client request counts (X-Simba-Client attribution).
         "clientHits": client_hits,
+        # Latest maintenance pass (spec 33): scheduler heartbeat or manual run.
+        "lastMaintenance": getattr(request.app.state, "last_maintenance", None),
     }
 
 

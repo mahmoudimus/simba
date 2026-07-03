@@ -414,6 +414,24 @@ class MemoryConfig:
     # Default-OFF — when False, recall reads the first stored candidate with no LLM
     # call (current behavior). Always fail-open (any error falls back).
     conflict_recall_recheck: bool = False
+    # Maintenance heartbeat (spec 33 Phase 0). The 2026-07-03 audit found decay
+    # and hygiene hosted inside SyncScheduler, whose startup is gated on
+    # sync_interval > 0 (default 0) — so neither pass had EVER run against a
+    # live store (all 5,731 usage rows at strength exactly 1.0, zero dormant).
+    # The heartbeat is their own driver, started by the daemon lifespan and
+    # gated only on this interval. 0 disables it.
+    maintenance_interval_hours: float = 24.0
+    # Grace before the first pass after daemon startup, so short-lived daemons
+    # don't churn on boot.
+    maintenance_startup_delay_seconds: float = 300.0
+    # SHADOW by default: False runs decay + hygiene with dry_run=True — count
+    # every would-be strength change / dormancy transition / rule expiry,
+    # persist NOTHING — so the heartbeat is observable (GET /stats
+    # lastMaintenance) with zero behavior change. Applying is a ranking change
+    # (strength feeds scoring at score_weight_strength; dormancy hides
+    # memories), so True graduates only via a measured no-regression on the
+    # recall benchmarks (SoTA-lever policy).
+    maintenance_apply: bool = False
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:
