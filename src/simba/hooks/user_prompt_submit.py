@@ -253,8 +253,10 @@ def run(hook_input: dict) -> CanonicalResult:
 
     triage = None
     retrieval_allowed = True
-    if prompt and len(prompt) >= cfg.prompt_min_length and getattr(
-        cfg, "recall_triage_enabled", False
+    if (
+        prompt
+        and len(prompt) >= cfg.prompt_min_length
+        and getattr(cfg, "recall_triage_enabled", False)
     ):
         triage = simba.hooks.recall_triage.classify(prompt)
         retrieval_allowed = triage.should_retrieve
@@ -301,9 +303,7 @@ def run(hook_input: dict) -> CanonicalResult:
             usage_signals.record_turn_injections(session_id, memories)
     if memories and getattr(cfg, "recall_ack_enabled", False):
         with contextlib.suppress(Exception):
-            simba.hooks._memory_client.ack_injected(
-                [m.get("id", "") for m in memories]
-            )
+            simba.hooks._memory_client.ack_injected([m.get("id", "") for m in memories])
 
     # 2b. Intent priming (spec 28): prime matched doctrine + applicable gates from
     #     the stated intent. Default-OFF → "" (byte-identical to today).

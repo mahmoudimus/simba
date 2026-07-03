@@ -57,7 +57,14 @@ def run_maintenance(
 
     if getattr(cfg, "decay_enabled", True):
         try:
-            decay = run_decay_pass(now=now, cwd=cwd, cfg=cfg, dry_run=dry_run)
+            # Type-aware half-lives need the id→type join (types live only in
+            # LanceDB); fetched only when multipliers are configured.
+            type_map = None
+            if getattr(cfg, "decay_type_multipliers", ""):
+                type_map = _fetch_type_map(daemon_url)
+            decay = run_decay_pass(
+                now=now, cwd=cwd, cfg=cfg, dry_run=dry_run, type_map=type_map
+            )
             result["decay"] = (
                 dataclasses.asdict(decay) if decay is not None else {"skipped": True}
             )
@@ -73,7 +80,9 @@ def run_maintenance(
         and getattr(cfg, "tool_rule_max_age_days", 0) > 0
     ):
         try:
-            hygiene = run_hygiene_pass(daemon_url=daemon_url, cfg=cfg, dry_run=dry_run)
+            hygiene = run_hygiene_pass(
+                daemon_url=daemon_url, cfg=cfg, dry_run=dry_run, cwd=cwd
+            )
             result["hygiene"] = dataclasses.asdict(hygiene)
         except Exception:
             logger.debug("[maintenance] hygiene pass failed", exc_info=True)
@@ -83,6 +92,26 @@ def run_maintenance(
         result["hygiene"] = {"skipped": True}
 
     return result
+
+
+def _fetch_type_map(daemon_url: str) -> dict[str, str] | None:
+    """``memory_id -> TYPE`` over the corpus via ``GET /list`` (the capacity-cap
+    pattern: types live only in LanceDB). Fail-soft ``None`` → decay falls back
+    to the base half-life for every row."""
+    import httpx
+
+    try:
+        resp = httpx.get(f"{daemon_url}/list", params={"limit": 100_000}, timeout=15.0)
+        resp.raise_for_status()
+        memories = resp.json().get("memories", [])
+    except (httpx.HTTPError, ValueError):
+        logger.debug("[maintenance] type-map fetch failed", exc_info=True)
+        return None
+    return {
+        m["id"]: str(m.get("type", ""))
+        for m in memories
+        if isinstance(m, dict) and m.get("id")
+    }
 
 
 def _default_config_loader() -> typing.Any:

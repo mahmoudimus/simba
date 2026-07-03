@@ -187,6 +187,55 @@ def test_decay_pass_dry_run_reports_without_persisting(
     assert row.dormant is False
 
 
+def test_parse_type_multipliers() -> None:
+    from simba.memory.decay import parse_type_multipliers
+
+    assert parse_type_multipliers("PATTERN:4,GOTCHA:1.5") == {
+        "PATTERN": 4.0,
+        "GOTCHA": 1.5,
+    }
+    assert parse_type_multipliers("") == {}
+    assert parse_type_multipliers("garbage") == {}
+    assert parse_type_multipliers("BAD:x,OK:2") == {"OK": 2.0}
+    assert parse_type_multipliers(" pattern : 4 ") == {"PATTERN": 4.0}
+
+
+def test_decay_type_multiplier_slows_configured_type(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Type-aware half-lives (spec 33 Phase 2): PATTERN at 4x outlives GOTCHA."""
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_pat", now=_NOW - 45 * _DAY)
+        usage.get_or_create("mem_got", now=_NOW - 45 * _DAY)
+    cfg = _cfg(decay_type_multipliers="PATTERN:4")
+    run_decay_pass(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=cfg,
+        type_map={"mem_pat": "PATTERN", "mem_got": "GOTCHA"},
+    )
+    with simba.db.connect(tmp_path):
+        rows = usage.get_many(["mem_pat", "mem_got"])
+    assert rows["mem_pat"].strength > rows["mem_got"].strength
+
+
+def test_decay_type_multiplier_noop_without_type_map(
+    tmp_path: pathlib.Path,
+) -> None:
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_a", now=_NOW - 45 * _DAY)
+        usage.get_or_create("mem_b", now=_NOW - 45 * _DAY)
+    run_decay_pass(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(decay_type_multipliers="PATTERN:4"),
+        type_map=None,
+    )
+    with simba.db.connect(tmp_path):
+        rows = usage.get_many(["mem_a", "mem_b"])
+    assert rows["mem_a"].strength == rows["mem_b"].strength
+
+
 def test_decay_pass_dry_run_counts_would_be_revivals(
     tmp_path: pathlib.Path,
 ) -> None:

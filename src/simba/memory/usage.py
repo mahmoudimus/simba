@@ -137,9 +137,7 @@ def bump_quality(
     }
     if use > 0:
         updates["last_used"] = now
-    MemoryUsage.update(**updates).where(
-        MemoryUsage.memory_id == memory_id
-    ).execute()
+    MemoryUsage.update(**updates).where(MemoryUsage.memory_id == memory_id).execute()
 
 
 def set_dormant(memory_id: str, *, dormant: bool) -> None:

@@ -58,9 +58,7 @@ async def test_recall_bumps_match_and_access_but_not_inject(
 
 @pytest.mark.asyncio
 async def test_recall_ack_bumps_inject(async_client, tmp_path) -> None:
-    resp = await async_client.post(
-        "/recall/ack", json={"ids": ["mem_i", "mem_j"]}
-    )
+    resp = await async_client.post("/recall/ack", json={"ids": ["mem_i", "mem_j"]})
     assert resp.status_code == 200
     assert resp.json()["acked"] == 2
 
@@ -76,6 +74,29 @@ async def test_recall_ack_empty_is_noop(async_client) -> None:
     resp = await async_client.post("/recall/ack", json={"ids": []})
     assert resp.status_code == 200
     assert resp.json()["acked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_recall_includes_last_used_at(
+    async_client, lance_table, tmp_path
+) -> None:
+    """Recall surfaces consumption freshness (spec 33 Phase 2) so the rule-TTL
+    refresh can key off max(createdAt, lastUsedAt)."""
+    await lance_table.add([_make_memory("mem_lu")])
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("mem_lu", 1_700_000_000.0, use=1)
+    resp = await async_client.post("/recall", json={"query": "memory"})
+    mem = resp.json()["memories"][0]
+    assert mem["lastUsedAt"].startswith("2023-11-14")
+
+
+@pytest.mark.asyncio
+async def test_recall_omits_last_used_when_never_used(
+    async_client, lance_table
+) -> None:
+    await lance_table.add([_make_memory("mem_nu")])
+    resp = await async_client.post("/recall", json={"query": "memory"})
+    assert "lastUsedAt" not in resp.json()["memories"][0]
 
 
 def test_bump_quality_use_sets_last_used(tmp_path) -> None:

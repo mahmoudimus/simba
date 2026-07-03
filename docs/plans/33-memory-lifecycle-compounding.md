@@ -1,7 +1,28 @@
 # Spec 33 — Memory lifecycle: retention, decay, and promotion
 
-**Status**: draft (from live audit, 2026-07-03)
+**Status**: phases 0–2 implemented (2026-07-03, branch `feat/spec33-memory-lifecycle`); phases 3–6 pending
 **Depends on**: spec 26 (hierarchical scopes), spec 27 (engagement marker), spec 29 (borrow roadmap: quality counters, budget lanes, supersession audit)
+
+**Implementation status (2026-07-03)**:
+
+- ✅ Phase 0 — MaintenanceScheduler heartbeat (shadow), decay/hygiene
+  `dry_run`, `POST /maintenance/run`, `/stats.lastMaintenance`,
+  match/inject split + `POST /recall/ack`, `simba memory maintain`.
+- ✅ Phase 1 — usage signals behind `hooks.usage_signals_enabled`:
+  gate-fire use, Stop citation detection (entropy terms), session noise
+  sweep, `memory_usage.last_used`, `post_feedback`/`ack_injected`.
+- ✅ Phase 2 — `memory.decay_type_multipliers` (type-aware half-lives),
+  rule-TTL refresh (`hooks.rule_ttl_refresh_enabled`, freshness =
+  max(createdAt, lastUsedAt); hygiene honors `last_used`), recall
+  surfaces `lastUsedAt`, `memory.store_budget_per_session` throttle.
+- ⏳ Phase 3 (identity/user lane), 4 (adjudicator/episodes), 5 (promotion
+  queue/nudges), 6 (graveyards/bridge) — not started.
+
+Everything ships default-OFF/shadow per the graduation policy. To dogfood:
+`simba config set memory.maintenance_apply true`, `simba config set
+hooks.usage_signals_enabled true`, `simba config set hooks.recall_ack_enabled
+true`, `simba config set hooks.rule_ttl_refresh_enabled true`, then
+`simba memory maintain` to watch a pass.
 
 ## 0. The audit that motivates this
 
