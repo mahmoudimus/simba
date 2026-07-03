@@ -53,14 +53,15 @@ Corpus-shape consequences (as of the audit):
 - **41% dead tail**: 3,524 of 8,530 memories have never been recalled once
   (2,799 have no usage row at all; 725 more have `access_count=0`).
   69% have been recalled ≤2 times, ever.
-- **Extreme concentration**: the top memory (a d810 TOOL_RULE) holds 17,286 of
-  73,317 total accesses (24%); the top 100 memories (1.2% of corpus) hold 55%.
-  Rule-gate lookups route through `/recall`, so gate probes dominate counts.
+- **Extreme concentration**: the top memory (one project's docker-test
+  TOOL_RULE) holds 17,286 of 73,317 total accesses (24%); the top 100 memories
+  (1.2% of corpus) hold 55%. Rule-gate lookups route through `/recall`, so
+  gate probes dominate counts.
 - **Unbounded inflow**: +1,212 memories in July 1–3 (~400/day) with no decay,
   no capacity caps, no feedback. Write-heavy, read-light, feedback-none.
-- **Fragmented identity**: strict exact-path scoping splits d810 into 4
-  invisible shards (5,674 / 273 / 165 / 127 across worktrees); the rules table
-  mixes raw paths and project-id hashes.
+- **Fragmented identity**: strict exact-path scoping splits the largest
+  project into 4 invisible shards (5,674 / 273 / 165 / 127 across worktrees);
+  the rules table mixes raw paths and project-id hashes.
 - **Disjoint brains**: the curated Claude-Code auto-memory layer (84 files,
   MEMORY.md) contains gotchas (e.g. the `push.default=upstream` worktree trap)
   that have **zero** counterpart in the daemon corpus — unsearchable from
@@ -124,7 +125,7 @@ Today `match_count == inject_count` (bumped on the same line in
 **`use` detection, v1 (deterministic, no LLM):**
 
 1. **Gate fires are uses.** A PreToolUse rule/pitfall/redirect hit on a memory
-   bumps `use=1` and refreshes `last_accessed`. (The d810 docker rule's 17k
+   bumps `use=1` and refreshes `last_accessed`. (The docker-test rule's 17k
    probes prove gates are the highest-value consumers.)
 2. **Citation overlap.** The engagement per-turn record (spec 27) already
    holds this turn's injected memory ids. At Stop, check the response for
@@ -188,8 +189,8 @@ non-EPISODE stores). Over-capture is real: auto-learn stored raw
 
 - Normalize scope to **repo root**: resolve worktrees (`git rev-parse
   --git-common-dir`) so `.worktrees/*` stores land on the main repo scope.
-  One-time migration folds the existing shards (d810's 273+165+127 rejoin the
-  5,674).
+  One-time migration folds the existing shards (the audited project's
+  273+165+127 rejoin its 5,674).
 - One keying scheme: `project_id` hash everywhere (the rules table currently
   mixes raw paths and hashes, which is why `simba rule list` shows nothing
   for this repo while `--all` shows simba-path rows).
