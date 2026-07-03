@@ -62,6 +62,48 @@ def _auto_start_daemon() -> bool:
     return False
 
 
+def _lifecycle_nudges(cfg) -> str:
+    """One-glance lifecycle state at session start (spec 33 Phase 5).
+
+    A line for the latest maintenance heartbeat (so shadow-mode results are
+    seen, not buried in daemon logs) and one for promotion candidates
+    awaiting review. Two sub-second local GETs; default-off ⇒ "" and zero
+    HTTP; fail-soft on any daemon trouble.
+    """
+    if not getattr(cfg, "session_start_lifecycle_nudges", False):
+        return ""
+    lines: list[str] = []
+    base = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.get(f"{base}/stats", timeout=1.0)
+        if resp.status_code == 200:
+            last = resp.json().get("lastMaintenance") or {}
+            if last:
+                decay = last.get("decay") or {}
+                mode = "apply" if last.get("apply") else "shadow"
+                lines.append(
+                    f"[Lifecycle] last maintenance {last.get('at', '?')} "
+                    f"({mode}): decay updated={decay.get('updated', 0)} "
+                    f"dormant={decay.get('newly_dormant', 0)}"
+                )
+    except (httpx.HTTPError, ValueError):
+        pass
+    try:
+        resp = httpx.get(
+            f"{base}/promotions/candidates", params={"limit": 1}, timeout=1.0
+        )
+        if resp.status_code == 200:
+            total = int(resp.json().get("total", 0))
+            if total:
+                lines.append(
+                    f"[Lifecycle] {total} promotion candidate(s) — "
+                    "`simba memory promote` to review"
+                )
+    except (httpx.HTTPError, ValueError, TypeError):
+        pass
+    return "\n".join(lines)
+
+
 def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
     """Return extraction instructions for THIS project's pending transcript.
 
@@ -164,6 +206,13 @@ def run(hook_input: dict) -> CanonicalResult:
                 f"{simba.hooks._memory_client.daemon_url()}/sync",
                 timeout=1.0,
             )
+
+        # Lifecycle nudges (spec 33 Phase 5): heartbeat + promotion inbox.
+        # Default-off → "" (byte-identical). Fail-soft.
+        with contextlib.suppress(Exception):
+            nudges = _lifecycle_nudges(_hooks_cfg())
+            if nudges:
+                parts.append(nudges)
 
     # 2/3. Project-scoped context — only when the payload carried a cwd.
     #      gather_context / get_db_path / get_stats all fall back to Path.cwd()

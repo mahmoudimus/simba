@@ -1257,6 +1257,79 @@ async def normalize_scopes(
     return {"run": bool(body.run), "changed": changed, "folds": plan}
 
 
+@router.get("/promotions/candidates")
+async def promotion_candidates(
+    request: fastapi.Request,
+    limit: int = fastapi.Query(default=20),
+) -> dict:
+    """Usage-triggered promotion candidates (spec 33 Phase 5).
+
+    A memory whose ledger shows REAL consumption — ``use_count >=
+    memory.promotion_min_uses``, ``noise/use < memory.promotion_max_noise_
+    ratio``, not dormant — has earned a look at the rule/CLAUDE.md layer.
+    Read-only and stateless (recomputed from the sidecar each call); the
+    promotion itself stays human (`simba memory promote`).
+    """
+    config = request.app.state.config
+    table = request.app.state.table
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    min_uses = int(getattr(config, "promotion_min_uses", 3))
+    max_ratio = float(getattr(config, "promotion_max_noise_ratio", 0.5))
+
+    def _sync() -> list[dict]:
+        import simba.db
+        import simba.memory.usage
+
+        with simba.db.connect(cwd):
+            rows = simba.memory.usage.MemoryUsage.select().where(
+                (simba.memory.usage.MemoryUsage.use_count >= min_uses)
+                & (simba.memory.usage.MemoryUsage.dormant == False)  # noqa: E712
+            )
+            out: list[dict] = []
+            for row in rows:
+                if row.use_count > 0 and (row.noise_count / row.use_count) >= max_ratio:
+                    continue
+                out.append(
+                    {
+                        "id": row.memory_id,
+                        "useCount": int(row.use_count),
+                        "noiseCount": int(row.noise_count),
+                        "injectCount": int(row.inject_count),
+                    }
+                )
+            out.sort(key=lambda c: -c["useCount"])
+            return out
+
+    try:
+        candidates = await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[promotions] sidecar read failed", exc_info=True)
+        candidates = []
+
+    total = len(candidates)
+    candidates = candidates[: max(0, limit)]
+    if candidates:
+        wanted = {c["id"] for c in candidates}
+        meta: dict[str, dict] = {}
+        try:
+            rows = await table.query().to_list()
+            meta = {r["id"]: r for r in rows if r.get("id") in wanted}
+        except Exception:
+            logger.debug("[promotions] content join failed", exc_info=True)
+        for c in candidates:
+            m = meta.get(c["id"]) or {}
+            c["type"] = m.get("type", "")
+            c["content"] = m.get("content", "")
+            c["projectPath"] = m.get("projectPath", "")
+
+    return {
+        "candidates": candidates,
+        "total": total,
+        "minUses": min_uses,
+        "maxNoiseRatio": max_ratio,
+    }
+
+
 class MaintenanceRunRequest(pydantic.BaseModel):
     # None → defer to memory.maintenance_apply (shadow by default).
     apply: bool | None = None

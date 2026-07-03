@@ -21,8 +21,22 @@
   (dry-run default), cross-project user lane
   (`memory.user_lane_enabled`, one PREFERENCE slot at 0.55 floor,
   `source="user-model"`).
-- ⏳ Phase 4 (adjudicator/episodes), 5 (promotion queue/nudges),
-  6 (graveyards/bridge) — not started.
+- ✅ Phase 4 — supersession adjudicator
+  (`memory.supersession_adjudication_enabled`: stale pendings resolve
+  newest-wins, confirmed + old memory dormant; apply-gated); episodes +
+  reflection re-armed on the heartbeat (their `scheduler_enabled` knobs
+  pointed at the sync scheduler that never ran — `episode_jobs` froze
+  2026-06-08; dispatch is apply-gated, shadow reports the skip).
+- ✅ Phase 5 — `GET /promotions/candidates` (use≥`promotion_min_uses`,
+  noise/use<`promotion_max_noise_ratio`, not dormant) + `simba memory
+  promote`; SessionStart lifecycle nudges
+  (`hooks.session_start_lifecycle_nudges`: heartbeat line + promotion
+  inbox). Pending-extraction visibility already existed in SessionStart.
+- ✅ Phase 6 — `simba memory import-curated --dir D [--run]` (curated
+  .md → daemon bridge, dry-run default, `trustSource=user_confirmed`,
+  idempotent via dedup); the user-level `memory-stats` skill repointed
+  off the dead `simba.search` store onto daemon `/stats` + `promote`.
+  `graphify-out` staleness left to its own tooling (out of repo scope).
 
 Everything ships default-OFF/shadow per the graduation policy. To dogfood:
 `simba config set memory.maintenance_apply true`, `simba config set

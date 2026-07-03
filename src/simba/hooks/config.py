@@ -263,3 +263,8 @@ class HooksConfig:
     # 17k fires on the same 14-day creation clock as raw `ls: No such file`
     # junk. UNMEASURED → DEFAULT-OFF (off ⇒ the legacy created-at window).
     rule_ttl_refresh_enabled: bool = False
+    # SessionStart lifecycle nudges (spec 33 Phase 5): one line for the latest
+    # maintenance heartbeat (shadow results become visible instead of buried
+    # in daemon logs) and one for promotion candidates awaiting review. Two
+    # sub-second local GETs at session start. Additive context → DEFAULT-OFF.
+    session_start_lifecycle_nudges: bool = False
