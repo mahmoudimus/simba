@@ -467,6 +467,23 @@ class MemoryConfig:
     user_lane_enabled: bool = False
     user_lane_min_similarity: float = 0.55
     user_lane_max_results: int = 1
+    # Supersession adjudication (spec 33 Phase 4). The audit found 166
+    # pending_confirmation supersessions and NOTHING that had ever adjudicated
+    # one — an inbox with no reader. When on, the maintenance pass resolves
+    # pendings older than the max age NEWEST-WINS (lww): the supersession is
+    # confirmed (append-only decision event) and the superseded memory goes
+    # dormant (reversible). Younger pendings stay for explicit review
+    # (`simba memory supersession`). Mutates state → runs only when the pass
+    # applies; shadow reports the would-confirm count. DEFAULT-OFF.
+    supersession_adjudication_enabled: bool = False
+    supersession_adjudication_max_age_days: float = 30.0
+    # Promotion candidates (spec 33 Phase 5): a memory whose ledger shows real
+    # consumption graduates toward the rule layer. Candidate = use_count >=
+    # promotion_min_uses AND noise/use < promotion_max_noise_ratio AND not
+    # dormant. Read-only surface (GET /promotions/candidates, `simba memory
+    # promote`) — the promotion itself stays human.
+    promotion_min_uses: int = 3
+    promotion_max_noise_ratio: float = 0.5
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

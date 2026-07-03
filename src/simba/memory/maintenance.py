@@ -91,7 +91,117 @@ def run_maintenance(
     else:
         result["hygiene"] = {"skipped": True}
 
+    if getattr(cfg, "supersession_adjudication_enabled", False):
+        try:
+            result["adjudication"] = _adjudicate_supersessions(
+                now=now, cwd=cwd, cfg=cfg, dry_run=dry_run
+            )
+        except Exception:
+            logger.debug("[maintenance] adjudication failed", exc_info=True)
+            result["adjudication"] = {"error": True}
+            result["errors"] += 1
+    else:
+        result["adjudication"] = {"skipped": True}
+
+    result["episodes"] = _run_episodes(cwd, daemon_url, dry_run)
+    result["reflection"] = _run_reflection(cwd, daemon_url, dry_run)
+
     return result
+
+
+def _adjudicate_supersessions(
+    *, now: float, cwd: pathlib.Path, cfg: typing.Any, dry_run: bool
+) -> dict:
+    """Resolve stale ``pending_confirmation`` supersessions (spec 33 Phase 4).
+
+    The audit found 166 pendings and nothing that had ever adjudicated one —
+    an inbox with no reader. Policy: a pending older than
+    ``supersession_adjudication_max_age_days`` resolves NEWEST-WINS (lww): the
+    supersession is CONFIRMED (append-only decision event) and the superseded
+    memory goes dormant (reversible). Younger pendings are left for explicit
+    review — age is the deterministic judge, not a substitute for one.
+    """
+    import simba.db
+    import simba.memory.supersession as supersession
+    import simba.memory.usage
+
+    max_age_days = float(getattr(cfg, "supersession_adjudication_max_age_days", 30.0))
+    cutoff = now - max_age_days * 86400.0
+
+    with simba.db.connect(cwd):
+        pendings = list(
+            supersession.MemorySupersession.select().where(
+                (supersession.MemorySupersession.status == supersession.STATUS_PENDING)
+                & (supersession.MemorySupersession.created_at < cutoff)
+            )
+        )
+        decided = supersession._decided_pending_ids([p.id for p in pendings])
+        stale = [p for p in pendings if p.id not in decided]
+        if not dry_run:
+            for pending in stale:
+                supersession.confirm(pending.id, now=now)
+                simba.memory.usage.get_or_create(pending.old_id, now)
+                simba.memory.usage.set_dormant(pending.old_id, dormant=True)
+
+    return {
+        "confirmed": len(stale),
+        "max_age_days": max_age_days,
+        "dry_run": dry_run,
+    }
+
+
+def _run_episodes(cwd: pathlib.Path, daemon_url: str, dry_run: bool) -> dict:
+    """Episode consolidation, re-armed (spec 33 Phase 4).
+
+    ``episodes.scheduler_enabled`` pointed at the sync scheduler that never
+    ran — the same dead-driver bug as decay (``episode_jobs`` froze
+    2026-06-08). The heartbeat is its driver now. Dispatches (LLM digest
+    jobs) only when applying; shadow reports the skip so the gap is visible.
+    """
+    try:
+        import simba.config
+        import simba.episodes.config  # registers the "episodes" section
+        import simba.episodes.consolidate
+
+        _ = simba.episodes.config
+        ecfg = simba.config.load("episodes")
+        if not (ecfg.enabled and ecfg.scheduler_enabled):
+            return {"skipped": True, "reason": "disabled"}
+        if dry_run:
+            return {"skipped": True, "reason": "shadow"}
+        return simba.episodes.consolidate.consolidate_eligible(
+            str(cwd), ecfg=ecfg, daemon_url=daemon_url
+        )
+    except Exception:
+        logger.debug("[maintenance] episode consolidation failed", exc_info=True)
+        return {"error": True}
+
+
+def _run_reflection(cwd: pathlib.Path, daemon_url: str, dry_run: bool) -> dict:
+    """Cross-session reflection pass, re-armed (spec 33 Phase 4/6).
+
+    Same dead-driver story as episodes: ``reflection.scheduler_enabled``
+    default-True with no live scheduler. Runs (LLM synthesis) only when
+    applying.
+    """
+    try:
+        import simba.config
+        import simba.reflection.config  # registers the "reflection" section
+        import simba.reflection.pass_
+
+        _ = simba.reflection.config
+        rcfg = simba.config.load("reflection")
+        if not (rcfg.enabled and rcfg.scheduler_enabled):
+            return {"skipped": True, "reason": "disabled"}
+        if dry_run:
+            return {"skipped": True, "reason": "shadow"}
+        outcome = simba.reflection.pass_.reflect_pass(
+            cwd=str(cwd), rcfg=rcfg, daemon_url=daemon_url
+        )
+        return {"status": outcome.status, "dispatched": outcome.dispatched}
+    except Exception:
+        logger.debug("[maintenance] reflection pass failed", exc_info=True)
+        return {"error": True}
 
 
 def _fetch_type_map(daemon_url: str) -> dict[str, str] | None:
