@@ -1300,7 +1300,7 @@ def _write_curated(tmp_path) -> None:
     (tmp_path / "triage-table.md").write_text(
         "---\n"
         "name: triage-table\n"
-        "description: User requires a triage table before batch-acting\n"
+        'description: "User requires a triage table before batch-acting"\n'
         "metadata:\n"
         "  type: user\n"
         "---\n\n"
