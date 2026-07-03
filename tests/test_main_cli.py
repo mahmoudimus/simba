@@ -1161,6 +1161,71 @@ def test_memory_maintain_rejects_unknown_option(capsys) -> None:
     assert "Usage" in capsys.readouterr().err
 
 
+def test_memory_normalize_scopes_dry_run(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "run": False,
+                "changed": 2,
+                "folds": [{"from": "/repo/.worktrees/wt", "to": "/repo", "count": 2}],
+            }
+
+    def _fake_post(url, json=None, timeout=0.0):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_normalize_scopes([])
+
+    assert rc == 0
+    assert captured["url"] == "http://x/scopes/normalize"
+    assert captured["json"] == {}
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert "/repo/.worktrees/wt" in out
+    assert "2 memories" in out
+
+
+def test_memory_normalize_scopes_run_flag(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"run": True, "changed": 0, "folds": []}
+
+    def _fake_post(url, json=None, timeout=0.0):
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_normalize_scopes(["--run"])
+
+    assert rc == 0
+    assert captured["json"] == {"run": True}
+    assert "nothing to fold" in capsys.readouterr().out
+
+
 def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
     import httpx
 

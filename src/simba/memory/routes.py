@@ -82,6 +82,11 @@ def _fts_set_project(fts_path: str, memory_id: str, project_path: str) -> None:
         simba.memory.fts.set_project(memory_id, project_path)
 
 
+def _fts_retarget(fts_path: str, old: str, new: str) -> None:
+    with simba.memory.fts.connect(fts_path):
+        simba.memory.fts.retarget_project(old, new)
+
+
 def _directory_size_bytes(path: pathlib.Path) -> int | None:
     """Return recursive byte size, skipping files that disappear mid-scan."""
     if not path.exists():
@@ -650,8 +655,12 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
 
     # Normalize the scope path to an absolute, symlink-resolved path (spec 26) so
     # the client's resolved ancestor chain can match it by string membership. An
-    # empty (global) path stays empty.
-    project_path = simba.memory.vector_db.normalize_project_path(body.project_path)
+    # empty (global) path stays empty. With scope_normalize_worktrees (spec 33),
+    # a linked worktree additionally folds onto its main repository root.
+    project_path = simba.memory.vector_db.normalize_project_path(
+        body.project_path,
+        resolve_worktrees=getattr(config, "scope_normalize_worktrees", False),
+    )
 
     text_to_embed = body.content + (f" {body.context}" if body.context else "")
     try:
@@ -982,7 +991,14 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     filters = dict(body.filters)
     filters.update(parsed_query.route_filters)
     if body.project_path:
-        filters["projectPath"] = body.project_path
+        recall_scope = body.project_path
+        # Worktree fold (spec 33): recall from a linked worktree matches the
+        # main-root scope stores normalize onto. Off ⇒ raw path, byte-identical.
+        if getattr(config, "scope_normalize_worktrees", False):
+            recall_scope = simba.memory.vector_db.normalize_project_path(
+                recall_scope, resolve_worktrees=True
+            )
+        filters["projectPath"] = recall_scope
 
     # Hierarchical (ancestor-prefix) recall (spec 26): when the lever is on AND the
     # client supplied a resolved scope chain, hand both arms the scope set so
@@ -1183,6 +1199,62 @@ async def recall_ack(body: RecallAckRequest, request: fastapi.Request) -> dict:
         logger.debug("[recall/ack] inject bump failed", exc_info=True)
         return {"status": "error", "acked": 0}
     return {"status": "ok", "acked": len(ids)}
+
+
+class ScopeNormalizeRequest(pydantic.BaseModel):
+    # False (default) = dry run: report the fold plan, touch nothing.
+    run: bool = False
+
+
+@router.post("/scopes/normalize")
+async def normalize_scopes(
+    body: ScopeNormalizeRequest, request: fastapi.Request
+) -> dict:
+    """Fold linked-worktree scopes onto their main repository root (spec 33).
+
+    The one-time migration for pre-fold rows (the audit found one repo
+    sharded 4 ways across its worktrees). Dry-run by default; ``run=true``
+    applies one LanceDB update per distinct old path (bounded version churn)
+    plus the FTS-mirror retarget, then drops cached recalls.
+    """
+    table = request.app.state.table
+
+    rows = await table.query().to_list()
+    folds: dict[str, dict] = {}
+    for row in rows:
+        old = row.get("projectPath") or ""
+        if not old:
+            continue
+        new = simba.memory.vector_db.normalize_project_path(old, resolve_worktrees=True)
+        if new != old:
+            entry = folds.setdefault(old, {"to": new, "count": 0})
+            entry["count"] += 1
+
+    plan = [
+        {"from": old, "to": entry["to"], "count": entry["count"]}
+        for old, entry in sorted(folds.items())
+    ]
+    changed = sum(entry["count"] for entry in folds.values())
+
+    if body.run and folds:
+        fts_path = getattr(request.app.state, "fts_path", None)
+        for old, entry in folds.items():
+            escaped = old.replace("'", "''")
+            await table.update(
+                updates={"projectPath": entry["to"]},
+                where=f"projectPath = '{escaped}'",
+            )
+            if fts_path:
+                try:
+                    await asyncio.to_thread(_fts_retarget, fts_path, old, entry["to"])
+                except Exception:
+                    logger.debug("[scopes] fts retarget failed", exc_info=True)
+        recall_cache = getattr(request.app.state, "recall_cache", None)
+        if recall_cache is not None:
+            recall_cache.clear()
+        logger.info("[scopes] folded %d memories across %d scopes", changed, len(plan))
+
+    return {"run": bool(body.run), "changed": changed, "folds": plan}
 
 
 class MaintenanceRunRequest(pydantic.BaseModel):

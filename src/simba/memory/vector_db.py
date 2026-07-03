@@ -68,7 +68,50 @@ async def _resolve_table_dim(table: typing.Any) -> int | None:
         return None
 
 
-def normalize_project_path(project_path: str | None) -> str:
+def resolve_worktree_root(path: typing.Any) -> typing.Any:
+    """MAIN repository root when ``path`` is inside a LINKED git worktree.
+
+    A linked worktree's ``.git`` is a FILE — ``gitdir: <main>/.git/worktrees/
+    <name>`` — so the fold needs no subprocess (spec 33 Phase 3). Returns
+    ``None`` for primary checkouts, non-repos, and anything unparseable
+    (fail-soft: the caller keeps the plainly-resolved path).
+    """
+    import pathlib
+
+    current = path if isinstance(path, pathlib.Path) else pathlib.Path(str(path))
+    try:
+        current = current.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    while True:
+        gitpath = current / ".git"
+        try:
+            if gitpath.is_dir():
+                return None  # a primary checkout owns this tree
+            if gitpath.is_file():
+                content = gitpath.read_text(errors="ignore").strip()
+                if not content.startswith("gitdir:"):
+                    return None
+                gitdir = pathlib.Path(content[len("gitdir:") :].strip())
+                if not gitdir.is_absolute():
+                    gitdir = (current / gitdir).resolve()
+                if (
+                    gitdir.parent.name == "worktrees"
+                    and gitdir.parent.parent.name == ".git"
+                ):
+                    return gitdir.parent.parent.parent.resolve()
+                return None
+        except OSError:
+            return None
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def normalize_project_path(
+    project_path: str | None, *, resolve_worktrees: bool = False
+) -> str:
     """Normalize a project path for hierarchical scoping (spec 26).
 
     Resolves to an absolute, symlink-resolved path with no trailing slash
@@ -76,6 +119,12 @@ def normalize_project_path(project_path: str | None) -> str:
     resolved — matches it by string membership. An empty path stays empty (a
     *global* memory, the root of the tree). Fail-soft: any resolution error
     returns the original string (membership still works on literal paths).
+
+    ``resolve_worktrees`` (spec 33 Phase 3) additionally folds a linked git
+    worktree onto its MAIN repository root, so one repo's memories share one
+    scope across all its worktrees. Gated by
+    ``memory.scope_normalize_worktrees`` at the call sites (default off — a
+    recall-behavior change).
     """
     p = (project_path or "").strip()
     if not p:
@@ -83,7 +132,12 @@ def normalize_project_path(project_path: str | None) -> str:
     import pathlib
 
     try:
-        return str(pathlib.Path(p).resolve())
+        resolved = pathlib.Path(p).resolve()
+        if resolve_worktrees:
+            root = resolve_worktree_root(resolved)
+            if root is not None:
+                return str(root)
+        return str(resolved)
     except (OSError, ValueError, RuntimeError):
         return p
 

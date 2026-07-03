@@ -15,8 +15,14 @@
   rule-TTL refresh (`hooks.rule_ttl_refresh_enabled`, freshness =
   max(createdAt, lastUsedAt); hygiene honors `last_used`), recall
   surfaces `lastUsedAt`, `memory.store_budget_per_session` throttle.
-- ⏳ Phase 3 (identity/user lane), 4 (adjudicator/episodes), 5 (promotion
-  queue/nudges), 6 (graveyards/bridge) — not started.
+- ✅ Phase 3 — worktree→root scope fold (`memory.scope_normalize_worktrees`,
+  pure-filesystem `.git`-file detection; store + recall gated), migration
+  `POST /scopes/normalize` / `simba memory normalize-scopes [--run]`
+  (dry-run default), cross-project user lane
+  (`memory.user_lane_enabled`, one PREFERENCE slot at 0.55 floor,
+  `source="user-model"`).
+- ⏳ Phase 4 (adjudicator/episodes), 5 (promotion queue/nudges),
+  6 (graveyards/bridge) — not started.
 
 Everything ships default-OFF/shadow per the graduation policy. To dogfood:
 `simba config set memory.maintenance_apply true`, `simba config set

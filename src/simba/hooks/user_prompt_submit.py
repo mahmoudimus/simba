@@ -185,6 +185,31 @@ def _engagement_marker(cfg, memories: list[dict], session_id: str) -> str:
     )
 
 
+def _user_lane_context(prompt: str, main_memories: list[dict]) -> str:
+    """ONE cross-project PREFERENCE slot (spec 33 Phase 3) — the portable user
+    model. High floor, one result, deduped against the main recall, rendered
+    as ``source="user-model"``. Default-off via ``memory.user_lane_enabled``;
+    fail-soft ""."""
+    try:
+        mcfg = simba.hooks._memory_client._memory_cfg()
+        if not getattr(mcfg, "user_lane_enabled", False):
+            return ""
+        lane = simba.hooks._memory_client.recall_memories(
+            prompt,
+            project_path=None,
+            min_similarity=float(getattr(mcfg, "user_lane_min_similarity", 0.55)),
+            max_results=int(getattr(mcfg, "user_lane_max_results", 1)),
+            filters={"types": ["PREFERENCE"]},
+        )
+        seen = {m.get("id") for m in main_memories if m.get("id")}
+        lane = [m for m in lane if m.get("id") not in seen]
+        if not lane:
+            return ""
+        return simba.hooks._memory_client.format_memories(lane, source="user-model")
+    except Exception:
+        return ""
+
+
 def _should_inject_core(cfg, session_id: str) -> bool:
     """Decide whether to (re)inject the CORE block this prompt (spec 25).
 
@@ -279,11 +304,15 @@ def run(hook_input: dict) -> CanonicalResult:
         formatted = simba.hooks._memory_client.format_memories(
             memories, source="user-prompt", query=prompt
         )
-        if formatted:
+        # Cross-project user lane (spec 33 Phase 3): rides in the recall lane
+        # so it shares the recall budget. Default-off → "" (byte-identical).
+        user_lane = _user_lane_context(prompt, memories)
+        recall_text = "\n\n".join(t for t in (formatted, user_lane) if t)
+        if recall_text:
             lanes.append(
                 simba.hooks.context_lanes.ContextLane(
                     "recall",
-                    formatted,
+                    recall_text,
                     getattr(cfg, "context_lane_recall_chars", 4000),
                 )
             )
