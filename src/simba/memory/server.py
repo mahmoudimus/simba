@@ -78,8 +78,9 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     await init_database(app)
     await init_embeddings(app)
     sync_task = await _start_sync_scheduler(app)
+    maintenance_task = await _start_maintenance_scheduler(app)
     yield
-    # Shutdown: stop scheduler, wait briefly, then force-cancel.
+    # Shutdown: stop schedulers, wait briefly, then force-cancel.
     config: simba.memory.config.MemoryConfig = app.state.config
     sync_timeout = max(1, config.shutdown_timeout // 2)
     if sync_task is not None:
@@ -93,6 +94,18 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
             sync_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await sync_task
+    if maintenance_task is not None:
+        maintenance = getattr(app.state, "maintenance_scheduler", None)
+        if maintenance is not None:
+            maintenance.stop()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(maintenance_task), timeout=sync_timeout
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            maintenance_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await maintenance_task
     await shutdown_embeddings(app)
 
 
@@ -116,6 +129,43 @@ async def _start_sync_scheduler(
     task = asyncio.create_task(scheduler.run_forever())
     logger.info(
         "[sync] Background scheduler started (interval: %ds)", config.sync_interval
+    )
+    return task
+
+
+async def _start_maintenance_scheduler(
+    app: fastapi.FastAPI,
+) -> asyncio.Task | None:  # type: ignore[type-arg]
+    """Start the maintenance heartbeat (spec 33) — independent of sync_interval.
+
+    Decay + hygiene were previously reachable only through the SyncScheduler
+    (default-off via ``sync_interval=0``), so they never ran. The heartbeat is
+    gated only on ``maintenance_interval_hours`` and runs SHADOW (dry) until
+    ``maintenance_apply`` flips after measurement.
+    """
+    config: simba.memory.config.MemoryConfig = app.state.config
+    hours = float(getattr(config, "maintenance_interval_hours", 24.0) or 0.0)
+    if hours <= 0:
+        app.state.maintenance_scheduler = None
+        return None
+
+    from simba.memory.maintenance import MaintenanceScheduler
+
+    scheduler = MaintenanceScheduler(
+        cwd=pathlib.Path(getattr(app.state, "cwd", ".")),
+        daemon_url=f"http://127.0.0.1:{config.port}",
+        interval_seconds=hours * 3600.0,
+        startup_delay_seconds=float(
+            getattr(config, "maintenance_startup_delay_seconds", 300.0)
+        ),
+        on_result=lambda r: setattr(app.state, "last_maintenance", r),
+    )
+    app.state.maintenance_scheduler = scheduler
+    task = asyncio.create_task(scheduler.run_forever())
+    logging.getLogger("simba.memory").info(
+        "[maintenance] heartbeat started (interval: %.1fh, apply=%s)",
+        hours,
+        bool(getattr(config, "maintenance_apply", False)),
     )
     return task
 

@@ -66,9 +66,6 @@ class SyncScheduler:
         epi = await loop.run_in_executor(None, self._maybe_consolidate)
         ref = await loop.run_in_executor(None, self._maybe_reflect)
         dist = await loop.run_in_executor(None, self._maybe_distill)
-        hyg = await loop.run_in_executor(None, self._maybe_hygiene)
-
-        decay_result = await loop.run_in_executor(None, self._maybe_decay)
 
         self._cycle_count += 1
         total_errors = idx.errors + ext.errors
@@ -89,19 +86,8 @@ class SyncScheduler:
                 "errors": ext.errors,
             },
             "episodes": {"dispatched": len(epi.get("dispatched", []))},
-            "decay": (
-                {
-                    "processed": decay_result.processed,
-                    "updated": decay_result.updated,
-                    "newly_dormant": decay_result.newly_dormant,
-                    "revived": decay_result.revived,
-                }
-                if decay_result
-                else {"skipped": True}
-            ),
             "reflection": ref,
             "distillation": dist,
-            "hygiene": hyg,
             "total_errors": total_errors,
         }
 
@@ -133,34 +119,6 @@ class SyncScheduler:
         return simba.episodes.consolidate.consolidate_eligible(
             str(self.cwd), ecfg=ecfg, daemon_url=self.daemon_url
         )
-
-    def _maybe_decay(self):  # type: ignore[no-untyped-def]
-        """Run the memory decay/forgetting pass when enabled (fail-open).
-
-        Fail-open like the other scheduler passes: a fresh project whose
-        ``memory_usage`` table hasn't been initialised yet (the daemon imports
-        ``memory.routes`` -> usage at startup, but the standalone scheduler may
-        not) must not abort the whole sync cycle.
-        """
-        try:
-            import time
-
-            import simba.config
-            import simba.memory.config  # registers the "memory" section
-            import simba.memory.decay
-
-            _ = simba.memory.config
-            cfg = simba.config.load("memory")
-            if not getattr(cfg, "decay_enabled", True):
-                return None
-            return simba.memory.decay.run_decay_pass(
-                now=time.time(),
-                cwd=self.cwd,
-                cfg=cfg,
-            )
-        except Exception:
-            logger.debug("decay pass failed", exc_info=True)
-            return None
 
     def _maybe_reflect(self) -> dict:
         """Run a cross-session reflection pass (engine-gated, fail-open)."""
@@ -205,25 +163,6 @@ class SyncScheduler:
             }
         except Exception:
             logger.debug("distillation pass failed", exc_info=True)
-            return {"status": "error"}
-
-    def _maybe_hygiene(self) -> dict:
-        """Expire stale TOOL_RULE memories (gated, fail-open)."""
-        try:
-            import simba.config
-            import simba.memory.config  # registers section
-            import simba.memory.hygiene
-
-            _ = simba.memory.config
-            cfg = simba.config.load("memory")
-            if not cfg.hygiene_scheduler_enabled or cfg.tool_rule_max_age_days == 0:
-                return {"status": "disabled"}
-            result = simba.memory.hygiene.run_hygiene_pass(
-                daemon_url=self.daemon_url, cfg=cfg
-            )
-            return {"status": "ok", "expired": result.expired_count}
-        except Exception:
-            logger.debug("hygiene pass failed", exc_info=True)
             return {"status": "error"}
 
     async def run_forever(self) -> None:

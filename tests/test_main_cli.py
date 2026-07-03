@@ -1068,6 +1068,99 @@ def test_rlm_run_llm_requires_prompt_file(capsys):
     assert "prompt-file" in capsys.readouterr().err
 
 
+def test_memory_maintain_runs_shadow_pass(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "at": "2026-07-03T00:00:00Z",
+                "apply": False,
+                "decay": {
+                    "processed": 5731,
+                    "updated": 4200,
+                    "newly_dormant": 1800,
+                    "revived": 0,
+                    "errors": 0,
+                    "dry_run": True,
+                },
+                "hygiene": {
+                    "expired_count": 3,
+                    "checked_count": 60,
+                    "errors": 0,
+                    "dry_run": True,
+                },
+                "errors": 0,
+            }
+
+    def _fake_post(url, json=None, timeout=0.0):
+        captured["url"] = url
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_maintain([])
+
+    assert rc == 0
+    assert captured["url"] == "http://x/maintenance/run"
+    assert captured["json"] == {}
+    out = capsys.readouterr().out
+    assert "shadow" in out
+    assert "newly_dormant=1800" in out
+    assert "expired=3" in out
+
+
+def test_memory_maintain_apply_flag(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "at": "2026-07-03T00:00:00Z",
+                "apply": True,
+                "decay": {"skipped": True},
+                "hygiene": {"skipped": True},
+                "errors": 0,
+            }
+
+    def _fake_post(url, json=None, timeout=0.0):
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_maintain(["--apply"])
+
+    assert rc == 0
+    assert captured["json"] == {"apply": True}
+    out = capsys.readouterr().out
+    assert "apply" in out
+    assert "decay: skipped" in out
+
+
+def test_memory_maintain_rejects_unknown_option(capsys) -> None:
+    rc = cli._memory_maintain(["--bogus"])
+    assert rc == 1
+    assert "Usage" in capsys.readouterr().err
+
+
 def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
     import httpx
 

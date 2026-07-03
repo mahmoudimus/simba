@@ -168,3 +168,38 @@ def test_decay_pass_outcome_quality_weight_demotes_noisy_memory(
     with simba.db.connect(tmp_path):
         rows = usage.get_many(["mem_noise", "mem_neutral"])
     assert rows["mem_noise"].strength < rows["mem_neutral"].strength
+
+
+def test_decay_pass_dry_run_reports_without_persisting(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Shadow mode (spec 33): count would-be changes, write nothing."""
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_dry", now=_NOW - 200 * _DAY)
+    result = run_decay_pass(now=_NOW, cwd=tmp_path, cfg=_cfg(), dry_run=True)
+    assert result.dry_run is True
+    assert result.processed == 1
+    assert result.updated == 1
+    assert result.newly_dormant == 1
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_dry"])["mem_dry"]
+    assert row.strength == 1.0
+    assert row.dormant is False
+
+
+def test_decay_pass_dry_run_counts_would_be_revivals(
+    tmp_path: pathlib.Path,
+) -> None:
+    with simba.db.connect(tmp_path):
+        usage.get_or_create("mem_rev", now=_NOW - 60 * _DAY)
+        usage.set_strength("mem_rev", 0.05)
+        usage.set_dormant("mem_rev", dormant=True)
+        usage.MemoryUsage.update(access_count=20).where(
+            usage.MemoryUsage.memory_id == "mem_rev"
+        ).execute()
+    result = run_decay_pass(now=_NOW, cwd=tmp_path, cfg=_cfg(), dry_run=True)
+    assert result.revived == 1
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_rev"])["mem_rev"]
+    assert row.dormant is True  # nothing persisted
+    assert row.strength == 0.05

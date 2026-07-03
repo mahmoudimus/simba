@@ -26,6 +26,7 @@ class HygieneResult:
     expired_count: int = 0
     checked_count: int = 0
     errors: int = 0
+    dry_run: bool = False  # shadow pass: expired_count = WOULD-expire
 
 
 def _memory_cfg() -> MemoryConfig:
@@ -40,11 +41,16 @@ def run_hygiene_pass(
     *,
     daemon_url: str,
     cfg: MemoryConfig | None = None,
+    dry_run: bool = False,
 ) -> HygieneResult:
-    """Expire stale TOOL_RULE memories via daemon DELETE. Never raises."""
+    """Expire stale TOOL_RULE memories via daemon DELETE. Never raises.
+
+    ``dry_run`` (spec 33 shadow mode) counts would-expire rules without
+    issuing any DELETE.
+    """
     cfg = cfg or _memory_cfg()
     if cfg.tool_rule_max_age_days == 0:
-        return HygieneResult()
+        return HygieneResult(dry_run=dry_run)
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=cfg.tool_rule_max_age_days)
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -59,7 +65,7 @@ def run_hygiene_pass(
         memories = resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):
         logger.debug("hygiene: list request failed", exc_info=True)
-        return HygieneResult(errors=1)
+        return HygieneResult(errors=1, dry_run=dry_run)
 
     expired = 0
     errors = 0
@@ -74,6 +80,9 @@ def run_hygiene_pass(
         mid = mem.get("id")
         if not mid:
             continue
+        if dry_run:
+            expired += 1
+            continue
         try:
             dresp = httpx.delete(f"{daemon_url}/memory/{mid}", timeout=15.0)
             dresp.raise_for_status()
@@ -82,4 +91,6 @@ def run_hygiene_pass(
             logger.debug("hygiene: delete failed for %s", mid, exc_info=True)
             errors += 1
 
-    return HygieneResult(expired_count=expired, checked_count=checked, errors=errors)
+    return HygieneResult(
+        expired_count=expired, checked_count=checked, errors=errors, dry_run=dry_run
+    )
