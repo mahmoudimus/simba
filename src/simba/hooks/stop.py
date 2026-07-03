@@ -26,6 +26,40 @@ def _hooks_cfg():
     return simba.config.load("hooks")
 
 
+def _usage_signal_feedback(response: str, session_id: str, cfg) -> None:
+    """Spec 33 Phase 1: convert this turn's injections into use/noise signals.
+
+    Citation (distinctive-term whole-token overlap in the response) → POST
+    feedback ``good``; repeat-injected-never-used → ONE weak ``bad`` per
+    session. Consumes the per-turn record. Entirely fail-soft; default-off ⇒
+    no files read, no POSTs (byte-identical to today).
+    """
+    if not getattr(cfg, "usage_signals_enabled", False) or not session_id:
+        return
+    try:
+        import simba.hooks._memory_client as memory_client
+        import simba.hooks.usage_signals as usage_signals
+
+        turn = usage_signals.read_turn(session_id)
+        used = usage_signals.detect_used(
+            response,
+            turn,
+            min_overlap=getattr(cfg, "citation_min_term_overlap", 2),
+        )
+        for mid in used:
+            memory_client.post_feedback(mid, "good")
+        usage_signals.mark_used(session_id, used)
+        usage_signals.reset_turn(session_id)
+        for mid in usage_signals.sweep_noise(
+            session_id, min_injects=getattr(cfg, "noise_min_injects", 2)
+        ):
+            memory_client.post_feedback(
+                mid, "bad", weight=getattr(cfg, "noise_feedback_weight", 0.1)
+            )
+    except Exception:
+        pass
+
+
 def _verify_engagement_echo(response: str, session_id: str, cfg) -> str:
     """Tier-1 echo-verify (spec 27, Phase B): flag a marker-missing turn.
 
@@ -101,6 +135,10 @@ def run(hook_input: dict) -> CanonicalResult:
                 session_id,
                 present=simba.guardian.signal_flag.signal_in_response(response),
             )
+
+    # 1d. Usage signals (spec 33): citation → use, repeat-unused → noise.
+    #     Default-OFF → no-op.
+    _usage_signal_feedback(response, session_id, cfg)
 
     # 2. Tailor: error capture from transcript
     #    Side effect: writes reflections under <cwd>/.simba/ (cwd from payload).

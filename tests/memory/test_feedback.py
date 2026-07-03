@@ -83,3 +83,21 @@ async def test_feedback_missing_usage_row_creates_it(feedback_client) -> None:
         rows = usage.get_many(["mem_new"])
     assert "mem_new" in rows
     assert rows["mem_new"].memory_id == "mem_new"
+
+
+@pytest.mark.asyncio
+async def test_feedback_good_stamps_last_used(feedback_client) -> None:
+    ac, tmp_path = feedback_client
+    await ac.post("/memory/mem_lu/feedback", json={"signal": "good"})
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_lu"])["mem_lu"]
+    assert row.last_used > 0.0
+
+
+@pytest.mark.asyncio
+async def test_feedback_bad_does_not_stamp_last_used(feedback_client) -> None:
+    ac, tmp_path = feedback_client
+    await ac.post("/memory/mem_lb/feedback", json={"signal": "bad"})
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_lb"])["mem_lb"]
+    assert row.last_used == 0.0

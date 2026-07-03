@@ -231,6 +231,62 @@ def store_memory(
     return {}
 
 
+def post_feedback(
+    memory_id: str,
+    signal: str,
+    *,
+    weight: float | None = None,
+    client: str | None = None,
+) -> bool:
+    """POST outcome feedback for one memory (spec 33 usage signals).
+
+    ``good`` bumps ``use_count`` (stamping ``last_used``) and lifts
+    ``feedback_score``; ``bad`` bumps ``noise_count`` and lowers it. Weight
+    defaults daemon-side to ``memory.feedback_default_weight``. Fail-soft →
+    False (signals are advisory; a down daemon never breaks a hook).
+    """
+    if not memory_id or signal not in ("good", "bad"):
+        return False
+    cfg = _get_cfg()
+    payload: dict = {"signal": signal}
+    if weight is not None:
+        payload["weight"] = weight
+    try:
+        resp = httpx.post(
+            f"{daemon_url()}/memory/{memory_id}/feedback",
+            json=payload,
+            timeout=cfg.default_timeout,
+            headers=_client_headers(client),
+        )
+        return resp.status_code == 200
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def ack_injected(memory_ids: list[str], *, client: str | None = None) -> int:
+    """Ack ids that made it into injected context (→ ``inject`` counter).
+
+    The client half of the phase-0 match/inject split. Returns the daemon's
+    acked count; 0 on any failure (fail-soft, never breaks the hook).
+    """
+    ids = [i for i in memory_ids if i]
+    if not ids:
+        return 0
+    cfg = _get_cfg()
+    try:
+        resp = httpx.post(
+            f"{daemon_url()}/recall/ack",
+            json={"ids": ids},
+            timeout=cfg.default_timeout,
+            headers=_client_headers(client),
+        )
+        if resp.status_code == 200:
+            return int(resp.json().get("acked", 0))
+    except (httpx.HTTPError, ValueError, TypeError):
+        pass
+    return 0
+
+
 def _memory_cfg():
     """Lazy-load the ``memory`` config (registers the section on first use)."""
     import simba.config

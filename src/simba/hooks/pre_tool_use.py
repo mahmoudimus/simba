@@ -543,6 +543,18 @@ def run(hook_input: dict) -> CanonicalResult:
                 else tool_input.get("file_path", "")
             )
             _record_gate_action(session_id, "warn", f"{tool_name} {target}".strip())
+            # Spec 33 Phase 1: a fired rule gate IS a use — the strongest
+            # deterministic consumption signal. The good feedback stamps
+            # last_used, so a rule stays fresh by FIRING rather than by being
+            # re-learned. Default-off; fail-soft.
+            if getattr(_hooks_cfg(), "usage_signals_enabled", False):
+                with contextlib.suppress(Exception):
+                    for m in rule_memories:
+                        rule_id = m.get("id")
+                        if rule_id:
+                            simba.hooks._memory_client.post_feedback(
+                                rule_id, "good"
+                            )
         # A strong match escalates to a hard block on block-only harnesses (pi);
         # Claude/Codex ignore this — the warning above is what they act on.
         escalated_block = _strong_tool_rule_block(rule_memories)
