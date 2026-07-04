@@ -1674,6 +1674,7 @@ Subcommands:
     normalize-scopes Fold worktree scopes onto repo roots (dry-run unless --run)
     promote  List usage-triggered promotion candidates (spec 33)
     import-curated Mirror curated markdown memories into the daemon
+    gaps     List knowledge gaps — queries asked often, answered poorly
     supersession Inspect append-only supersession lineage for one memory
 
 store options:
@@ -1791,6 +1792,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_promote(rest)
     elif subcmd == "import-curated":
         return _memory_import_curated(rest)
+    elif subcmd == "gaps":
+        return _memory_gaps(rest)
     elif subcmd == "supersession":
         return _memory_supersession(rest)
     else:
@@ -2310,29 +2313,93 @@ _CURATED_TYPE_MAP = {
 }
 
 
+def _memory_gaps(args: list[str]) -> int:
+    """List the corpus's known unknowns (spec 33 v2, yantrikdb borrow).
+
+    Usage: simba memory gaps [--min-asks N] [--max-best F] [--limit N]
+
+    Queries recalled repeatedly whose best hit never cleared the bar — the
+    demand-side signal for what memory SHOULD exist. Requires
+    memory.demand_log_enabled to have been collecting.
+    """
+    import httpx
+
+    import simba.hooks._memory_client
+
+    params: dict[str, object] = {}
+    for flag, key, cast in (
+        ("--min-asks", "minAsks", int),
+        ("--max-best", "maxBest", float),
+        ("--limit", "limit", int),
+    ):
+        raw = _parse_opt_value(args, flag)
+        if raw is not None:
+            try:
+                params[key] = cast(raw)
+            except ValueError:
+                print(f"Error: invalid {flag}: {raw}", file=sys.stderr)
+                return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.get(f"{url}/demand/gaps", params=params, timeout=30.0)
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    gaps = body.get("gaps") or []
+    if not gaps:
+        print("no knowledge gaps recorded (memory.demand_log_enabled collects them)")
+        return 0
+    print(
+        f"{len(gaps)} knowledge gap(s) "
+        f"(asked>={body.get('minAsks', '?')}, best<{body.get('maxBest', '?')}):"
+    )
+    for gap in gaps:
+        print(
+            f"  asked={gap.get('askCount', 0)} zero={gap.get('zeroCount', 0)} "
+            f"best={gap.get('bestScoreMax', 0.0):.2f} — {gap.get('query', '')[:90]}"
+        )
+    return 0
+
+
 def _memory_import_curated(args: list[str]) -> int:
     """Mirror curated markdown memories into the daemon (spec 33 Phase 6).
 
-    Usage: simba memory import-curated --dir DIR [--project-path P] [--run]
+    Usage: simba memory import-curated --dir DIR (--project-path P | --global)
+                                       [--run]
 
     The audit's disjoint-brain fix: the curated layer (one fact per .md with
     name/description frontmatter) is the sharpest knowledge in the harness
     and was unsearchable from every other runtime. One-way mirror, dry-run by
     default, idempotent via the daemon's duplicate detection. MEMORY.md (the
     index) is skipped.
+
+    Hardened per the hippo-memory exploit report (spec 33 v2): every file
+    runs the secret veto before entering the plan, and scope is an EXPLICIT
+    choice — ``--project-path`` or ``--global`` — never a silent
+    share-everywhere default.
     """
     import httpx
 
     import simba.hooks._memory_client
     import simba.memory.config as memory_config
+    import simba.memory.secrets
 
     usage_line = (
-        "Usage: simba memory import-curated --dir DIR [--project-path P] [--run]"
+        "Usage: simba memory import-curated --dir DIR "
+        "(--project-path P | --global) [--run]"
     )
     directory = _parse_opt_value(args, "--dir")
     project_path = _parse_opt_value(args, "--project-path") or ""
+    scope_global = "--global" in args
     run = "--run" in args
-    if not directory:
+    if not directory or (not project_path and not scope_global):
         print(usage_line, file=sys.stderr)
         return 1
     root = pathlib.Path(directory).expanduser()
@@ -2342,13 +2409,19 @@ def _memory_import_curated(args: list[str]) -> int:
 
     max_len = memory_config.resolve_max_content_length()
     plan: list[dict] = []
+    vetoed: list[tuple[str, str]] = []
     for path in sorted(root.glob("*.md")):
         if path.name == "MEMORY.md":
             continue
         try:
-            meta, body = _parse_frontmatter(path.read_text())
+            text = path.read_text()
         except OSError:
             continue
+        secret_kind = simba.memory.secrets.detect_secret(text)
+        if secret_kind:
+            vetoed.append((path.name, secret_kind))
+            continue
+        meta, body = _parse_frontmatter(text)
         description = (meta.get("description") or "").strip()
         if not description:
             # Fall back to the first non-empty body line.
@@ -2366,6 +2439,11 @@ def _memory_import_curated(args: list[str]) -> int:
                 "context": body[:400],
             }
         )
+
+    if vetoed:
+        print(f"secret veto: vetoed {len(vetoed)} file(s), never stored:")
+        for name, kind in vetoed:
+            print(f"  VETOED ({kind}) {name}")
 
     if not plan:
         print("no curated memories found")

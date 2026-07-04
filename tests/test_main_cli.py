@@ -1273,6 +1273,72 @@ def test_memory_promote_lists_candidates(monkeypatch, capsys) -> None:
     assert "docker test runner" in out
 
 
+def test_memory_gaps_lists_known_unknowns(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "minAsks": 3,
+                "maxBest": 0.5,
+                "gaps": [
+                    {
+                        "query": "how do we rotate the staging certs",
+                        "askCount": 5,
+                        "zeroCount": 4,
+                        "bestScoreMax": 0.31,
+                        "avgBestScore": 0.2,
+                        "lastAsked": 1000.0,
+                    }
+                ],
+            }
+
+    def _fake_get(url, params=None, timeout=0.0):
+        captured["url"] = url
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    rc = cli._memory_gaps([])
+    assert rc == 0
+    assert captured["url"] == "http://x/demand/gaps"
+    out = capsys.readouterr().out
+    assert "rotate the staging certs" in out
+    assert "asked=5" in out
+    assert "best=0.31" in out
+
+
+def test_memory_gaps_empty(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"minAsks": 3, "maxBest": 0.5, "gaps": []}
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: _Resp())
+    rc = cli._memory_gaps([])
+    assert rc == 0
+    assert "no knowledge gaps" in capsys.readouterr().out
+
+
 def test_memory_promote_empty(monkeypatch, capsys) -> None:
     import httpx
 
@@ -1326,13 +1392,85 @@ def test_memory_import_curated_dry_run(tmp_path, monkeypatch, capsys) -> None:
         raise AssertionError("dry run must not POST")
 
     monkeypatch.setattr(httpx, "post", _boom)
-    rc = cli._memory_import_curated(["--dir", str(tmp_path)])
+    rc = cli._memory_import_curated(["--dir", str(tmp_path), "--project-path", "/p"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "dry-run" in out
     assert "PREFERENCE" in out and "triage table" in out
     assert "DECISION" in out and "push.default" in out
     assert "MEMORY.md" not in out
+
+
+def test_memory_import_curated_vetoes_secret_files(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The hippo-memory exploit: credential-bearing memory files must never
+    be ingested — vetoed in the plan, skipped on --run, loudly reported."""
+    import httpx
+
+    _write_curated(tmp_path)
+    (tmp_path / "leaky.md").write_text(
+        "---\n"
+        "name: leaky\n"
+        "description: deploy credentials for the staging box\n"
+        "metadata:\n"
+        "  type: project\n"
+        "---\n\n"
+        "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+    )
+    posted: list[dict] = []
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"id": "mem_new", "status": "stored"}
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, json=None, timeout=0.0: posted.append(json) or _Resp(),
+    )
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", "/p", "--run"]
+    )
+    assert rc == 0
+    assert len(posted) == 2  # the two clean files only
+    assert all(
+        "AKIA" not in (p.get("content", "") + p.get("context", "")) for p in posted
+    )
+    out = capsys.readouterr().out
+    assert "vetoed 1" in out
+    assert "leaky.md" in out
+    assert "aws-access-key" in out
+
+
+def test_memory_import_curated_requires_explicit_scope(tmp_path, capsys) -> None:
+    """No silent global sharing (the other half of the hippo hazard): scope
+    must be an explicit choice — --project-path or --global."""
+    _write_curated(tmp_path)
+    rc = cli._memory_import_curated(["--dir", str(tmp_path)])
+    assert rc == 1
+    assert "--project-path" in capsys.readouterr().err
+
+
+def test_memory_import_curated_global_flag_allows_empty_scope(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    import httpx
+
+    _write_curated(tmp_path)
+
+    def _boom(*a, **kw):  # pragma: no cover
+        raise AssertionError("dry run must not POST")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    rc = cli._memory_import_curated(["--dir", str(tmp_path), "--global"])
+    assert rc == 0
+    assert "dry-run" in capsys.readouterr().out
 
 
 def test_memory_import_curated_run_posts(tmp_path, monkeypatch, capsys) -> None:
@@ -1358,7 +1496,9 @@ def test_memory_import_curated_run_posts(tmp_path, monkeypatch, capsys) -> None:
         return _Resp()
 
     monkeypatch.setattr(httpx, "post", _fake_post)
-    rc = cli._memory_import_curated(["--dir", str(tmp_path), "--run"])
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", "/p", "--run"]
+    )
     assert rc == 0
     assert len(posted) == 2
     payloads = {p["json"]["content"]: p["json"] for p in posted}
@@ -1366,6 +1506,7 @@ def test_memory_import_curated_run_posts(tmp_path, monkeypatch, capsys) -> None:
     assert pref["type"] == "PREFERENCE"
     assert pref["trustSource"] == "user_confirmed"
     assert pref["captureOrigin"] == "curated_import"
+    assert pref["projectPath"] == "/p"
     assert "stored 2" in capsys.readouterr().out
 
 

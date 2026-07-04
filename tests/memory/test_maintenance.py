@@ -38,9 +38,36 @@ def _cfg(**kw):
         maintenance_startup_delay_seconds=0.0,
         supersession_adjudication_enabled=False,
         supersession_adjudication_max_age_days=30.0,
+        maintenance_log_enabled=False,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
+
+
+def test_maintenance_log_appends_jsonl(tmp_path: pathlib.Path) -> None:
+    """Forgetting-run tracker (spec 33 v2, hebb-mind borrow / rule R5): every
+    pass appends its summary so health trends are plottable, not just the
+    latest snapshot."""
+    import json
+
+    log_path = tmp_path / ".simba" / "memory" / "maintenance-log.jsonl"
+    for _ in range(2):
+        run_maintenance(
+            now=_NOW,
+            cwd=tmp_path,
+            cfg=_cfg(maintenance_log_enabled=True),
+            daemon_url="http://unused",
+        )
+    lines = log_path.read_text().strip().split("\n")
+    assert len(lines) == 2
+    entry = json.loads(lines[0])
+    assert entry["apply"] is False
+    assert "decay" in entry
+
+
+def test_maintenance_log_disabled_writes_nothing(tmp_path: pathlib.Path) -> None:
+    run_maintenance(now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused")
+    assert not (tmp_path / ".simba" / "memory" / "maintenance-log.jsonl").exists()
 
 
 def _pending_event(old_id: str, new_id: str, *, age_days: float):
@@ -79,6 +106,10 @@ def test_adjudication_confirms_stale_pendings_on_apply(
     with simba.db.connect(tmp_path):
         assert usage.get_many(["mem_old"])["mem_old"].dormant is True
         assert usage.get_many(["mem_old2"]) == {}  # fresh pending untouched
+        # Penalty-inversion audit (animaworks F1): the SURVIVOR must carry no
+        # penalty from the adjudication — no usage row is created for it, so
+        # nothing (dormancy, noise) can land on the wrong side.
+        assert usage.get_many(["mem_new"]) == {}
         assert ss.latest_successors(["mem_old"])["mem_old"].new_id == "mem_new"
         assert "mem_old2" in ss.latest_pending(["mem_old2"])
 
