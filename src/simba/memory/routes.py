@@ -947,6 +947,17 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             diag = getattr(request.app.state, "diagnostics", None)
             if diag is not None:
                 diag.record_recall(body.query, len(cached))
+            # A cache-served recall is still a LOGICAL recall (measured live:
+            # acks counted while match/access didn't — inject=2, match=1).
+            # Only the search is skipped; the sidecar ledger still ticks.
+            cached_ids = [m["id"] for m in cached if m.get("id")]
+            if cached_ids:
+                cached_cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+                task = asyncio.create_task(
+                    _bump_usage(cached_ids, time.time(), cached_cwd)
+                )
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
             return {"memories": cached, "queryTimeMs": 0, "cached": True}
 
     start_time = time.time()

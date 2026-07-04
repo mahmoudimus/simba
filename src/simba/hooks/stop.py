@@ -37,25 +37,9 @@ def _usage_signal_feedback(response: str, session_id: str, cfg) -> None:
     if not getattr(cfg, "usage_signals_enabled", False) or not session_id:
         return
     try:
-        import simba.hooks._memory_client as memory_client
         import simba.hooks.usage_signals as usage_signals
 
-        turn = usage_signals.read_turn(session_id)
-        used = usage_signals.detect_used(
-            response,
-            turn,
-            min_overlap=getattr(cfg, "citation_min_term_overlap", 2),
-        )
-        for mid in used:
-            memory_client.post_feedback(mid, "good")
-        usage_signals.mark_used(session_id, used)
-        usage_signals.reset_turn(session_id)
-        for mid in usage_signals.sweep_noise(
-            session_id, min_injects=getattr(cfg, "noise_min_injects", 2)
-        ):
-            memory_client.post_feedback(
-                mid, "bad", weight=getattr(cfg, "noise_feedback_weight", 0.1)
-            )
+        usage_signals.process_turn_outcome(session_id, response, cfg)
     except Exception:
         pass
 
