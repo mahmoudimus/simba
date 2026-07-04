@@ -45,7 +45,7 @@ def record(query: str, result_count: int, best_score: float, *, now: float) -> N
     key = normalize(query)
     if not key:
         return
-    row, _created = RecallDemand.get_or_create(query_norm=key)
+    RecallDemand.get_or_create(query_norm=key)
     RecallDemand.update(
         ask_count=RecallDemand.ask_count + 1,
         zero_count=RecallDemand.zero_count + (1 if result_count == 0 else 0),
