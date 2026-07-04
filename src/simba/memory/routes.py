@@ -192,6 +192,52 @@ async def _bump_usage(memory_ids: list[str], now: float, cwd: pathlib.Path) -> N
     await asyncio.to_thread(_sync)
 
 
+def _record_demand(
+    query: str, result_count: int, best_score: float, cwd: pathlib.Path
+) -> None:
+    """Fire-and-forget demand-log UPSERT (spec 33 v2, yantrikdb borrow)."""
+    import simba.db
+    import simba.memory.demand
+
+    try:
+        with simba.db.connect(cwd):
+            simba.memory.demand.record(query, result_count, best_score, now=time.time())
+    except Exception:
+        logger.debug("[recall] demand log failed", exc_info=True)
+
+
+def _maybe_log_demand(
+    request: fastapi.Request,
+    config: typing.Any,
+    body: RecallRequest,
+    recall_query: str,
+    results: list[dict],
+) -> None:
+    """Schedule a demand-log write for a USER-FACING recall.
+
+    Skips: lever off, short queries, internal daemon self-calls (client
+    ``daemon``/``daemon.daemon`` — dispatched-hook recalls arrive as
+    ``<origin>.daemon`` and DO count), and TOOL_RULE gate probes (they would
+    swamp the log; the rule ledger already covers them).
+    """
+    if not getattr(config, "demand_log_enabled", False):
+        return
+    if len(recall_query) < int(getattr(config, "demand_log_min_query_chars", 10)):
+        return
+    client = getattr(request.state, "client", "unknown") or "unknown"
+    if client in ("daemon", "daemon.daemon"):
+        return
+    if (body.filters or {}).get("types") == ["TOOL_RULE"]:
+        return
+    best = float(results[0].get("similarity", 0.0) or 0.0) if results else 0.0
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    task = asyncio.create_task(
+        asyncio.to_thread(_record_demand, recall_query, len(results), best, cwd)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
 def _last_used_map(memory_ids: list[str], cwd: pathlib.Path) -> dict[str, float]:
     """Consumption freshness (``usage.last_used``) for recalled ids (spec 33).
 
@@ -958,6 +1004,7 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
                 )
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
+            _maybe_log_demand(request, config, body, recall_query, cached)
             return {"memories": cached, "queryTimeMs": 0, "cached": True}
 
     start_time = time.time()
@@ -1173,7 +1220,48 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if recall_cache is not None and cache_key is not None:
         recall_cache.put(cache_key, results, now=time.time())
 
+    _maybe_log_demand(request, config, body, recall_query, results)
+
     return {"memories": results, "queryTimeMs": query_time_ms}
+
+
+@router.get("/demand/gaps")
+async def demand_gaps(
+    request: fastapi.Request,
+    minAsks: int | None = fastapi.Query(default=None),  # noqa: N803
+    maxBest: float | None = fastapi.Query(default=None),  # noqa: N803
+    limit: int = fastapi.Query(default=20),
+) -> dict:
+    """The corpus's known unknowns (spec 33 v2): queries asked repeatedly
+    whose best hit never cleared the bar. Read-only over the demand log."""
+    config = request.app.state.config
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    min_asks = (
+        minAsks
+        if minAsks is not None
+        else int(getattr(config, "demand_gap_min_asks", 3))
+    )
+    max_best = (
+        maxBest
+        if maxBest is not None
+        else float(getattr(config, "demand_gap_max_best", 0.5))
+    )
+
+    def _sync() -> list[dict]:
+        import simba.db
+        import simba.memory.demand
+
+        with simba.db.connect(cwd):
+            return simba.memory.demand.gaps(
+                min_asks=min_asks, max_best=max_best, limit=limit
+            )
+
+    try:
+        rows = await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[demand] gaps read failed", exc_info=True)
+        rows = []
+    return {"gaps": rows, "minAsks": min_asks, "maxBest": max_best}
 
 
 class RecallAckRequest(pydantic.BaseModel):

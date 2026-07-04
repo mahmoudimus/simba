@@ -106,6 +106,21 @@ def run_maintenance(
     result["episodes"] = _run_episodes(cwd, daemon_url, dry_run)
     result["reflection"] = _run_reflection(cwd, daemon_url, dry_run)
 
+    # Forgetting-run tracker (spec 33 v2 rule R5, hebb-mind borrow): every
+    # pass appends its summary so health becomes a plottable trend, not just
+    # the latest snapshot in /stats. Fail-soft.
+    if getattr(cfg, "maintenance_log_enabled", True):
+        try:
+            import json
+            import pathlib as _pathlib
+
+            log_path = _pathlib.Path(cwd) / ".simba" / "memory"
+            log_path.mkdir(parents=True, exist_ok=True)
+            with (log_path / "maintenance-log.jsonl").open("a") as fh:
+                fh.write(json.dumps(result) + "\n")
+        except Exception:
+            logger.debug("[maintenance] run log append failed", exc_info=True)
+
     return result
 
 

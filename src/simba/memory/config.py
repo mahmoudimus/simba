@@ -484,6 +484,23 @@ class MemoryConfig:
     # promote`) — the promotion itself stays human.
     promotion_min_uses: int = 3
     promotion_max_noise_ratio: float = 0.5
+    # Recall demand log (spec 33 v2, yantrikdb borrow): O(1) aggregate per
+    # normalized query at the recall tail (ask count, zero-result count, best
+    # hit score) so "asked often, answered poorly" — what memory SHOULD exist
+    # — is queryable via GET /demand/gaps / `simba memory gaps`. Internal
+    # daemon self-calls and TOOL_RULE gate probes never count. UNMEASURED →
+    # DEFAULT-OFF.
+    demand_log_enabled: bool = False
+    demand_log_min_query_chars: int = 10
+    demand_gap_min_asks: int = 3
+    demand_gap_max_best: float = 0.5
+    # Maintenance run log (spec 33 v2 rule R5 + hebb-mind's forgetting-run
+    # tracker): append each pass's summary to
+    # .simba/memory/maintenance-log.jsonl so dead-tail/would-expire/
+    # utilization become plottable TRENDS (GET /stats keeps only the latest).
+    # Derived ops telemetry (like the FTS mirror), a few hundred bytes per
+    # pass — default ON; disable to write nothing.
+    maintenance_log_enabled: bool = True
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

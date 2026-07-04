@@ -37,6 +37,14 @@
   idempotent via dedup); the user-level `memory-stats` skill repointed
   off the dead `simba.search` store onto daemon `/stats` + `promote`.
   `graphify-out` staleness left to its own tooling (out of repo scope).
+- ✅ v2 borrow trio (2026-07-03 `~/src/ai/memory` sweep): secret veto +
+  explicit-scope requirement on `import-curated` (hippo-memory shipped the
+  same bridge and had to hotfix credential ingestion); recall demand log +
+  `GET /demand/gaps` + `simba memory gaps` (yantrikdb `knowledge_gaps()` —
+  the query-side half of the ledger; `memory.demand_log_enabled`,
+  default-off); maintenance run log `.simba/memory/maintenance-log.jsonl`
+  (hebb-mind's forgetting-run tracker = rule R5, default-on ops telemetry)
+  + the animaworks penalty-inversion audit asserted on the adjudicator.
 
 Everything ships default-OFF/shadow per the graduation policy. To dogfood:
 `simba config set memory.maintenance_apply true`, `simba config set
