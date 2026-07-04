@@ -321,16 +321,34 @@ def run(hook_input: dict) -> CanonicalResult:
     #     distinctive terms for the Stop citation check, and ack the inject to
     #     the daemon ledger (match/inject split). v1 treats the recalled set as
     #     injected — lanes trim only when context_lanes_enabled. Both levers
-    #     default-off; fail-soft.
-    if memories and getattr(cfg, "usage_signals_enabled", False):
+    #     default-off; fail-soft. new_turn dedupes the duplicate-registration
+    #     double fire (measured live: every id at count 2 per Claude prompt) —
+    #     the second identical record returns False and the ack is skipped
+    #     with it. With signals off there is no turn record to compare, so
+    #     ack-only setups still ack per fire.
+    new_turn = True
+    if getattr(cfg, "usage_signals_enabled", False) and session_id:
         with contextlib.suppress(Exception):
             # `as` form: a bare `import simba.hooks.usage_signals` would bind
             # the local name `simba` and shadow the module-level import for
             # the rest of this function.
             import simba.hooks.usage_signals as usage_signals
 
-            usage_signals.record_turn_injections(session_id, memories)
-    if memories and getattr(cfg, "recall_ack_enabled", False):
+            # Leftover-turn fallback (spec 33 round 2): a still-present turn
+            # record means Stop never consumed it — measured live in this very
+            # harness (un-swept counts, the capsule never signal-gated).
+            # Process it now from the transcript's last assistant message;
+            # UserPromptSubmit is the one hook that provably fires every turn.
+            # When Stop DID run, the record is gone and this is a no-op.
+            if usage_signals.read_turn(session_id):
+                prev_response = usage_signals.extract_last_assistant_text(
+                    hook_input.get("transcript_path", "")
+                )
+                if prev_response:
+                    usage_signals.process_turn_outcome(session_id, prev_response, cfg)
+            if memories:
+                new_turn = usage_signals.record_turn_injections(session_id, memories)
+    if memories and new_turn and getattr(cfg, "recall_ack_enabled", False):
         with contextlib.suppress(Exception):
             simba.hooks._memory_client.ack_injected([m.get("id", "") for m in memories])
 

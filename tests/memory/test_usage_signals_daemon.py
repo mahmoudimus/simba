@@ -57,6 +57,48 @@ async def test_recall_bumps_match_and_access_but_not_inject(
 
 
 @pytest.mark.asyncio
+async def test_cached_recall_still_bumps_usage(
+    tmp_path, lance_table, mock_embed
+) -> None:
+    """A cache-served recall is still a LOGICAL recall (measured live:
+    inject=2 while match=1 — acks counted, the ledger didn't). The sidecar
+    bump must fire on the cached path too; only the search is skipped."""
+    import httpx
+
+    import simba.memory.config
+    import simba.memory.fts
+    import simba.memory.recall_cache
+    import simba.memory.server
+
+    cfg = simba.memory.config.MemoryConfig(recall_cache_ttl_seconds=60.0)
+    app = simba.memory.server.create_app(cfg)
+    app.state.table = lance_table
+    app.state.embed = mock_embed
+    app.state.embed_query = mock_embed
+    app.state.db_path = None
+    app.state.cwd = tmp_path
+    fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
+    simba.memory.fts.init(fts_path, tokenize=cfg.fts_tokenize)
+    app.state.fts_path = str(fts_path)
+    app.state.recall_cache = simba.memory.recall_cache.RecallCache(
+        max_entries=16, ttl_seconds=60.0
+    )
+    await lance_table.add([_make_memory("mem_cached")])
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        first = await ac.post("/recall", json={"query": "memory"})
+        assert first.status_code == 200
+        second = await ac.post("/recall", json={"query": "memory"})
+        assert second.json().get("cached") is True
+    await _drain_background_tasks()
+
+    with simba.db.connect(tmp_path):
+        row = usage.get_many(["mem_cached"])["mem_cached"]
+    assert row.access_count == 2
+    assert row.match_count == 2
+
+
+@pytest.mark.asyncio
 async def test_recall_ack_bumps_inject(async_client, tmp_path) -> None:
     resp = await async_client.post("/recall/ack", json={"ids": ["mem_i", "mem_j"]})
     assert resp.status_code == 200

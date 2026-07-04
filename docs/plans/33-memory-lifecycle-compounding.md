@@ -375,6 +375,69 @@ Each phase lands default-OFF, gets measured, and flips per the graduation
 policy — this spec's mechanisms are subject to the same ladder they
 implement.
 
+## Part 8 — Round-2 audit (2026-07-03, post-deployment) and v2 rules
+
+Re-ran the audit with all six phases live and the signal levers on. What the
+measurement found, in order of discovery:
+
+**Current IS flowing** — turn/session records exist for BOTH the Claude and
+codex sessions; acks reached the sidecar (`inject` ticking); the heartbeat
+runs on schedule; the curated bridge flipped the audit's failing probe from
+0 hits to a 0.84 top-hit; corpus +121 on the day with `save` counters
+matching.
+
+**Three defects only live measurement could catch** (all fixed same day):
+
+1. **Claude Code double-fires UserPromptSubmit** (duplicate registration):
+   every id recorded at count 2 per prompt while codex recorded clean 1s —
+   doubling `inject` and tripping the noise sweep's `min_injects=2` after ONE
+   turn. Fix: `record_turn_injections` is idempotent per turn (identical
+   re-record returns False) and the ack is gated on it.
+2. **Cache-served recalls skipped the ledger**: `inject=2, match=1` on the
+   same id — acks counted, logical recalls didn't. Fix: the cached path fires
+   the same sidecar bump; only the search is skipped.
+3. **The Stop anchor never fired in this harness** — the loop's biggest dead
+   link: counts sat un-swept, `used`/`noised` empty, and the CORE capsule
+   re-injected every turn despite `guardian_signal_gated=true` (Stop's signal
+   record never lands). A synthetic Stop proved the code path end-to-end
+   (use=1, feedback +0.3, `last_used` stamped), isolating the failure to
+   harness delivery. Fix: **leftover-turn fallback** — the NEXT prompt's
+   UserPromptSubmit (the one hook that provably fires every turn) detects a
+   still-present turn record, extracts the last assistant message from the
+   transcript, and runs the same `process_turn_outcome`. Stop remains the
+   primary anchor; a consumed record makes the fallback a no-op. This is the
+   presence/gate philosophy applied to the loop itself: never depend on a
+   single lifecycle event a harness may not deliver.
+
+**v2 rules** (the next round of retention/decay/promotion, in order):
+
+- **R1 Graduation criteria for the still-off levers** (measured, not vibes):
+  `maintenance_apply` flips after ≥14 days of signals AND ≥60% of rules that
+  FIRED in the window carry `last_used` (first shadow pass showed 57/60
+  would-expire on the created-at clock — applying earlier mass-deletes) AND
+  the LME-S/LoCoMo + HaluMem guards run. `scope_normalize_worktrees` +
+  `normalize-scopes --run` flip together (mechanical, 320 memories).
+  Adjudication after one manual triage of the ~170 pendings (or accept lww).
+- **R2 Per-session use attribution**: an append-only `usage_events` table
+  (memory_id, session_source, kind, at) written alongside feedback — enables
+  the spec's real promotion trigger (used in ≥2 DISTINCT sessions) and the
+  repeat-failure KPI. Counters stay as the fast rollup.
+- **R3 Reflections-ledger reader**: weekly maintenance (apply-gated) clusters
+  the failure ledger's normalized errors recurring across ≥2 sessions ≥3d
+  apart → emits promotion candidates (rule drafts). The 1,112-row table is
+  still write-only today.
+- **R4 Curated re-import cadence**: SessionStart nudge when the curated dir's
+  MEMORY.md mtime exceeds the last import marker (`.simba/curated-import.json`)
+  — the bridge stays fresh without a human remembering it.
+- **R5 Health history**: append each maintenance result to
+  `.simba/memory/maintenance-log.jsonl` (capped) so dead-tail %, would-expire,
+  and utilization become plottable trends; `/stats` keeps only the latest.
+- **R6 Tempfile hygiene**: usage/engagement session files older than 7 days
+  cleaned by the hygiene pass (tempdir is per-user but unbounded).
+- **R7 Utilization baseline v2**: with calibrated counters (post-R1 fixes),
+  record the first honest inject→use ratio after one week and set the
+  promotion thresholds from data rather than the current defaults.
+
 ## Appendix: audit queries (re-runnable)
 
 ```bash

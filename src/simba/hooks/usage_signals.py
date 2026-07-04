@@ -79,10 +79,17 @@ def _write_session(session_id: str, data: dict) -> None:
         session_path(session_id).write_text(json.dumps(data))
 
 
-def record_turn_injections(session_id: str, memories: list[dict]) -> None:
-    """Record this turn's injected memories (id + terms); bump session counts."""
+def record_turn_injections(session_id: str, memories: list[dict]) -> bool:
+    """Record this turn's injected memories (id + terms); bump session counts.
+
+    Returns True when a NEW turn was recorded, False on an identical
+    re-record — Claude Code can fire UserPromptSubmit twice for one prompt
+    (duplicate hook registration; measured live as every id at count 2 while
+    the codex session recorded clean 1s), and the second fire must not double
+    the session counts (callers also gate the inject ack on this).
+    """
     if not session_id or not memories:
-        return
+        return False
     turn: list[dict] = []
     for m in memories:
         mid = m.get("id")
@@ -90,7 +97,9 @@ def record_turn_injections(session_id: str, memories: list[dict]) -> None:
             continue
         turn.append({"id": mid, "terms": distinctive_terms(m.get("content", ""))})
     if not turn:
-        return
+        return False
+    if read_turn(session_id) == turn:
+        return False  # the double fire — turn already recorded
     with contextlib.suppress(OSError, TypeError):
         turn_path(session_id).write_text(json.dumps(turn))
     sess = _read_session(session_id)
@@ -98,6 +107,7 @@ def record_turn_injections(session_id: str, memories: list[dict]) -> None:
         mid = entry["id"]
         sess["counts"][mid] = int(sess["counts"].get(mid, 0)) + 1
     _write_session(session_id, sess)
+    return True
 
 
 def read_turn(session_id: str) -> list[dict]:
@@ -139,6 +149,72 @@ def detect_used(
             seen.add(mid)
             used.append(mid)
     return used
+
+
+def extract_last_assistant_text(transcript_path: str) -> str:
+    """Last assistant message's text parts from a transcript JSONL ("" on any
+    trouble). The leftover-turn fallback's response source when Stop never
+    delivered one."""
+    if not transcript_path:
+        return ""
+    import pathlib as _pathlib
+
+    path = _pathlib.Path(transcript_path)
+    try:
+        lines = path.read_text().strip().split("\n")
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        message = entry.get("message", {})
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            continue
+        parts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def process_turn_outcome(session_id: str, response: str, cfg) -> None:
+    """Convert a completed turn's injections into use/noise signals.
+
+    Citation (distinctive-term whole-token overlap in ``response``) → POST
+    feedback ``good``; repeat-injected-never-used → ONE weak ``bad`` per
+    session. Consumes the per-turn record, so running it twice is a no-op.
+    Shared by the Stop hook (the normal anchor) and the UserPromptSubmit
+    leftover fallback (spec 33 round 2: measured live, a harness can simply
+    never deliver Stop — the loop must not depend on it).
+    """
+    import simba.hooks._memory_client as memory_client
+
+    turn = read_turn(session_id)
+    used = detect_used(
+        response,
+        turn,
+        min_overlap=getattr(cfg, "citation_min_term_overlap", 2),
+    )
+    for mid in used:
+        memory_client.post_feedback(mid, "good")
+    mark_used(session_id, used)
+    reset_turn(session_id)
+    for mid in sweep_noise(
+        session_id, min_injects=getattr(cfg, "noise_min_injects", 2)
+    ):
+        memory_client.post_feedback(
+            mid, "bad", weight=getattr(cfg, "noise_feedback_weight", 0.1)
+        )
 
 
 def mark_used(session_id: str, memory_ids: list[str]) -> None:

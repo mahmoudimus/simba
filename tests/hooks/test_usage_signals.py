@@ -37,11 +37,23 @@ def test_record_turn_and_read_back() -> None:
     assert "50815" in turn[0]["terms"]
 
 
-def test_record_accumulates_session_counts() -> None:
+def test_record_accumulates_session_counts_across_turns() -> None:
     mems = [{"id": "m1", "content": "zzz_qqq flag"}]
-    us.record_turn_injections("s2", mems)
-    us.record_turn_injections("s2", mems)
+    assert us.record_turn_injections("s2", mems) is True
+    us.reset_turn("s2")  # turn boundary (Stop consumed the record)
+    assert us.record_turn_injections("s2", mems) is True
     assert us._read_session("s2")["counts"]["m1"] == 2
+
+
+def test_record_same_turn_twice_is_idempotent() -> None:
+    """Claude Code can fire UserPromptSubmit twice for one prompt (duplicate
+    hook registration) — measured live: every id at count 2 per prompt while
+    the codex session recorded clean 1s. Re-recording an identical turn must
+    not double the session counts (and the caller must not re-ack)."""
+    mems = [{"id": "m1", "content": "zzz_qqq flag"}]
+    assert us.record_turn_injections("s7", mems) is True
+    assert us.record_turn_injections("s7", mems) is False
+    assert us._read_session("s7")["counts"]["m1"] == 1
 
 
 def test_distinctive_terms_skips_common_english() -> None:
@@ -82,6 +94,7 @@ def test_detect_used_whole_token_only() -> None:
 def test_sweep_noise_flags_twice_injected_unused_once() -> None:
     mems = [{"id": "m9", "content": "qqq_zzz marker"}]
     us.record_turn_injections("s3", mems)
+    us.reset_turn("s3")  # turn boundary — two real turns, not a double fire
     us.record_turn_injections("s3", mems)
     assert us.sweep_noise("s3", min_injects=2) == ["m9"]
     assert us.sweep_noise("s3", min_injects=2) == []  # noised exactly once
@@ -95,6 +108,7 @@ def test_sweep_noise_ignores_single_injection() -> None:
 def test_mark_used_prevents_noise() -> None:
     mems = [{"id": "m8", "content": "qqq_zzz marker"}]
     us.record_turn_injections("s4", mems)
+    us.reset_turn("s4")
     us.record_turn_injections("s4", mems)
     us.mark_used("s4", ["m8"])
     assert us.sweep_noise("s4", min_injects=2) == []
@@ -187,6 +201,110 @@ def test_ack_injected_empty_skips_request(monkeypatch) -> None:
 
 def _fresh_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def test_extract_last_assistant_text(tmp_path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"message": {"role": "user", "content": "hi"}}),
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "thinking": "hmm"},
+                                {"type": "text", "text": "Handled INTERR 50815."},
+                            ],
+                        }
+                    }
+                ),
+                json.dumps({"type": "progress"}),
+            ]
+        )
+    )
+    assert "INTERR 50815" in us.extract_last_assistant_text(str(transcript))
+    assert us.extract_last_assistant_text(str(tmp_path / "missing.jsonl")) == ""
+
+
+def test_ups_processes_leftover_turn_from_transcript(tmp_path, monkeypatch) -> None:
+    """Spec 33 round 2: this harness never delivered Stop (measured live —
+    un-swept counts, capsule never signal-gated), so the NEXT prompt's
+    UserPromptSubmit processes the leftover turn from the transcript's last
+    assistant message. A consumed turn (Stop did fire) makes this a no-op."""
+    import simba.hooks.user_prompt_submit as ups
+
+    cfg = hooks_config.HooksConfig(usage_signals_enabled=True, prompt_min_length=1)
+    monkeypatch.setattr(ups, "_cfg", lambda: cfg)
+
+    posted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "simba.hooks._memory_client.post_feedback",
+        lambda mid, sig, **kw: posted.append((mid, sig)) or True,
+    )
+    # The previous turn's record, never consumed by Stop.
+    us.record_turn_injections(
+        "sess-left", [{"id": "m_prev", "content": "the INTERR 50815 fix"}]
+    )
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Handled INTERR 50815 cleanly."}
+                    ],
+                }
+            }
+        )
+    )
+    new_mems = [
+        {"id": "m_new", "type": "GOTCHA", "content": "zzz_qqq", "similarity": 0.8}
+    ]
+    with unittest.mock.patch(
+        "simba.hooks._memory_client.recall_memories", return_value=new_mems
+    ):
+        ups.main(
+            {
+                "prompt": "next prompt long enough",
+                "cwd": None,
+                "session_id": "sess-left",
+                "transcript_path": str(transcript),
+            }
+        )
+    assert ("m_prev", "good") in posted
+    assert [m["id"] for m in us.read_turn("sess-left")] == ["m_new"]
+    assert "m_prev" in us._read_session("sess-left")["used"]
+
+
+def test_user_prompt_submit_double_fire_acks_once(tmp_path, monkeypatch) -> None:
+    """The duplicate-registration double fire must not double the inject ack."""
+    import simba.hooks.user_prompt_submit as ups
+
+    cfg = hooks_config.HooksConfig(
+        usage_signals_enabled=True, recall_ack_enabled=True, prompt_min_length=1
+    )
+    monkeypatch.setattr(ups, "_cfg", lambda: cfg)
+    ack_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "simba.hooks._memory_client.ack_injected",
+        lambda ids, **kw: ack_calls.append(list(ids)) or len(ids),
+    )
+    mems = [{"id": "m1", "type": "GOTCHA", "content": "x", "similarity": 0.8}]
+    payload = {
+        "prompt": "a sufficiently long prompt",
+        "cwd": str(tmp_path),
+        "session_id": "sess-double",
+    }
+    with unittest.mock.patch(
+        "simba.hooks._memory_client.recall_memories", return_value=mems
+    ):
+        ups.main(payload)
+        ups.main(payload)  # the duplicate registration's second fire
+    assert len(ack_calls) == 1
+    assert us._read_session("sess-double")["counts"]["m1"] == 1
 
 
 def test_user_prompt_submit_records_and_acks(tmp_path, monkeypatch) -> None:
