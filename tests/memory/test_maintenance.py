@@ -39,9 +39,77 @@ def _cfg(**kw):
         supersession_adjudication_enabled=False,
         supersession_adjudication_max_age_days=30.0,
         maintenance_log_enabled=False,
+        promotion_min_uses=3,
+        promotion_max_noise_ratio=0.5,
+        session_tempfile_max_age_days=0.0,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
+
+
+def test_maintenance_reports_promotion_candidates(tmp_path: pathlib.Path) -> None:
+    """Stuck-candidate sweep (spec 33 v2, MemOS borrow): a memory whose stored
+    counters already qualify surfaces on every heartbeat, not only when a
+    recall happens to touch it."""
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("mem_hot", _NOW, use=4, noise=1)
+        usage.bump_quality("mem_cold", _NOW, use=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["promotions"]["candidates"] == 1
+
+
+def test_maintenance_tempfile_sweep_shadow_then_apply(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Session-tempfile TTL (spec 33 v2 rule R6): stale per-session flag files
+    (827 engagement files observed in the audit) age out via the heartbeat;
+    unknown files are never touched."""
+    import os
+
+    import simba.memory.maintenance as maint
+
+    flags = tmp_path / "flags"
+    flags.mkdir()
+    monkeypatch.setattr(maint, "_session_tempdir", lambda: flags)
+
+    old_flag = flags / "claude-engagement-dead.json"
+    old_flag.write_text("{}")
+    os.utime(old_flag, (_NOW - 10 * _DAY, _NOW - 10 * _DAY))
+    old_usage = flags / "claude-usage-session-dead.json"
+    old_usage.write_text("{}")
+    os.utime(old_usage, (_NOW - 10 * _DAY, _NOW - 10 * _DAY))
+    fresh = flags / "claude-usage-turn-live.json"
+    fresh.write_text("{}")
+    os.utime(fresh, (_NOW - 1 * _DAY, _NOW - 1 * _DAY))
+    unrelated = flags / "somebody-elses-file.json"
+    unrelated.write_text("{}")
+    os.utime(unrelated, (_NOW - 30 * _DAY, _NOW - 30 * _DAY))
+
+    cfg = _cfg(session_tempfile_max_age_days=7.0)
+    shadow = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=cfg, daemon_url="http://unused"
+    )
+    assert shadow["tempfiles"]["stale"] == 2
+    assert shadow["tempfiles"]["deleted"] == 0
+    assert old_flag.exists()
+
+    applied = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=cfg, daemon_url="http://unused", apply=True
+    )
+    assert applied["tempfiles"]["deleted"] == 2
+    assert not old_flag.exists()
+    assert not old_usage.exists()
+    assert fresh.exists()
+    assert unrelated.exists()
+
+
+def test_maintenance_tempfile_sweep_disabled(tmp_path: pathlib.Path) -> None:
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["tempfiles"] == {"skipped": True}
 
 
 def test_maintenance_log_appends_jsonl(tmp_path: pathlib.Path) -> None:

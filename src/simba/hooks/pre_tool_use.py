@@ -574,7 +574,9 @@ def run(hook_input: dict) -> CanonicalResult:
                     for m in rule_memories:
                         rule_id = m.get("id")
                         if rule_id:
-                            simba.hooks._memory_client.post_feedback(rule_id, "good")
+                            simba.hooks._memory_client.post_feedback(
+                                rule_id, "good", session=session_id
+                            )
         # A strong match escalates to a hard block on block-only harnesses (pi);
         # Claude/Codex ignore this — the warning above is what they act on.
         escalated_block = _strong_tool_rule_block(rule_memories)

@@ -484,6 +484,16 @@ class MemoryConfig:
     # promote`) — the promotion itself stays human.
     promotion_min_uses: int = 3
     promotion_max_noise_ratio: float = 0.5
+    # Distinct sessions a candidate must have a recorded USE from
+    # (usage_events, spec 33 v2 rule R2) before it surfaces — the spec's real
+    # trigger is "used in ≥2 DISTINCT sessions". 1 (default) = counters-only
+    # behavior while events accumulate; raise to 2 once they have.
+    promotion_min_sessions: int = 1
+    # Session-tempfile TTL (spec 33 v2 rule R6): the heartbeat sweeps
+    # per-session flag files (usage/engagement/signal/preflight) older than
+    # this many days from the tempdir — the audit found 827 stale engagement
+    # flags. Shadow passes count; apply passes delete. 0 disables.
+    session_tempfile_max_age_days: float = 7.0
     # Recall demand log (spec 33 v2, yantrikdb borrow): O(1) aggregate per
     # normalized query at the recall tail (ask count, zero-result count, best
     # hit score) so "asked often, answered poorly" — what memory SHOULD exist

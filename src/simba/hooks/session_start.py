@@ -74,6 +74,45 @@ def _lifecycle_nudges(cfg) -> str:
         return ""
     lines: list[str] = []
     base = simba.hooks._memory_client.daemon_url()
+
+    # Preferred: one /digest call (spec 33 v2) — heartbeat + promotion inbox +
+    # supersession pendings + knowledge gaps. Falls back to the two-call
+    # /stats + /promotions path against an older daemon.
+    digest: dict | None = None
+    try:
+        resp = httpx.get(f"{base}/digest", timeout=1.0)
+        if resp.status_code == 200:
+            digest = resp.json()
+    except (httpx.HTTPError, ValueError):
+        digest = None
+    if digest is not None:
+        heartbeat = digest.get("heartbeat") or {}
+        if heartbeat:
+            decay = heartbeat.get("decay") or {}
+            mode = "apply" if heartbeat.get("apply") else "shadow"
+            lines.append(
+                f"[Lifecycle] last maintenance {heartbeat.get('at', '?')} "
+                f"({mode}): decay updated={decay.get('updated', 0)} "
+                f"dormant={decay.get('newly_dormant', 0)}"
+            )
+        inbox: list[str] = []
+        promotions = int((digest.get("promotions") or {}).get("total", 0))
+        if promotions:
+            inbox.append(
+                f"{promotions} promotion candidate(s) — `simba memory promote`"
+            )
+        pending = int((digest.get("supersessions") or {}).get("pending", 0))
+        if pending:
+            inbox.append(
+                f"{pending} pending supersession(s) — `simba memory supersession`"
+            )
+        gap_count = int((digest.get("gaps") or {}).get("total", 0))
+        if gap_count:
+            inbox.append(f"{gap_count} knowledge gap(s) — `simba memory gaps`")
+        if inbox:
+            lines.append("[Lifecycle] inbox: " + " | ".join(inbox))
+        return "\n".join(lines)
+
     try:
         resp = httpx.get(f"{base}/stats", timeout=1.0)
         if resp.status_code == 200:
