@@ -236,6 +236,7 @@ def post_feedback(
     signal: str,
     *,
     weight: float | None = None,
+    session: str | None = None,
     client: str | None = None,
 ) -> bool:
     """POST outcome feedback for one memory (spec 33 usage signals).
@@ -251,6 +252,10 @@ def post_feedback(
     payload: dict = {"signal": signal}
     if weight is not None:
         payload["weight"] = weight
+    if session:
+        # Session attribution (spec 33 v2): lets the daemon append a
+        # usage event so distinct-session promotion triggers are answerable.
+        payload["sessionSource"] = session
     try:
         resp = httpx.post(
             f"{daemon_url()}/memory/{memory_id}/feedback",

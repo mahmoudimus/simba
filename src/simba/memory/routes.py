@@ -1379,9 +1379,12 @@ async def promotion_candidates(
     min_uses = int(getattr(config, "promotion_min_uses", 3))
     max_ratio = float(getattr(config, "promotion_max_noise_ratio", 0.5))
 
+    min_sessions = int(getattr(config, "promotion_min_sessions", 1))
+
     def _sync() -> list[dict]:
         import simba.db
         import simba.memory.usage
+        import simba.memory.usage_events
 
         with simba.db.connect(cwd):
             rows = simba.memory.usage.MemoryUsage.select().where(
@@ -1400,6 +1403,15 @@ async def promotion_candidates(
                         "injectCount": int(row.inject_count),
                     }
                 )
+            # Per-session attribution (spec 33 v2 rule R2): report distinct
+            # use sessions; gate on promotion_min_sessions when raised.
+            session_counts = simba.memory.usage_events.use_sessions_for(
+                [c["id"] for c in out]
+            )
+            for c in out:
+                c["sessions"] = session_counts.get(c["id"], 0)
+            if min_sessions > 1:
+                out = [c for c in out if c["sessions"] >= min_sessions]
             out.sort(key=lambda c: -c["useCount"])
             return out
 
@@ -1431,6 +1443,88 @@ async def promotion_candidates(
         "minUses": min_uses,
         "maxNoiseRatio": max_ratio,
     }
+
+
+@router.get("/digest")
+async def boot_digest(request: fastapi.Request) -> dict:
+    """Boot digest (spec 33 v2, yantrikdb-server borrow) — one call returning
+    the lifecycle state a fresh session should see: latest heartbeat,
+    promotion inbox, unadjudicated supersessions, knowledge gaps. The
+    consumption surface that keeps the new inboxes from rotting unread (the
+    animaworks lesson: surfaced state re-appears until consumed)."""
+    config = request.app.state.config
+    cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
+    heartbeat = getattr(request.app.state, "last_maintenance", None)
+
+    def _sync() -> dict:
+        import simba.db
+        import simba.memory.demand
+        import simba.memory.supersession
+        import simba.memory.usage
+        import simba.memory.usage_events
+
+        min_uses = int(getattr(config, "promotion_min_uses", 3))
+        max_ratio = float(getattr(config, "promotion_max_noise_ratio", 0.5))
+        min_sessions = int(getattr(config, "promotion_min_sessions", 1))
+        with simba.db.connect(cwd):
+            rows = simba.memory.usage.MemoryUsage.select().where(
+                (simba.memory.usage.MemoryUsage.use_count >= min_uses)
+                & (simba.memory.usage.MemoryUsage.dormant == False)  # noqa: E712
+            )
+            candidates = [
+                {"id": row.memory_id, "useCount": int(row.use_count)}
+                for row in rows
+                if not (
+                    row.use_count > 0 and (row.noise_count / row.use_count) >= max_ratio
+                )
+            ]
+            session_counts = simba.memory.usage_events.use_sessions_for(
+                [c["id"] for c in candidates]
+            )
+            for c in candidates:
+                c["sessions"] = session_counts.get(c["id"], 0)
+            if min_sessions > 1:
+                candidates = [c for c in candidates if c["sessions"] >= min_sessions]
+            candidates.sort(key=lambda c: -c["useCount"])
+
+            pending_rows = list(
+                simba.memory.supersession.MemorySupersession.select().where(
+                    simba.memory.supersession.MemorySupersession.status
+                    == simba.memory.supersession.STATUS_PENDING
+                )
+            )
+            pending_ids = [p.id for p in pending_rows]
+            decided = (
+                simba.memory.supersession._decided_pending_ids(pending_ids)
+                if pending_ids
+                else set()
+            )
+            pending = len([p for p in pending_ids if p not in decided])
+
+            gap_rows = simba.memory.demand.gaps(
+                min_asks=int(getattr(config, "demand_gap_min_asks", 3)),
+                max_best=float(getattr(config, "demand_gap_max_best", 0.5)),
+                limit=3,
+            )
+        return {
+            "promotions": {"total": len(candidates), "top": candidates[:3]},
+            "supersessions": {"pending": pending},
+            "gaps": {
+                "total": len(gap_rows),
+                "top": [g["query"] for g in gap_rows],
+            },
+        }
+
+    try:
+        data = await asyncio.to_thread(_sync)
+    except Exception:
+        logger.debug("[digest] lifecycle read failed", exc_info=True)
+        data = {
+            "promotions": {"total": 0, "top": []},
+            "supersessions": {"pending": 0},
+            "gaps": {"total": 0, "top": []},
+        }
+    return {"heartbeat": heartbeat, **data}
 
 
 class MaintenanceRunRequest(pydantic.BaseModel):
@@ -1909,8 +2003,13 @@ async def patch_memory(
 class FeedbackRequest(pydantic.BaseModel):
     """Outcome-feedback signal for a recalled memory."""
 
+    model_config = pydantic.ConfigDict(populate_by_name=True)
+
     signal: str  # "good" or "bad"
     weight: float | None = None  # override; None → cfg.feedback_default_weight
+    # Session attribution (spec 33 v2 rule R2): when present, an append-only
+    # usage event is recorded so "used in ≥N distinct sessions" is answerable.
+    session_source: str = pydantic.Field(default="", alias="sessionSource")
 
 
 @router.post("/memory/{memory_id}/feedback")
@@ -1944,6 +2043,7 @@ async def memory_feedback(
 
     import simba.db
     import simba.memory.usage
+    import simba.memory.usage_events
 
     now = time.time()
 
@@ -1956,6 +2056,13 @@ async def memory_feedback(
                 use=1 if body.signal == "good" else 0,
                 noise=1 if body.signal == "bad" else 0,
             )
+            if body.session_source:
+                simba.memory.usage_events.record(
+                    memory_id,
+                    body.session_source,
+                    "use" if body.signal == "good" else "noise",
+                    now=now,
+                )
             rows = simba.memory.usage.get_many([memory_id])
             return rows[memory_id].feedback_score if memory_id in rows else 0.0
 

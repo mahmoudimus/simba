@@ -105,6 +105,8 @@ def run_maintenance(
 
     result["episodes"] = _run_episodes(cwd, daemon_url, dry_run)
     result["reflection"] = _run_reflection(cwd, daemon_url, dry_run)
+    result["promotions"] = _count_promotion_candidates(cwd, cfg)
+    result["tempfiles"] = _sweep_session_tempfiles(now=now, cfg=cfg, dry_run=dry_run)
 
     # Forgetting-run tracker (spec 33 v2 rule R5, hebb-mind borrow): every
     # pass appends its summary so health becomes a plottable trend, not just
@@ -163,6 +165,91 @@ def _adjudicate_supersessions(
         "max_age_days": max_age_days,
         "dry_run": dry_run,
     }
+
+
+def _count_promotion_candidates(cwd: pathlib.Path, cfg: typing.Any) -> dict:
+    """Stuck-candidate sweep (spec 33 v2, MemOS borrow).
+
+    The promotion surface is otherwise query-time-only: a memory whose stored
+    counters already qualify but that stops being recalled never re-enters
+    any touch path and never surfaces. Recomputing from STORED counters every
+    heartbeat closes that trap; the count lands in ``lastMaintenance``, the
+    run log, and the boot digest. Read-only — safe in shadow.
+    """
+    try:
+        import simba.db
+        import simba.memory.usage
+
+        min_uses = int(getattr(cfg, "promotion_min_uses", 3))
+        max_ratio = float(getattr(cfg, "promotion_max_noise_ratio", 0.5))
+        with simba.db.connect(cwd):
+            rows = simba.memory.usage.MemoryUsage.select().where(
+                (simba.memory.usage.MemoryUsage.use_count >= min_uses)
+                & (simba.memory.usage.MemoryUsage.dormant == False)  # noqa: E712
+            )
+            candidates = sum(
+                1
+                for row in rows
+                if not (
+                    row.use_count > 0 and (row.noise_count / row.use_count) >= max_ratio
+                )
+            )
+        return {"candidates": candidates}
+    except Exception:
+        logger.debug("[maintenance] promotion count failed", exc_info=True)
+        return {"error": True}
+
+
+# Per-session flag files the hooks strew across the tempdir (guardian flags,
+# usage-signal records). Anything not matching these prefixes is never touched.
+_SESSION_FLAG_PREFIXES = (
+    "claude-usage-turn-",
+    "claude-usage-session-",
+    "claude-engagement-",
+    "claude-rules-signal-",
+    "claude-preflight-",
+    "claude-mandate-armed-",
+)
+
+
+def _session_tempdir() -> pathlib.Path:
+    import pathlib as _pathlib
+    import tempfile
+
+    return _pathlib.Path(tempfile.gettempdir())
+
+
+def _sweep_session_tempfiles(*, now: float, cfg: typing.Any, dry_run: bool) -> dict:
+    """Session-tempfile TTL (spec 33 v2 rule R6).
+
+    The audit found 827 stale engagement flags in the tempdir; the usage
+    records now join them. Files with known session-flag prefixes older than
+    ``session_tempfile_max_age_days`` are deleted on apply passes (shadow
+    counts them). 0 disables.
+    """
+    max_age_days = float(getattr(cfg, "session_tempfile_max_age_days", 7.0) or 0.0)
+    if max_age_days <= 0:
+        return {"skipped": True}
+    cutoff = now - max_age_days * 86400.0
+    stale = 0
+    deleted = 0
+    try:
+        for path in _session_tempdir().iterdir():
+            if not any(path.name.startswith(p) for p in _SESSION_FLAG_PREFIXES):
+                continue
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    continue
+                stale += 1
+                if not dry_run:
+                    path.unlink(missing_ok=True)
+                    deleted += 1
+            except OSError:
+                continue
+    except OSError:
+        logger.debug("[maintenance] tempfile sweep failed", exc_info=True)
+        return {"error": True}
+    return {"stale": stale, "deleted": deleted, "dry_run": dry_run}
 
 
 def _run_episodes(cwd: pathlib.Path, daemon_url: str, dry_run: bool) -> dict:

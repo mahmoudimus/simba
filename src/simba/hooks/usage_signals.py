@@ -206,14 +206,17 @@ def process_turn_outcome(session_id: str, response: str, cfg) -> None:
         min_overlap=getattr(cfg, "citation_min_term_overlap", 2),
     )
     for mid in used:
-        memory_client.post_feedback(mid, "good")
+        memory_client.post_feedback(mid, "good", session=session_id)
     mark_used(session_id, used)
     reset_turn(session_id)
     for mid in sweep_noise(
         session_id, min_injects=getattr(cfg, "noise_min_injects", 2)
     ):
         memory_client.post_feedback(
-            mid, "bad", weight=getattr(cfg, "noise_feedback_weight", 0.1)
+            mid,
+            "bad",
+            weight=getattr(cfg, "noise_feedback_weight", 0.1),
+            session=session_id,
         )
 
 
