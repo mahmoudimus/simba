@@ -6,6 +6,7 @@ gathers tailor session context, outputs combined additionalContext.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import subprocess
 import time
@@ -62,13 +63,43 @@ def _auto_start_daemon() -> bool:
     return False
 
 
-def _lifecycle_nudges(cfg) -> str:
+def _curated_import_nudge(cwd: pathlib.Path | None) -> str:
+    """Nudge when the curated re-import bridge (spec 33 R4) is stale.
+
+    ``simba memory import-curated --run`` stamps ``.simba/curated-import.json``
+    under the target project with the curated dir + import time. If that
+    dir's MEMORY.md has since been touched, the daemon's mirror of the
+    curated layer is out of date. Missing marker, missing MEMORY.md, or
+    corrupt/short JSON all resolve to "" — this must never raise, since it is
+    called unconditionally from ``_lifecycle_nudges``.
+    """
+    if cwd is None:
+        return ""
+    marker_path = pathlib.Path(cwd) / ".simba" / "curated-import.json"
+    try:
+        marker = json.loads(marker_path.read_text())
+        curated_dir = marker["dir"]
+        last_import_at = float(marker["last_import_at"])
+        memory_md_mtime = (pathlib.Path(curated_dir) / "MEMORY.md").stat().st_mtime
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    if memory_md_mtime <= last_import_at:
+        return ""
+    return (
+        "[Lifecycle] curated memory changed since last import — run: "
+        f"simba memory import-curated --dir {curated_dir} --run"
+    )
+
+
+def _lifecycle_nudges(cfg, cwd: pathlib.Path | None = None) -> str:
     """One-glance lifecycle state at session start (spec 33 Phase 5).
 
     A line for the latest maintenance heartbeat (so shadow-mode results are
-    seen, not buried in daemon logs) and one for promotion candidates
-    awaiting review. Two sub-second local GETs; default-off ⇒ "" and zero
-    HTTP; fail-soft on any daemon trouble.
+    seen, not buried in daemon logs), one for promotion candidates awaiting
+    review, and one for a stale curated re-import (spec 33 R4). Two
+    sub-second local GETs plus a couple of local stat() calls; default-off ⇒
+    "" and zero HTTP/filesystem; fail-soft on any daemon or filesystem
+    trouble.
     """
     if not getattr(cfg, "session_start_lifecycle_nudges", False):
         return ""
@@ -111,35 +142,39 @@ def _lifecycle_nudges(cfg) -> str:
             inbox.append(f"{gap_count} knowledge gap(s) — `simba memory gaps`")
         if inbox:
             lines.append("[Lifecycle] inbox: " + " | ".join(inbox))
-        return "\n".join(lines)
+    else:
+        try:
+            resp = httpx.get(f"{base}/stats", timeout=1.0)
+            if resp.status_code == 200:
+                last = resp.json().get("lastMaintenance") or {}
+                if last:
+                    decay = last.get("decay") or {}
+                    mode = "apply" if last.get("apply") else "shadow"
+                    lines.append(
+                        f"[Lifecycle] last maintenance {last.get('at', '?')} "
+                        f"({mode}): decay updated={decay.get('updated', 0)} "
+                        f"dormant={decay.get('newly_dormant', 0)}"
+                    )
+        except (httpx.HTTPError, ValueError):
+            pass
+        try:
+            resp = httpx.get(
+                f"{base}/promotions/candidates", params={"limit": 1}, timeout=1.0
+            )
+            if resp.status_code == 200:
+                total = int(resp.json().get("total", 0))
+                if total:
+                    lines.append(
+                        f"[Lifecycle] {total} promotion candidate(s) — "
+                        "`simba memory promote` to review"
+                    )
+        except (httpx.HTTPError, ValueError, TypeError):
+            pass
 
-    try:
-        resp = httpx.get(f"{base}/stats", timeout=1.0)
-        if resp.status_code == 200:
-            last = resp.json().get("lastMaintenance") or {}
-            if last:
-                decay = last.get("decay") or {}
-                mode = "apply" if last.get("apply") else "shadow"
-                lines.append(
-                    f"[Lifecycle] last maintenance {last.get('at', '?')} "
-                    f"({mode}): decay updated={decay.get('updated', 0)} "
-                    f"dormant={decay.get('newly_dormant', 0)}"
-                )
-    except (httpx.HTTPError, ValueError):
-        pass
-    try:
-        resp = httpx.get(
-            f"{base}/promotions/candidates", params={"limit": 1}, timeout=1.0
-        )
-        if resp.status_code == 200:
-            total = int(resp.json().get("total", 0))
-            if total:
-                lines.append(
-                    f"[Lifecycle] {total} promotion candidate(s) — "
-                    "`simba memory promote` to review"
-                )
-    except (httpx.HTTPError, ValueError, TypeError):
-        pass
+    curated_line = _curated_import_nudge(cwd)
+    if curated_line:
+        lines.append(curated_line)
+
     return "\n".join(lines)
 
 
@@ -246,10 +281,11 @@ def run(hook_input: dict) -> CanonicalResult:
                 timeout=1.0,
             )
 
-        # Lifecycle nudges (spec 33 Phase 5): heartbeat + promotion inbox.
-        # Default-off → "" (byte-identical). Fail-soft.
+        # Lifecycle nudges (spec 33 Phase 5): heartbeat + promotion inbox +
+        # stale curated re-import (Phase 5 + R4). Default-off → "" (byte-
+        # identical). Fail-soft.
         with contextlib.suppress(Exception):
-            nudges = _lifecycle_nudges(_hooks_cfg())
+            nudges = _lifecycle_nudges(_hooks_cfg(), cwd=cwd)
             if nudges:
                 parts.append(nudges)
 

@@ -1516,6 +1516,89 @@ def test_memory_import_curated_requires_dir(capsys) -> None:
     assert "Usage" in capsys.readouterr().err
 
 
+def test_memory_import_curated_run_writes_marker(tmp_path, monkeypatch, capsys) -> None:
+    """Spec 33 R4: a successful --run stamps .simba/curated-import.json with
+    the curated dir + import time, so SessionStart can nudge a re-import once
+    the curated MEMORY.md changes again."""
+    import time as time_mod
+
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"id": "mem_new", "status": "stored"}
+
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=0.0: _Resp())
+    before = time_mod.time()
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir), "--run"]
+    )
+    after = time_mod.time()
+    assert rc == 0
+
+    marker_path = project_dir / ".simba" / "curated-import.json"
+    assert marker_path.exists()
+    marker = json.loads(marker_path.read_text())
+    assert marker["dir"] == str(tmp_path.resolve())
+    assert before <= marker["last_import_at"] <= after
+
+
+def test_memory_import_curated_dry_run_does_not_write_marker(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    def _boom(*a, **kw):  # pragma: no cover - must not be reached
+        raise AssertionError("dry run must not POST")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir)]
+    )
+    assert rc == 0
+    assert not (project_dir / ".simba" / "curated-import.json").exists()
+
+
+def test_memory_import_curated_partial_errors_does_not_write_marker(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A run with any store errors isn't "successful" — skip the marker so
+    the SessionStart nudge keeps firing until a clean run actually lands."""
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, json=None, timeout=0.0: (_ for _ in ()).throw(
+            httpx.ConnectError("refused")
+        ),
+    )
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir), "--run"]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "errors 2 (of 2)" in out
+    assert not (project_dir / ".simba" / "curated-import.json").exists()
+
+
 def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
     import httpx
 

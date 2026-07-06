@@ -6,6 +6,8 @@ promotion candidates awaiting review. Default-off → "" and zero HTTP.
 
 from __future__ import annotations
 
+import json
+
 import simba.hooks.config as hooks_config
 import simba.hooks.session_start as session_start
 
@@ -126,3 +128,101 @@ def test_nudges_digest_quiet_when_empty(monkeypatch) -> None:
 
     monkeypatch.setattr(session_start.httpx, "get", fake_get)
     assert session_start._lifecycle_nudges(cfg) == ""
+
+
+def _quiet_digest_get(url, params=None, timeout=0.0):
+    """A /digest response with nothing to report — isolates the curated-import
+    nudge (spec 33 R4) from the heartbeat/promotion lines in the tests below."""
+    return _Resp(
+        {
+            "heartbeat": None,
+            "promotions": {"total": 0, "top": []},
+            "supersessions": {"pending": 0},
+            "gaps": {"total": 0, "top": []},
+        }
+    )
+
+
+def test_curated_nudge_present_when_marker_stale(tmp_path, monkeypatch) -> None:
+    """Spec 33 R4: MEMORY.md touched after the marker's last_import_at means
+    the curated bridge is out of date — nudge a re-import."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    curated_dir = tmp_path / "curated"
+    curated_dir.mkdir()
+    memory_md = curated_dir / "MEMORY.md"
+    memory_md.write_text("# Memory Index\n")
+    stamp = memory_md.stat().st_mtime
+
+    project_dir = tmp_path / "project"
+    simba_dir = project_dir / ".simba"
+    simba_dir.mkdir(parents=True)
+    (simba_dir / "curated-import.json").write_text(
+        json.dumps({"dir": str(curated_dir), "last_import_at": stamp - 100})
+    )
+
+    text = session_start._lifecycle_nudges(cfg, cwd=project_dir)
+    assert "curated memory changed since last import" in text
+    assert str(curated_dir) in text
+    assert "import-curated --dir" in text
+
+
+def test_curated_nudge_absent_when_marker_fresh(tmp_path, monkeypatch) -> None:
+    """The mirror image: last_import_at AFTER MEMORY.md's mtime -> no nudge."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    curated_dir = tmp_path / "curated"
+    curated_dir.mkdir()
+    memory_md = curated_dir / "MEMORY.md"
+    memory_md.write_text("# Memory Index\n")
+    stamp = memory_md.stat().st_mtime
+
+    project_dir = tmp_path / "project"
+    simba_dir = project_dir / ".simba"
+    simba_dir.mkdir(parents=True)
+    (simba_dir / "curated-import.json").write_text(
+        json.dumps({"dir": str(curated_dir), "last_import_at": stamp + 100})
+    )
+
+    assert session_start._lifecycle_nudges(cfg, cwd=project_dir) == ""
+
+
+def test_curated_nudge_absent_when_marker_missing(tmp_path, monkeypatch) -> None:
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    assert session_start._lifecycle_nudges(cfg, cwd=tmp_path) == ""
+
+
+def test_curated_nudge_absent_when_marker_corrupt(tmp_path, monkeypatch) -> None:
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    simba_dir = tmp_path / ".simba"
+    simba_dir.mkdir()
+    (simba_dir / "curated-import.json").write_text("not json{{{")
+
+    assert session_start._lifecycle_nudges(cfg, cwd=tmp_path) == ""
+
+
+def test_curated_nudge_absent_when_marker_missing_keys(tmp_path, monkeypatch) -> None:
+    """Structurally valid JSON but missing the expected fields -> no crash."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    simba_dir = tmp_path / ".simba"
+    simba_dir.mkdir()
+    (simba_dir / "curated-import.json").write_text(json.dumps({"unexpected": True}))
+
+    assert session_start._lifecycle_nudges(cfg, cwd=tmp_path) == ""
+
+
+def test_curated_nudge_absent_when_cwd_is_none(monkeypatch) -> None:
+    """No cwd (e.g. dispatch inside the daemon with no payload cwd) -> no nudge,
+    no filesystem access attempted."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    assert session_start._lifecycle_nudges(cfg, cwd=None) == ""

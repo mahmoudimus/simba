@@ -2485,6 +2485,26 @@ def _memory_import_curated(args: list[str]) -> int:
         f"import-curated: stored {stored}, duplicates {duplicates}, "
         f"errors {errors} (of {len(plan)})"
     )
+
+    # Re-import cadence marker (spec 33 R4): on a fully clean --run, stamp
+    # dir + time so SessionStart can nudge a re-import once the curated
+    # MEMORY.md changes again — the bridge stays fresh without a human
+    # remembering it. A cadence marker, not a memory store: safe (and
+    # intended) to overwrite every clean run. Skipped when any item errored
+    # (daemon down, etc.) so the nudge keeps firing until a run truly lands.
+    # Best-effort — a marker write failure must never flip the exit code.
+    if errors == 0:
+        with contextlib.suppress(Exception):
+            target_root = (
+                pathlib.Path(project_path).expanduser()
+                if project_path
+                else pathlib.Path.cwd()
+            )
+            marker_dir = target_root / ".simba"
+            marker_dir.mkdir(parents=True, exist_ok=True)
+            marker = {"dir": str(root.resolve()), "last_import_at": time.time()}
+            (marker_dir / "curated-import.json").write_text(json.dumps(marker))
+
     return 0 if errors == 0 else 1
 
 
