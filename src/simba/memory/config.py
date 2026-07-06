@@ -325,6 +325,22 @@ class MemoryConfig:
     # Weight of the strength term in composite_rescore. Missing usage rows score
     # 1.0 (no penalty for never-recalled memories).
     score_weight_strength: float = 0.4
+    # Usage-influence ranking (cognee borrow: feedback-weighted edges — the one
+    # non-redundant idea in cognee's graph-completion stack once the rest is
+    # ruled out as our already-killed graph-fold; docs/plans/08-borrow-survey.md).
+    # Blends a per-memory usage-QUALITY signal into composite_rescore, distinct
+    # from score_weight_strength (recency/access-driven decay): signal =
+    # (use_count - noise_count) / max(1, use_count + noise_count), in [-1, 1];
+    # mapped = (signal + 1) / 2, in [0, 1]; composite = composite * (1 - w) +
+    # mapped * w. Simple, bounded, monotonic in the signal. 0.0 (default) is an
+    # exact no-op: composite_rescore never reads usage_map for this term, and
+    # the recall call site never loads usage rows for it (lazy — see
+    # hybrid.py's composite-rescore section). Data-gated: enable only after
+    # >= 1 week of accumulated usage signals; graduate default per the
+    # SoTA-lever rule via a real re-runnable A/B on LME-S + LoCoMo (guard:
+    # HaluMem); note somnigraph finding — injection-suppression variants must
+    # beat always-inject to graduate.
+    usage_influence_weight: float = 0.0
     # When True, dormant memories are excluded from recall results.
     dormant_filter_enabled: bool = True
     # Default delta applied per good/bad feedback signal. Overridable per-call.

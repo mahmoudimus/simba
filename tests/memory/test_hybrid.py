@@ -12,6 +12,7 @@ import simba.memory.config
 import simba.memory.fts as fts
 import simba.memory.hybrid as hybrid
 import simba.memory.recall_plan as recall_plan
+import simba.memory.usage
 
 
 def _vec(mid: str, sim: float) -> dict:
@@ -572,6 +573,82 @@ class TestScoringWiring:
             cfg=cfg,
         )
         assert [r["id"] for r in results] == ["lo", "hi"]  # recency flipped order
+
+
+class TestUsageInfluenceWiring:
+    """usage_influence_weight must lazy-load the usage sidecar (zero extra DB
+    reads when off) — mirrors score_weight_strength's existing gate."""
+
+    @staticmethod
+    def _patch_vec(monkeypatch) -> None:
+        async def fake_vec(table, emb, min_sim, max_res, filters):
+            return [_vec("a", 0.9), _vec("b", 0.8)]
+
+        monkeypatch.setattr("simba.memory.vector_db.search_memories", fake_vec)
+
+    @staticmethod
+    def _track_get_many(monkeypatch) -> list[list[str]]:
+        calls: list[list[str]] = []
+        real_get_many = simba.memory.usage.get_many
+
+        def tracking(ids):
+            calls.append(list(ids))
+            return real_get_many(ids)
+
+        monkeypatch.setattr("simba.memory.usage.get_many", tracking)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_zero_weight_skips_usage_load(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        self._patch_vec(monkeypatch)
+        calls = self._track_get_many(monkeypatch)
+        cfg = simba.memory.config.MemoryConfig(
+            scoring_enabled=True,
+            score_weight_strength=0.0,
+            usage_influence_weight=0.0,
+            dormant_filter_enabled=False,  # isolate: don't let the dormant
+            # filter's own get_many call contaminate this assertion.
+        )
+        await hybrid.hybrid_search(
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
+            cwd=tmp_path,
+        )
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_positive_weight_loads_usage_map(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        self._patch_vec(monkeypatch)
+        calls = self._track_get_many(monkeypatch)
+        cfg = simba.memory.config.MemoryConfig(
+            scoring_enabled=True,
+            score_weight_strength=0.0,
+            usage_influence_weight=0.5,
+            dormant_filter_enabled=False,
+        )
+        await hybrid.hybrid_search(
+            None,
+            None,
+            [0.1] * 768,
+            "q",
+            min_similarity=0.35,
+            max_results=5,
+            filters={},
+            cfg=cfg,
+            cwd=tmp_path,
+        )
+        assert len(calls) == 1
+        assert sorted(calls[0]) == ["a", "b"]
 
 
 class _FakeRerankClient:

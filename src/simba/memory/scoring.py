@@ -104,6 +104,20 @@ def _recency(created_at: str, now: float, halflife_days: float) -> float:
     return 0.5 ** (age_days / halflife_days)
 
 
+def _usage_signal(row: typing.Any) -> float:
+    """Usage-quality signal in [-1, 1]: (use_count - noise_count) / max(1, sum).
+
+    A missing row (never recalled/judged) or a row with no use/noise history
+    scores 0.0 (neutral) — matches the "no penalty for never-recalled" spirit
+    of the strength term.
+    """
+    if row is None:
+        return 0.0
+    use = float(getattr(row, "use_count", 0) or 0)
+    noise = float(getattr(row, "noise_count", 0) or 0)
+    return (use - noise) / max(1.0, use + noise)
+
+
 def composite_rescore(
     records: list[dict[str, typing.Any]],
     *,
@@ -123,6 +137,24 @@ def composite_rescore(
     is non-zero and a row exists, its strength enters the blend; a missing row
     scores ``1.0`` (no penalty). Backward-compatible: omitting ``usage_map``
     leaves the legacy relevance/recency/importance behaviour unchanged.
+
+    ``usage_influence_weight`` (cognee borrow — feedback-weighted edges, the
+    non-redundant idea from cognee's graph-completion stack; see
+    docs/plans/08-borrow-survey.md) additionally blends a usage-QUALITY signal
+    on top of the relevance/recency/importance/strength composite above:
+    ``signal = (use_count - noise_count) / max(1, use_count + noise_count)``
+    in ``[-1, 1]``; ``mapped = (signal + 1) / 2`` in ``[0, 1]``; final
+    ``score = composite * (1 - w) + mapped * w``. Simple linear interpolation,
+    bounded and monotonic in the signal — a heavy-``use`` memory always ranks
+    above an otherwise-equal heavy-``noise`` one once ``w > 0``. A missing row
+    maps to a neutral 0.5 (same "no penalty" spirit as the strength term).
+    DEFAULT 0.0 is an exact SHORT-CIRCUIT: ``usage_map`` is never read for
+    this term (no sidecar access), and the composite score is byte-identical
+    to the pre-lever function. Data-gated: enable only after >= 1 week of
+    accumulated usage signals; graduate default per the SoTA-lever rule via a
+    real re-runnable A/B on LME-S + LoCoMo (guard: HaluMem); note somnigraph
+    finding — injection-suppression variants must beat always-inject to
+    graduate.
     """
     if not getattr(cfg, "scoring_enabled", False) or not records:
         return records
@@ -131,6 +163,7 @@ def composite_rescore(
     w_rec = float(getattr(cfg, "score_weight_recency", 0.0))
     w_imp = float(getattr(cfg, "score_weight_importance", 0.0))
     w_str = float(getattr(cfg, "score_weight_strength", 0.0))
+    w_usage = float(getattr(cfg, "usage_influence_weight", 0.0))
     halflife = float(getattr(cfg, "recency_halflife_days", 90.0))
 
     relevance = _normalize([float(r.get("rrf_score", 0.0)) for r in records])
@@ -145,6 +178,10 @@ def composite_rescore(
         else:
             strength_val = 1.0
         composite = w_rel * rel + w_rec * rec_score + w_imp * imp + w_str * strength_val
+        if w_usage > 0 and usage_map is not None:
+            usage_row = usage_map.get(rec.get("id", ""), None)
+            mapped = (_usage_signal(usage_row) + 1.0) / 2.0
+            composite = composite * (1.0 - w_usage) + mapped * w_usage
         rec["composite_score"] = round(composite, 6)
         # idx as a stable tiebreaker preserves the incoming (rrf) order on ties.
         scored.append((composite, idx, rec))

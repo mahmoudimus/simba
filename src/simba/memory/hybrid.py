@@ -477,11 +477,13 @@ async def hybrid_search(
                 )
 
     # Optional composite re-scoring: blend RRF relevance with recency +
-    # importance + strength over the full fused candidate set, then truncate.
+    # importance + strength (+ usage-influence) over the full fused candidate
+    # set, then truncate.
     if getattr(cfg, "scoring_enabled", False):
         usage_map: dict[str, typing.Any] = {}
         w_str = float(getattr(cfg, "score_weight_strength", 0.0))
-        if w_str and cwd is not None:
+        w_usage = float(getattr(cfg, "usage_influence_weight", 0.0))
+        if (w_str or w_usage > 0) and cwd is not None:
 
             def _load_usage() -> dict[str, typing.Any]:
                 ids = [r.get("id") for r in fused if r.get("id")]
