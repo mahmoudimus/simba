@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import logging
 import time
 import typing
@@ -106,6 +107,7 @@ def run_maintenance(
     result["episodes"] = _run_episodes(cwd, daemon_url, dry_run)
     result["reflection"] = _run_reflection(cwd, daemon_url, dry_run)
     result["promotions"] = _count_promotion_candidates(cwd, cfg)
+    result["repeat_failures"] = _cluster_repeat_failures(cwd, cfg)
     result["tempfiles"] = _sweep_session_tempfiles(now=now, cfg=cfg, dry_run=dry_run)
 
     # Forgetting-run tracker (spec 33 v2 rule R5, hebb-mind borrow): every
@@ -197,6 +199,92 @@ def _count_promotion_candidates(cwd: pathlib.Path, cfg: typing.Any) -> dict:
         return {"candidates": candidates}
     except Exception:
         logger.debug("[maintenance] promotion count failed", exc_info=True)
+        return {"error": True}
+
+
+def _parse_reflection_ts(ts: str) -> float | None:
+    """Parse a reflections row's ``ts`` (``%Y-%m-%dT%H:%M:%SZ``) to epoch secs.
+
+    ``None`` on any malformed value — the row still counts toward
+    occurrences/sessions, it just can't contribute to the span computation.
+    """
+    try:
+        return (
+            datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+            .replace(tzinfo=datetime.UTC)
+            .timestamp()
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _cluster_repeat_failures(cwd: pathlib.Path, cfg: typing.Any) -> dict:
+    """Reflections-ledger reader (spec 33 v2 rule R3).
+
+    The tailor-style ``reflections`` table (normalized failure captures piped
+    in by the Stop hook's error-capture pipeline) has been write-only since
+    inception — 1,100+ rows, never read. READ-ONLY: groups rows by their
+    already-normalized ``signature`` column and flags a REPEAT FAILURE when
+    the same signature recurs across >= ``repeat_failure_min_sessions``
+    distinct sessions AND its first/last occurrence spans
+    >= ``repeat_failure_min_days_apart`` days. Rows with no attributed
+    session (blank ``session_id`` — captures written before this reader
+    existed) never count toward the distinct-session tally, so historical
+    data can only under-count, never falsely cluster. Never writes anything
+    (no store mutation, no auto-promotion) — runs on every heartbeat
+    regardless of ``maintenance_apply`` (there is nothing to gate) and
+    surfaces its top clusters as rule-DRAFT candidates only.
+    """
+    try:
+        import simba.db
+        import simba.tailor.hook as tailor_hook
+
+        min_sessions = int(getattr(cfg, "repeat_failure_min_sessions", 2))
+        min_days_apart = float(getattr(cfg, "repeat_failure_min_days_apart", 3.0))
+        top_n = int(getattr(cfg, "repeat_failure_top_n", 3))
+
+        with simba.db.connect(cwd):
+            rows = list(tailor_hook.Reflection.select())
+
+        groups: dict[str, list[typing.Any]] = {}
+        for row in rows:
+            signature = (row.signature or "").strip()
+            if not signature:
+                continue
+            groups.setdefault(signature, []).append(row)
+
+        clusters: list[dict] = []
+        for signature, group_rows in groups.items():
+            sessions = {
+                row.session_id.strip()
+                for row in group_rows
+                if (row.session_id or "").strip()
+            }
+            timestamps = sorted(
+                t
+                for t in (_parse_reflection_ts(row.ts) for row in group_rows)
+                if t is not None
+            )
+            span_days = (
+                (timestamps[-1] - timestamps[0]) / 86400.0
+                if len(timestamps) >= 2
+                else 0.0
+            )
+            if len(sessions) >= min_sessions and span_days >= min_days_apart:
+                clusters.append(
+                    {
+                        "signature": signature,
+                        "error_type": group_rows[0].error_type,
+                        "sessions": len(sessions),
+                        "span_days": round(span_days, 2),
+                        "occurrences": len(group_rows),
+                    }
+                )
+
+        clusters.sort(key=lambda c: (-c["sessions"], -c["span_days"], c["signature"]))
+        return {"clusters": len(clusters), "top": clusters[:top_n]}
+    except Exception:
+        logger.debug("[maintenance] repeat-failure clustering failed", exc_info=True)
         return {"error": True}
 
 

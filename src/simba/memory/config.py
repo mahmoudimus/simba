@@ -527,6 +527,24 @@ class MemoryConfig:
     # Derived ops telemetry (like the FTS mirror), a few hundred bytes per
     # pass — default ON; disable to write nothing.
     maintenance_log_enabled: bool = True
+    # Reflections-ledger reader (spec 33 v2 rule R3): the tailor-style
+    # `reflections` sqlite table (normalized failure captures from the Stop
+    # hook's error-capture pipeline) has been write-only since inception —
+    # 1,100+ rows, never read. READ-ONLY clustering pass (safe on every
+    # heartbeat regardless of maintenance_apply: nothing is written, so there
+    # is nothing to gate) groups rows by their stored `signature` and flags a
+    # REPEAT FAILURE when the same signature recurs across
+    # >= repeat_failure_min_sessions distinct sessions AND spans
+    # >= repeat_failure_min_days_apart days between its first and last
+    # occurrence. Surfaced (never auto-stored/auto-promoted) in the
+    # maintenance result (`repeat_failures`) and GET /digest
+    # (`repeatFailures`) as rule-draft candidates for a human to promote.
+    repeat_failure_min_sessions: int = 2
+    repeat_failure_min_days_apart: float = 3.0
+    # Cap on clusters surfaced in `top` (both the maintenance result and
+    # GET /digest); `clusters` always reports the true total, so nothing is
+    # silently hidden by the cap.
+    repeat_failure_top_n: int = 3
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

@@ -42,9 +42,37 @@ def _cfg(**kw):
         promotion_min_uses=3,
         promotion_max_noise_ratio=0.5,
         session_tempfile_max_age_days=0.0,
+        repeat_failure_min_sessions=2,
+        repeat_failure_min_days_apart=3.0,
+        repeat_failure_top_n=3,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
+
+
+def _seed_reflection(
+    *,
+    id_: str,
+    ts_epoch: float,
+    signature: str,
+    session_id: str,
+    error_type: str = "error",
+) -> None:
+    """Insert a reflections row directly (bypassing the Stop-hook capture
+    pipeline) so clustering tests can control signature/session/timing."""
+    import time as _time
+
+    import simba.tailor.hook as tailor_hook
+
+    tailor_hook.Reflection.create(
+        id=id_,
+        ts=_time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(ts_epoch)),
+        error_type=error_type,
+        snippet="",
+        context="{}",
+        signature=signature,
+        session_id=session_id,
+    )
 
 
 def test_maintenance_reports_promotion_candidates(tmp_path: pathlib.Path) -> None:
@@ -58,6 +86,146 @@ def test_maintenance_reports_promotion_candidates(tmp_path: pathlib.Path) -> Non
         now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
     )
     assert result["promotions"]["candidates"] == 1
+
+
+def test_maintenance_reports_repeat_failure_cluster(tmp_path: pathlib.Path) -> None:
+    """Spec 33 v2 rule R3: the reflections ledger (tailor-style failure
+    captures) has been write-only since inception. A normalized error
+    (``signature``) recurring across >=2 distinct sessions >=3 days apart is
+    a rule candidate by definition."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 5 * _DAY,
+            signature="error-cannot-find-module",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-cannot-find-module",
+            session_id="session-b",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 1
+    top = result["repeat_failures"]["top"][0]
+    assert top["signature"] == "error-cannot-find-module"
+    assert top["sessions"] == 2
+    assert top["span_days"] >= 3.0
+    assert top["occurrences"] == 2
+
+
+def test_repeat_failure_excludes_single_session(tmp_path: pathlib.Path) -> None:
+    """Same signature, same session, wide time span: still just ONE session
+    reporting the failure — not a cross-session repeat."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 10 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 0
+    assert result["repeat_failures"]["top"] == []
+
+
+def test_repeat_failure_excludes_short_span(tmp_path: pathlib.Path) -> None:
+    """Two distinct sessions but under the 3-day span floor: not yet a
+    REPEAT failure (could just be one bad afternoon)."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 0.5 * _DAY,
+            signature="error-timeout",
+            session_id="session-b",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 0
+
+
+def test_repeat_failure_clustering_ignores_maintenance_apply(
+    tmp_path: pathlib.Path,
+) -> None:
+    """READ-ONLY: clustering never writes, so (unlike decay/hygiene/
+    adjudication) it must report identically in shadow and apply passes."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 5 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-b",
+        )
+    shadow = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    applied = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True),
+        daemon_url="http://unused",
+    )
+    assert shadow["repeat_failures"] == applied["repeat_failures"]
+    assert shadow["repeat_failures"]["clusters"] == 1
+
+
+def test_repeat_failure_top_bounded(tmp_path: pathlib.Path) -> None:
+    """``top`` is capped at repeat_failure_top_n; ``clusters`` always reports
+    the true total so nothing is silently hidden."""
+    with simba.db.connect(tmp_path):
+        for i in range(5):
+            sig = f"error-case-{i}"
+            _seed_reflection(
+                id_=f"{sig}-a",
+                ts_epoch=_NOW - 10 * _DAY,
+                signature=sig,
+                session_id="session-a",
+            )
+            _seed_reflection(
+                id_=f"{sig}-b",
+                ts_epoch=_NOW - 1 * _DAY,
+                signature=sig,
+                session_id="session-b",
+            )
+    result = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(repeat_failure_top_n=3),
+        daemon_url="http://unused",
+    )
+    assert result["repeat_failures"]["clusters"] == 5
+    assert len(result["repeat_failures"]["top"]) == 3
+
+
+def test_repeat_failure_no_reflections_reports_zero(tmp_path: pathlib.Path) -> None:
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"] == {"clusters": 0, "top": []}
 
 
 def test_maintenance_tempfile_sweep_shadow_then_apply(

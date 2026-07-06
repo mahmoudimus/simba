@@ -18,6 +18,8 @@ import simba.memory.fts
 import simba.memory.server
 import simba.memory.supersession as supersession
 import simba.memory.usage as usage
+import simba.memory.usage_events
+import simba.tailor.hook as tailor_hook
 
 
 def _client(tmp_path, lance_table, mock_embed, cfg) -> httpx.AsyncClient:
@@ -73,6 +75,47 @@ async def test_digest_aggregates_lifecycle_state(
 
 
 @pytest.mark.asyncio
+async def test_digest_surfaces_repeat_failures(
+    tmp_path, lance_table, mock_embed
+) -> None:
+    """Spec 33 v2 rule R3: the reflections ledger (tailor-style failure
+    captures) is write-only until now — a normalized error recurring across
+    >=2 distinct sessions >=3 days apart surfaces as a rule-draft candidate."""
+    import time as _time
+
+    cfg = simba.memory.config.MemoryConfig()
+    with simba.db.connect(tmp_path):
+        tailor_hook.Reflection.create(
+            id="r1",
+            ts=_time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(1.0)),
+            error_type="error",
+            snippet="",
+            context="{}",
+            signature="error-cannot-find-module",
+            session_id="session-a",
+        )
+        tailor_hook.Reflection.create(
+            id="r2",
+            ts=_time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(1.0 + 5 * 86400.0)),
+            error_type="error",
+            snippet="",
+            context="{}",
+            signature="error-cannot-find-module",
+            session_id="session-b",
+        )
+
+    async with _client(tmp_path, lance_table, mock_embed, cfg) as ac:
+        resp = await ac.get("/digest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["repeatFailures"]["total"] == 1
+    top = body["repeatFailures"]["top"][0]
+    assert top["signature"] == "error-cannot-find-module"
+    assert top["sessions"] == 2
+    assert top["spanDays"] >= 3.0
+
+
+@pytest.mark.asyncio
 async def test_digest_empty_state(tmp_path, lance_table, mock_embed) -> None:
     cfg = simba.memory.config.MemoryConfig()
     async with _client(tmp_path, lance_table, mock_embed, cfg) as ac:
@@ -89,3 +132,5 @@ async def test_digest_empty_state(tmp_path, lance_table, mock_embed) -> None:
     assert body["promotions"]["total"] == 0
     assert body["supersessions"]["pending"] == 0
     assert body["gaps"]["total"] == 0
+    assert body["repeatFailures"]["total"] == 0
+    assert body["repeatFailures"]["top"] == []

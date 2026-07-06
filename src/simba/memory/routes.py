@@ -1459,6 +1459,7 @@ async def boot_digest(request: fastapi.Request) -> dict:
     def _sync() -> dict:
         import simba.db
         import simba.memory.demand
+        import simba.memory.maintenance
         import simba.memory.supersession
         import simba.memory.usage
         import simba.memory.usage_events
@@ -1506,12 +1507,29 @@ async def boot_digest(request: fastapi.Request) -> dict:
                 max_best=float(getattr(config, "demand_gap_max_best", 0.5)),
                 limit=3,
             )
+
+            repeat_failures = simba.memory.maintenance._cluster_repeat_failures(
+                cwd, config
+            )
         return {
             "promotions": {"total": len(candidates), "top": candidates[:3]},
             "supersessions": {"pending": pending},
             "gaps": {
                 "total": len(gap_rows),
                 "top": [g["query"] for g in gap_rows],
+            },
+            "repeatFailures": {
+                "total": repeat_failures.get("clusters", 0),
+                "top": [
+                    {
+                        "signature": c["signature"],
+                        "errorType": c["error_type"],
+                        "sessions": c["sessions"],
+                        "spanDays": c["span_days"],
+                        "occurrences": c["occurrences"],
+                    }
+                    for c in repeat_failures.get("top", [])
+                ],
             },
         }
 
@@ -1523,6 +1541,7 @@ async def boot_digest(request: fastapi.Request) -> dict:
             "promotions": {"total": 0, "top": []},
             "supersessions": {"pending": 0},
             "gaps": {"total": 0, "top": []},
+            "repeatFailures": {"total": 0, "top": []},
         }
     return {"heartbeat": heartbeat, **data}
 
