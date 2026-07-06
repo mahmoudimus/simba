@@ -130,6 +130,103 @@ def _thinking_transcript(tmp_path, text):
     return transcript
 
 
+class TestRecallMinQueryChars:
+    """MemOS borrow: parity with UserPromptSubmit's ``prompt_min_length`` floor.
+
+    The general thinking-block recall previously had no length floor at all
+    (deferred entirely to the daemon's similarity gate) — ``hooks.
+    recall_min_query_chars`` adds the same cheap short-circuit UserPromptSubmit
+    already has, so a near-empty thinking block never reaches the daemon.
+    """
+
+    def test_default_matches_prompt_min_length(self):
+        cfg = simba.hooks.config.HooksConfig()
+        assert cfg.recall_min_query_chars == 10
+        assert cfg.recall_min_query_chars == cfg.prompt_min_length
+
+    def test_short_thinking_skips_recall_entirely(self, tmp_path):
+        # "ok" is 2 chars, well under the 10-char default floor.
+        transcript = _thinking_transcript(tmp_path, "ok")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories"
+            ) as mock_recall,
+            unittest.mock.patch("simba.hooks.pre_tool_use._check_dedup") as mock_dedup,
+        ):
+            result = json.loads(
+                simba.hooks.pre_tool_use.main(
+                    {"tool_name": "Read", "transcript_path": str(transcript)}
+                )
+            )
+        mock_recall.assert_not_called()
+        mock_dedup.assert_not_called()  # gate short-circuits before dedup work
+        assert result["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
+
+    def test_long_enough_thinking_still_recalls(self, tmp_path):
+        # Exactly at the floor (10 chars) — inclusive boundary still recalls.
+        transcript = _thinking_transcript(tmp_path, "a" * 10)
+        memories = [{"type": "GOTCHA", "content": "at the floor", "similarity": 0.5}]
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories",
+                return_value=memories,
+            ) as mock_recall,
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            result = json.loads(
+                simba.hooks.pre_tool_use.main(
+                    {"tool_name": "Read", "transcript_path": str(transcript)}
+                )
+            )
+        mock_recall.assert_called_once()
+        ctx = result["hookSpecificOutput"].get("additionalContext", "")
+        assert "at the floor" in ctx
+
+    def test_custom_floor_configurable(self, tmp_path, monkeypatch):
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), recall_min_query_chars=50
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        # 22 chars — clears the default floor but not this raised one.
+        transcript = _thinking_transcript(tmp_path, "a fairly short thought")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories"
+            ) as mock_recall,
+            unittest.mock.patch("simba.hooks.pre_tool_use._check_dedup") as mock_dedup,
+        ):
+            simba.hooks.pre_tool_use.main(
+                {"tool_name": "Read", "transcript_path": str(transcript)}
+            )
+        mock_recall.assert_not_called()
+        mock_dedup.assert_not_called()
+
+    def test_zero_floor_disables_gate(self, tmp_path, monkeypatch):
+        # 0 = off: even a 1-char thinking block recalls (parity with
+        # prompt_min_length's own semantics, where 0 would mean "no floor").
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), recall_min_query_chars=0
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        transcript = _thinking_transcript(tmp_path, "x")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories",
+                return_value=[],
+            ) as mock_recall,
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+        ):
+            simba.hooks.pre_tool_use.main(
+                {"tool_name": "Read", "transcript_path": str(transcript)}
+            )
+        mock_recall.assert_called_once()
+
+
 class _ViolatingLLM:
     def complete_json(self, prompt):
         return {

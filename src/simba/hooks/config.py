@@ -65,8 +65,16 @@ class HooksConfig:
     task_snapshot_injection_enabled: bool = True
 
     # Pre-tool-use. General thinking-block recall defers to the daemon's
-    # intent-aware floor (memory.min_similarity / min_similarity_broad), so
-    # there is no general-recall floor here — only the strict rule gate below.
+    # intent-aware floor (memory.min_similarity / min_similarity_broad) for
+    # RELEVANCE. For LENGTH, it mirrors UserPromptSubmit's prompt_min_length
+    # (MemOS borrow, parity): a thinking snippet shorter than this never reaches
+    # the embed+recall call at all. Same default as prompt_min_length (10) and
+    # memory.demand_log_min_query_chars/search.min_query_length — an always-on
+    # sane floor rather than a measured behavior lever (it only skips
+    # near-empty queries like "ok"/"hmm" that were never going to retrieve
+    # anything useful; it doesn't change which real queries recall). 0 disables
+    # the floor entirely (byte-identical to the old unconditional recall).
+    recall_min_query_chars: int = 10
     thinking_chars: int = 1500
     dedup_ttl: int = 60
     # Context-low warning threshold, measured as transcript bytes SINCE the last

@@ -626,8 +626,18 @@ def run(hook_input: dict) -> CanonicalResult:
                 # escalated_block: the doctrine you set is the stronger signal.
                 escalated_block = directive
 
-        # General thinking-block recall (unchanged; only for the enabled tool set).
-        if tool_name in _ENABLED_TOOLS and thinking and not _check_dedup(thinking):
+        # General thinking-block recall (only for the enabled tool set). Length floor
+        # mirrors UserPromptSubmit's prompt_min_length (MemOS borrow, parity): a
+        # thinking snippet shorter than hooks.recall_min_query_chars skips the
+        # embed+recall call entirely — checked before dedup so a too-short query
+        # never touches the hash cache either.
+        min_query_chars = getattr(_hcfg, "recall_min_query_chars", 10)
+        if (
+            tool_name in _ENABLED_TOOLS
+            and thinking
+            and len(thinking) >= min_query_chars
+            and not _check_dedup(thinking)
+        ):
             project_path = cwd_str if cwd_str else None
             # Defer the cosine floor to the daemon's intent-aware selection.
             memories = simba.hooks._memory_client.recall_memories(
