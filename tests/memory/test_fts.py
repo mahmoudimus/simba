@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pathlib
+import sqlite3
 
 import pytest
 
+import simba._vendor.peewee as pw
 import simba.memory.fts as fts
 
 
@@ -146,3 +148,110 @@ class TestRebuild:
         assert fts.count() == 2
         rows = fts.search("delta", project_path="proj-1")
         assert {r["memory_id"] for r in rows} == {"m1", "m2"}
+
+
+class TestHeal:
+    """FTS5 malformed-index auto-heal (mempalace borrow)."""
+
+    def test_heal_is_exposed_and_safe_on_healthy_index(self, fts_db) -> None:
+        fts.upsert(_mem("m1", "healable rho content"))
+        fts.heal(fts._db.database)
+        rows = fts.search("rho", project_path="proj-1")
+        assert [r["memory_id"] for r in rows] == ["m1"]
+
+
+class TestMalformedIndexAutoHeal:
+    """search() heals a malformed FTS5 index and retries exactly once."""
+
+    def test_malformed_peewee_error_heals_and_retries_once(
+        self, fts_db, monkeypatch
+    ) -> None:
+        fts.upsert(_mem("m1", "sigma content here"))
+        real_execute = fts._execute
+        calls = {"execute": 0, "heal": 0}
+
+        def flaky(q):
+            calls["execute"] += 1
+            if calls["execute"] == 1:
+                raise pw.DatabaseError("database disk image is malformed")
+            return real_execute(q)
+
+        def fake_heal(path):
+            calls["heal"] += 1
+
+        monkeypatch.setattr(fts, "_execute", flaky)
+        monkeypatch.setattr(fts, "heal", fake_heal)
+
+        rows = fts.search("sigma", project_path="proj-1")
+
+        assert [r["memory_id"] for r in rows] == ["m1"]
+        assert calls["execute"] == 2
+        assert calls["heal"] == 1
+
+    def test_malformed_raw_sqlite3_error_heals_and_retries_once(
+        self, fts_db, monkeypatch
+    ) -> None:
+        fts.upsert(_mem("m1", "tau content here"))
+        real_execute = fts._execute
+        calls = {"execute": 0, "heal": 0}
+
+        def flaky(q):
+            calls["execute"] += 1
+            if calls["execute"] == 1:
+                raise sqlite3.DatabaseError("database disk image is malformed")
+            return real_execute(q)
+
+        def fake_heal(path):
+            calls["heal"] += 1
+
+        monkeypatch.setattr(fts, "_execute", flaky)
+        monkeypatch.setattr(fts, "heal", fake_heal)
+
+        rows = fts.search("tau", project_path="proj-1")
+
+        assert [r["memory_id"] for r in rows] == ["m1"]
+        assert calls["execute"] == 2
+        assert calls["heal"] == 1
+
+    def test_non_malformed_database_error_propagates_without_heal(
+        self, fts_db, monkeypatch
+    ) -> None:
+        fts.upsert(_mem("m1", "upsilon content here"))
+        calls = {"heal": 0}
+
+        def always_fails(q):
+            raise pw.DatabaseError("disk I/O error")
+
+        def fake_heal(path):
+            calls["heal"] += 1
+
+        monkeypatch.setattr(fts, "_execute", always_fails)
+        monkeypatch.setattr(fts, "heal", fake_heal)
+
+        with pytest.raises(pw.DatabaseError):
+            fts.search("upsilon", project_path="proj-1")
+
+        assert calls["heal"] == 0
+
+    def test_second_consecutive_malformed_failure_propagates(
+        self, fts_db, monkeypatch
+    ) -> None:
+        fts.upsert(_mem("m1", "phi content here"))
+        calls = {"execute": 0, "heal": 0}
+
+        def always_malformed(q):
+            calls["execute"] += 1
+            raise pw.DatabaseError("database disk image is malformed")
+
+        def fake_heal(path):
+            calls["heal"] += 1
+
+        monkeypatch.setattr(fts, "_execute", always_malformed)
+        monkeypatch.setattr(fts, "heal", fake_heal)
+
+        with pytest.raises(pw.DatabaseError):
+            fts.search("phi", project_path="proj-1")
+
+        # Exactly one retry attempt: initial call + one retry, no more.
+        assert calls["execute"] == 2
+        assert calls["heal"] == 1

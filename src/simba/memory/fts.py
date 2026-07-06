@@ -17,13 +17,17 @@ allowlist-guarded ``CREATE`` via the bound connection.
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
+import sqlite3
 import typing
 
 import simba._vendor.peewee as pw
 from simba._vendor.playhouse.sqlite_ext import FTS5Model, RowIDField, SearchField
 
 FTS_FILENAME = "memory_fts.db"
+
+logger = logging.getLogger("simba.memory.fts")
 
 _DEFAULT_TOKENIZE = "trigram"
 # Tokenizer name is interpolated into DDL (can't be a bound parameter), so it is
@@ -161,6 +165,21 @@ def rebuild(memories: typing.Iterable[dict[str, typing.Any]]) -> int:
     return n
 
 
+def heal(path: typing.Any) -> None:
+    """Repair a corrupted FTS5 keyword index in place.
+
+    Runs FTS5's built-in ``rebuild`` special command against ``path``. This
+    table carries no external ``content=`` option (see ``schema_sql``), so
+    FTS5 keeps its own copy of every indexed column in an internal shadow
+    content table; ``rebuild`` reconstructs just the inverted index from that
+    copy, without needing the LanceDB source of truth. Exposed standalone
+    (not only used by ``search``'s auto-heal) so CLI/ops tooling can repair a
+    mirror directly.
+    """
+    with connect(path):
+        _db.execute_sql("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
+
+
 def _build_match(query: str, min_token_len: int = _MIN_TOKEN_LEN) -> str:
     """Build a safe FTS5 ``MATCH`` expression: OR of quoted literal terms.
 
@@ -182,6 +201,11 @@ def _build_match(query: str, min_token_len: int = _MIN_TOKEN_LEN) -> str:
     return " OR ".join(terms)
 
 
+def _execute(q: typing.Any) -> list[typing.Any]:
+    """Realize a prepared query's rows (isolated seam for fault injection)."""
+    return list(q)
+
+
 def search(
     query: str,
     *,
@@ -198,27 +222,40 @@ def search(
     whose ``project_path`` is one of those scopes — ancestor (root) facts inherit
     down — plus global (empty-path) memories when ``include_global``. Otherwise it
     falls back to the strict exact ``project_path`` match. ``types`` filters by
-    memory type. Never raises: a malformed ``MATCH`` or missing table yields ``[]``.
+    memory type.
+
+    A malformed ``MATCH`` expression (no usable terms) yields ``[]``. A corrupted
+    index (a ``DatabaseError`` whose message mentions "malformed") is healed via
+    ``heal`` and the query is retried exactly once; a second failure propagates.
+    A non-malformed ``DatabaseError`` propagates immediately, without healing. Any
+    other exception still yields ``[]``.
     """
     match = _build_match(query)
     if not match:
         return []
 
-    q = MemoryFTS.select().where(MemoryFTS.match(match))
-    if project_scopes:
-        # Hierarchical scope: project_path ∈ scopes, plus "" globals when included.
-        scope_clause = MemoryFTS.project_path.in_(list(project_scopes))
-        if include_global:
-            scope_clause = scope_clause | (MemoryFTS.project_path == "")
-        q = q.where(scope_clause)
-    elif project_path:
-        q = q.where(MemoryFTS.project_path == project_path)
-    if types:
-        q = q.where(MemoryFTS.type.in_(types))
-    q = q.order_by(MemoryFTS.bm25()).limit(limit)
+    def _query() -> typing.Any:
+        q = MemoryFTS.select().where(MemoryFTS.match(match))
+        if project_scopes:
+            # Hierarchical scope: project_path in scopes, plus "" globals when included.
+            scope_clause = MemoryFTS.project_path.in_(list(project_scopes))
+            if include_global:
+                scope_clause = scope_clause | (MemoryFTS.project_path == "")
+            q = q.where(scope_clause)
+        elif project_path:
+            q = q.where(MemoryFTS.project_path == project_path)
+        if types:
+            q = q.where(MemoryFTS.type.in_(types))
+        return q.order_by(MemoryFTS.bm25()).limit(limit)
 
     try:
-        rows = list(q)
+        rows = _execute(_query())
+    except (pw.DatabaseError, sqlite3.DatabaseError) as exc:
+        if "malformed" not in str(exc).lower():
+            raise
+        logger.warning("[fts] malformed index detected; healing via rebuild: %s", exc)
+        heal(_db.database)
+        rows = _execute(_query())
     except Exception:
         return []
 
