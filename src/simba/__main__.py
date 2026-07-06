@@ -2939,6 +2939,8 @@ Subcommands:
     agents [options]       Show agent runs
     sessions [options]     Show project memory sessions
     migrate                Migrate data from old per-module databases
+    reconcile [--run]      Audit drift across LanceDB/FTS/usage stores
+                           (dry-run by default; --run repairs missing FTS rows)
 
 Options:
     --limit N              Max rows to display (default: 20)
@@ -3008,6 +3010,8 @@ def _cmd_db(args: list[str]) -> int:
         return _db_sessions(cwd, limit)
     elif subcmd == "migrate":
         return _db_migrate(cwd)
+    elif subcmd == "reconcile":
+        return _db_reconcile(cwd, run="--run" in args)
     else:
         print(f"Unknown db subcommand: {subcmd}")
         print(_DB_USAGE)
@@ -3400,6 +3404,51 @@ def _db_migrate(cwd: pathlib.Path) -> int:
         f"  rm -rf {simba_dir}/neuron/ {simba_dir}/search/ "
         f"{simba_dir}/tailor/reflections.jsonl"
     )
+    return 0
+
+
+def _db_reconcile(cwd: pathlib.Path, *, run: bool) -> int:
+    """Audit (and, with --run, repair) drift across LanceDB/FTS/usage stores.
+
+    Dry-run by default: only prints the 3-way drift report. ``--run`` repairs
+    ONLY the safe direction (re-upserting Lance rows missing from the FTS
+    mirror) — it never deletes Lance rows, never deletes usage rows, and never
+    touches vectors. Ghost FTS rows and orphaned usage rows are always
+    report-only.
+    """
+    import asyncio
+
+    import simba.memory.fts
+    import simba.memory.reconcile
+
+    data_dir = simba.memory.reconcile.resolve_data_dir(cwd)
+    lance_path = data_dir / "memories.lance"
+    if not lance_path.exists():
+        print(f"Error: no LanceDB store found at {lance_path}", file=sys.stderr)
+        return 1
+
+    async def _run() -> simba.memory.reconcile.ReconcileReport:
+        import lancedb
+
+        db = await lancedb.connect_async(str(lance_path))
+        table = await db.open_table("memories")
+        fts_path = data_dir / simba.memory.fts.FTS_FILENAME
+        return await simba.memory.reconcile.reconcile(table, fts_path, cwd, apply=run)
+
+    try:
+        report = asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: failed to open memory stores: {exc}", file=sys.stderr)
+        return 1
+
+    print(simba.memory.reconcile.format_report(report))
+    print()
+    if run:
+        print(f"mode: --run (repaired {len(report.repaired_ids)} missing-fts row(s))")
+    elif report.missing_fts_ids:
+        print("mode: dry-run (pass --run to upsert missing-fts rows from LanceDB)")
+    else:
+        print("mode: dry-run (no repairs needed)")
     return 0
 
 
