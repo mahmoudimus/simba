@@ -213,9 +213,7 @@ def test_compile_action_obligations_merges_replacement_placeholder() -> None:
 
     assert row["computed_answer"] == 3.0
     labels = [
-        unit["label"]
-        for unit in row["candidate_units"]
-        if unit["status"] == "included"
+        unit["label"] for unit in row["candidate_units"] if unit["status"] == "included"
     ]
     assert labels == [
         "new pair of boots",
@@ -360,9 +358,7 @@ def test_compile_uses_offline_ontology_for_target_type_ratification(
     assert row["computed_answer"] == 1.0
     assert row["symbol_namespace"] == {"issue_count": 0, "issues": []}
     assert [
-        unit["label"]
-        for unit in row["candidate_units"]
-        if unit["status"] == "included"
+        unit["label"] for unit in row["candidate_units"] if unit["status"] == "included"
     ] == ["new pair of boots"]
 
 
@@ -663,9 +659,7 @@ def test_compile_omits_open_null_arguments_from_fact_rendering() -> None:
         facts=facts,
     )
 
-    rendered_action = next(
-        fact for fact in row["facts"] if fact.startswith("action(")
-    )
+    rendered_action = next(fact for fact in row["facts"] if fact.startswith("action("))
     assert "location=" not in rendered_action
     assert "status=" not in rendered_action
     assert "none" not in rendered_action
@@ -860,9 +854,7 @@ def test_compile_charity_sum_dedupes_and_excludes_non_charity_benefit() -> None:
 
     assert row["computed_answer"] == 1000.0
     excluded = [
-        unit["label"]
-        for unit in row["candidate_units"]
-        if unit["status"] == "excluded"
+        unit["label"] for unit in row["candidate_units"] if unit["status"] == "excluded"
     ]
     assert excluded == ["music benefit concert"]
 
@@ -967,9 +959,7 @@ def test_attended_event_paraphrase_requires_user_action_edge() -> None:
     assert row["compiler_intent"]["kind"] == "count_attended_events"
     assert row["computed_answer"] == 1.0
     excluded = [
-        unit["label"]
-        for unit in row["candidate_units"]
-        if unit["status"] == "excluded"
+        unit["label"] for unit in row["candidate_units"] if unit["status"] == "excluded"
     ]
     assert excluded == ["Gurkha wedding"]
 
@@ -1008,6 +998,5 @@ def test_charity_sum_excludes_amount_not_raised_by_user() -> None:
 
     assert row["computed_answer"] == 0.0
     assert (
-        row["candidate_units"][0]["reason_code"]
-        == "not_question_charity_fundraising"
+        row["candidate_units"][0]["reason_code"] == "not_question_charity_fundraising"
     )

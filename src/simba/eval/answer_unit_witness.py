@@ -424,8 +424,7 @@ def build_report(
     parsed_rows = [
         row
         for row in rows
-        if row.get("parse_status") == PARSE_STATUS_PARSED
-        and not _provider_failed(row)
+        if row.get("parse_status") == PARSE_STATUS_PARSED and not _provider_failed(row)
     ]
     reviews = [
         review_witness_row(
@@ -582,9 +581,7 @@ def review_witness_row(
         "provider_answer_number": answer_number,
         "provider_recomputed_answer": recomputed_answer,
         "recomputed_answer": effective_answer,
-        "verifier_corrected_answer": effective_answer
-        if corrected_unit_ids
-        else None,
+        "verifier_corrected_answer": effective_answer if corrected_unit_ids else None,
         "exclusion_contradictions": exclusion_contradictions,
         "corrected_exclusion_count": len(corrected_unit_ids),
         "answer_matches_recomputed": answer_matches_recomputed,
@@ -1059,9 +1056,8 @@ def _numbers_match(left: float | None, right: float | None) -> bool:
 
 
 def _provider_failed(row: dict[str, typing.Any]) -> bool:
-    return (
-        int(row.get("provider_exit_code", 0) or 0) != 0
-        or bool(row.get("provider_timed_out", False))
+    return int(row.get("provider_exit_code", 0) or 0) != 0 or bool(
+        row.get("provider_timed_out", False)
     )
 
 

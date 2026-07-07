@@ -187,13 +187,8 @@ def test_candidate_unit_diagnostics_flags_present_answer_session_without_any_uni
     case = artifact["cases"][0]
 
     assert case["present_answer_session_ids_without_any_unit"] == ["answer_2"]
-    assert "present_answer_session_without_candidate_unit" in case[
-        "diagnostic_issues"
-    ]
-    assert (
-        case["recommended_next_intervention"]
-        == "evidence_to_unit_coverage_check"
-    )
+    assert "present_answer_session_without_candidate_unit" in case["diagnostic_issues"]
+    assert case["recommended_next_intervention"] == "evidence_to_unit_coverage_check"
 
 
 def test_candidate_unit_diagnostics_flags_overmerge_risk(

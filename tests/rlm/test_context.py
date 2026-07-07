@@ -110,7 +110,7 @@ class TestSlices:
     def test_peek_clamps_bounds(self):
         c = self._ctx()
         assert c.peek("d1", 0, 5) == "line0"
-        assert c.peek("d1", -10, 5) == "line0"          # clamps low
+        assert c.peek("d1", -10, 5) == "line0"  # clamps low
         assert c.peek("d1", 0, 10_000) == c.documents.get("d1").text  # clamps high
 
     def test_head(self):

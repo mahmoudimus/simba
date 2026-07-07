@@ -338,9 +338,10 @@ def select_session_windows(
         elif len(selected) < config.max_windows_per_session:
             selected.append(candidate)
         selected = _trim_to_char_budget(selected, config.max_chars_per_session)
-        if len(selected) >= config.max_windows_per_session and _selected_chars(
-            selected
-        ) >= config.max_chars_per_session:
+        if (
+            len(selected) >= config.max_windows_per_session
+            and _selected_chars(selected) >= config.max_chars_per_session
+        ):
             break
     return sorted(selected, key=lambda item: item.start)
 
@@ -396,9 +397,11 @@ def _select_augmented_session_windows(
             selected,
             config.max_chars_per_session,
         )
-        if len(selected) >= config.max_windows_per_session and _selected_chars(
-            [prefix_window, *selected]
-        ) >= config.max_chars_per_session:
+        if (
+            len(selected) >= config.max_windows_per_session
+            and _selected_chars([prefix_window, *selected])
+            >= config.max_chars_per_session
+        ):
             break
     return [prefix_window, *sorted(selected, key=lambda item: item.start)]
 
@@ -582,12 +585,8 @@ def build_fail18_selector_pre_metrics(
             "margin_gate_exclusion_count": len(cases_excluded_from_margin_gate),
             "cases_excluded_from_margin_gate": cases_excluded_from_margin_gate,
             "margin_gate_passed": margin_gate_passed,
-            "kill_gate_passed": (
-                span_survival_gate_passed and margin_gate_passed
-            ),
-            "provider_run_allowed": (
-                span_survival_gate_passed and margin_gate_passed
-            ),
+            "kill_gate_passed": (span_survival_gate_passed and margin_gate_passed),
+            "provider_run_allowed": (span_survival_gate_passed and margin_gate_passed),
         },
         "cases": cases,
     }
@@ -780,9 +779,7 @@ def _scored_window(
     operation_cue_matches = _operation_cue_matches_for_window(
         operation_cue_hits=window_operation_hits,
     )
-    operation_cue = config.operation_cue_weight * min(
-        len(operation_cue_matches), 3
-    )
+    operation_cue = config.operation_cue_weight * min(len(operation_cue_matches), 3)
     operation_type_unlock = operation_cue > 0 and type_cue > 0
     unlock_signal = base if base > 0 else type_cue + operation_cue
     role_component = (
@@ -1240,10 +1237,9 @@ def _trim_augmented_to_char_budget(
 def _selected_chars(windows: list[CandidateWindow]) -> int:
     if not windows:
         return 0
-    return (
-        sum(window.end - window.start for window in windows)
-        + (len(windows) - 1) * len(SELECTOR_GAP)
-    )
+    return sum(window.end - window.start for window in windows) + (
+        len(windows) - 1
+    ) * len(SELECTOR_GAP)
 
 
 def _render_selected_text(
@@ -1319,9 +1315,7 @@ def _pre_metric_case(
         if item["salience_margin"] is not None
     ]
     salience_margin_min = min(margins) if margins else None
-    baseline_margin = _number_or_none(
-        (baseline_case or {}).get("salience_margin_min")
-    )
+    baseline_margin = _number_or_none((baseline_case or {}).get("salience_margin_min"))
     margin_delta = (
         salience_margin_min - baseline_margin
         if salience_margin_min is not None and baseline_margin is not None
@@ -1333,9 +1327,7 @@ def _pre_metric_case(
         and salience_margin_min is not None
         and salience_margin_min <= 0
     )
-    margin_regressed = (
-        salience_margin_crossed_nonpositive and not margin_gate_excluded
-    )
+    margin_regressed = salience_margin_crossed_nonpositive and not margin_gate_excluded
     selector_dropped_count = sum(
         1 for item in needles if item["selector_dropped_source_span"]
     )
@@ -1401,9 +1393,7 @@ def _needle_salience(
     for window in session_meta.get("windows", []):
         if not isinstance(window, dict):
             continue
-        if int(window.get("start", -1)) <= offset and end <= int(
-            window.get("end", -1)
-        ):
+        if int(window.get("start", -1)) <= offset and end <= int(window.get("end", -1)):
             scores.append(float(window.get("score", 0.0) or 0.0))
     return max(scores) if scores else None
 

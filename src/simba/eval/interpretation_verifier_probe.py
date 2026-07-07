@@ -162,9 +162,7 @@ def build_fail18_verifier_enumeration_probe(
                 1 for case in case_results if case["payload_result"]["matches_gold"]
             ),
             "full_corpus_rows_matching_gold": sum(
-                1
-                for case in case_results
-                if case["full_corpus_result"]["matches_gold"]
+                1 for case in case_results if case["full_corpus_result"]["matches_gold"]
             ),
             "verdict_counts": dict(sorted(verdict_counts.items())),
         },
@@ -217,9 +215,7 @@ def _probe_case(
         corpus_units=corpus_units,
     )
     missing_payload_units = (
-        []
-        if payload_result["matches_gold"]
-        else full_corpus_units_not_in_payload
+        [] if payload_result["matches_gold"] else full_corpus_units_not_in_payload
     )
     verdict, verdict_reason = _verdict(
         payload_result=payload_result,
@@ -314,9 +310,7 @@ def _corpus_segments(
     segments: list[EvidenceSegment] = []
     for session_index, session in enumerate(sessions):
         session_id = (
-            str(session_ids[session_index])
-            if session_index < len(session_ids)
-            else ""
+            str(session_ids[session_index]) if session_index < len(session_ids) else ""
         )
         evidence_date = (
             str(dates[session_index]) if session_index < len(dates) else None
@@ -357,8 +351,7 @@ def _user_segments_from_session(session: typing.Any) -> list[str]:
 
 def _user_segments_from_text(text: str) -> list[str]:
     matches = [
-        _clean_text(match.group("content"))
-        for match in _USER_SEGMENT_RE.finditer(text)
+        _clean_text(match.group("content")) for match in _USER_SEGMENT_RE.finditer(text)
     ]
     return [match for match in matches if match]
 
@@ -552,8 +545,7 @@ def _enumerate_destination_days(
                 status = "included"
                 reason_code = "completed_target_destination_trip"
                 reason = (
-                    "User reports completed travel in "
-                    f"{destination.replace('_', ' ')}."
+                    f"User reports completed travel in {destination.replace('_', ' ')}."
                 )
                 included_keys.add(key)
             units.append(

@@ -226,8 +226,7 @@ def test_classify_value_role_from_explicit_attributes() -> None:
         == env.VALUE_ROLE_HISTORICAL
     )
     assert (
-        env.classify_value_role("clicks", "50", "clicks")
-        == env.VALUE_ROLE_DISTRACTOR
+        env.classify_value_role("clicks", "50", "clicks") == env.VALUE_ROLE_DISTRACTOR
     )
 
 
@@ -643,10 +642,7 @@ def test_detect_intent_four_shapes() -> None:
     )
     assert env.detect_intent("What did I buy for the gift?") == env.AGGREGATION_ENTITY
     assert env.detect_intent("Where do I take yoga?") == env.AGGREGATION_ENTITY
-    assert (
-        env.detect_intent("What date did I volunteer?")
-        == env.AGGREGATION_DATE
-    )
+    assert env.detect_intent("What date did I volunteer?") == env.AGGREGATION_DATE
     assert (
         env.detect_intent("When did I volunteer at the shelter?")
         == env.AGGREGATION_DATE
@@ -907,8 +903,7 @@ def test_classify_quantity_role_people_count_for_sum_value() -> None:
             "2000",
             "people",
             question=(
-                "What total number of people reached did my Facebook ad "
-                "campaign get?"
+                "What total number of people reached did my Facebook ad campaign get?"
             ),
             bundle=bundle,
         )
@@ -994,8 +989,7 @@ def test_classify_quantity_role_points_current_balance_when_total_handle() -> No
             "300",
             "points",
             question=(
-                "How many points do I need to earn to redeem a free "
-                "skincare product?"
+                "How many points do I need to earn to redeem a free skincare product?"
             ),
             bundle=bundle,
         )

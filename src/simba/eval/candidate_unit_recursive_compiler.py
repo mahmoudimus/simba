@@ -524,8 +524,7 @@ def build_report(
             },
             "intent_counts": dict(
                 collections.Counter(
-                    str(row.get("compiler_intent", {}).get("kind", ""))
-                    for row in rows
+                    str(row.get("compiler_intent", {}).get("kind", "")) for row in rows
                 )
             ),
             "recursive_fact_consistency_summary": _consistency_summary(rows),
@@ -590,8 +589,7 @@ def _compile_action_obligations(
                     status="excluded",
                     reason_code="target_type_not_ratified",
                     reason=(
-                        "The action object does not match the requested target "
-                        "type."
+                        "The action object does not match the requested target type."
                     ),
                 )
             )
@@ -742,8 +740,7 @@ def _compile_action_objects(
                     status="excluded",
                     reason_code="target_type_not_ratified",
                     reason=(
-                        "The action object does not match the requested "
-                        "object type."
+                        "The action object does not match the requested object type."
                     ),
                 )
             )
@@ -784,8 +781,7 @@ def _compile_attended_events(
                     status="excluded",
                     reason_code="non_grounded_or_inactive_event",
                     reason=(
-                        "The event is aggregate, planned, generic, or not "
-                        "completed."
+                        "The event is aggregate, planned, generic, or not completed."
                     ),
                 )
             )
@@ -939,8 +935,7 @@ def _recursive_fact_hard_errors(
         if str(issue.get("namespace", "")) in quarantined_sessions:
             continue
         errors.append(
-            "symbol_namespace:"
-            f"{issue.get('issue', '')}:{issue.get('symbol', '')}"
+            f"symbol_namespace:{issue.get('issue', '')}:{issue.get('symbol', '')}"
         )
     return errors
 
@@ -1031,10 +1026,7 @@ def _symbol_namespace_validation(facts: list[RecursiveFact]) -> dict[str, object
                         "same bare symbol is used in both entity and type "
                         "positions within one evidence namespace"
                     ),
-                    "uses": {
-                        sort: uses_by_sort[sort]
-                        for sort in sorted(uses_by_sort)
-                    },
+                    "uses": {sort: uses_by_sort[sort] for sort in sorted(uses_by_sort)},
                 }
             )
     return {"issue_count": len(issues), "issues": issues}
@@ -1126,9 +1118,10 @@ def _recursive_fact_consistency(facts: list[RecursiveFact]) -> dict[str, object]
             if left and right:
                 pair = (fact.evidence_session_id, frozenset({left, right}))
                 distinct_pairs[pair] = fact
-        elif fact.predicate == "relation" and _canonical_relation(
-            fact.arg("relation")
-        ) in _IRREFLEXIVE_RELATIONS:
+        elif (
+            fact.predicate == "relation"
+            and _canonical_relation(fact.arg("relation")) in _IRREFLEXIVE_RELATIONS
+        ):
             left = _canonical_label(fact.arg("source"))
             right = _canonical_label(fact.arg("target"))
             if left and right:
@@ -1711,8 +1704,10 @@ def _normalize_action(value: str) -> str:
         return _ACTION_SYNONYMS[clean]
     if clean in {"collect", "collecting"}:
         return "pick_up"
-    if clean in {"go", "went"} or clean.startswith("go to") or clean.startswith(
-        "went to"
+    if (
+        clean in {"go", "went"}
+        or clean.startswith("go to")
+        or clean.startswith("went to")
     ):
         return "attend"
     if clean in {"send back", "sent back"}:

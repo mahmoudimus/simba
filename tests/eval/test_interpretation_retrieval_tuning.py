@@ -63,16 +63,11 @@ def test_expanded_query_strategy_can_fix_morphology_and_salience_miss(
 
     by_strategy = {item["strategy_name"]: item for item in artifact["strategies"]}
     assert (
-        by_strategy["baseline_current_lexical"]["summary"][
-            "answer_sessions_in_payload"
-        ]
+        by_strategy["baseline_current_lexical"]["summary"]["answer_sessions_in_payload"]
         == 0
     )
     assert (
-        by_strategy["expanded_query_v1"]["summary"][
-            "answer_sessions_in_payload"
-        ]
-        == 1
+        by_strategy["expanded_query_v1"]["summary"]["answer_sessions_in_payload"] == 1
     )
     answer = by_strategy["expanded_query_v1"]["cases"][0]["answer_sessions"][0]
     assert "duration_mention" in answer["boost_reasons"]
@@ -123,9 +118,7 @@ def test_compact_session_strategy_can_fix_char_budget_miss(
 
     by_strategy = {item["strategy_name"]: item for item in artifact["strategies"]}
     assert (
-        by_strategy["baseline_current_lexical"]["summary"][
-            "answer_sessions_in_payload"
-        ]
+        by_strategy["baseline_current_lexical"]["summary"]["answer_sessions_in_payload"]
         == 0
     )
     assert (
@@ -261,10 +254,7 @@ def test_tuned_payload_builder_keeps_raw_ids_private(
         provenance["evidence_provenance"]["q1"]["evidence_001"]["raw_session_id"]
         == "secret_session_1"
     )
-    assert (
-        provenance["evidence_provenance"]["q1"]["evidence_001"]["boost_score"]
-        > 0
-    )
+    assert provenance["evidence_provenance"]["q1"]["evidence_001"]["boost_score"] > 0
 
 
 def test_candidate_unit_coverage_strategy_boosts_event_units(
@@ -324,9 +314,7 @@ def test_candidate_unit_coverage_strategy_boosts_event_units(
 
     by_strategy = {item["strategy_name"]: item for item in artifact["strategies"]}
     assert (
-        by_strategy["baseline_current_lexical"]["summary"][
-            "answer_sessions_in_payload"
-        ]
+        by_strategy["baseline_current_lexical"]["summary"]["answer_sessions_in_payload"]
         == 0
     )
     coverage = by_strategy["candidate_unit_coverage_v1"]

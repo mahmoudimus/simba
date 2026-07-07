@@ -87,8 +87,7 @@ class CandidateUnitCase:
             gold=int(raw["gold"]),
             match=bool(raw["match"]),
             candidate_units=tuple(
-                CandidateUnit.from_dict(unit)
-                for unit in raw.get("candidate_units", [])
+                CandidateUnit.from_dict(unit) for unit in raw.get("candidate_units", [])
             ),
             facts=tuple(str(fact) for fact in raw.get("facts", [])),
             query=str(raw.get("query", "")),
@@ -154,9 +153,7 @@ def load_fixture(
 
 
 def score_fixture(fixture: CandidateUnitFixture) -> CandidateUnitScore:
-    mismatches = tuple(
-        case.id for case in fixture.cases if not case.recomputed_match
-    )
+    mismatches = tuple(case.id for case in fixture.cases if not case.recomputed_match)
     return CandidateUnitScore(
         matches=len(fixture.cases) - len(mismatches),
         total=len(fixture.cases),
@@ -183,8 +180,7 @@ def validate_fixture(fixture: CandidateUnitFixture) -> None:
             )
         if case.individuation_policy not in _ALLOWED_POLICIES:
             raise ValueError(
-                f"{case.id}: unknown individuation_policy "
-                f"{case.individuation_policy!r}"
+                f"{case.id}: unknown individuation_policy {case.individuation_policy!r}"
             )
         if case.match != case.recomputed_match:
             raise ValueError(
@@ -257,13 +253,11 @@ def _validate_units(case: CandidateUnitCase) -> None:
                 raise ValueError(f"{case.id}: merged unit lacks merge_target")
             if unit.merge_target not in unit_ids:
                 raise ValueError(
-                    f"{case.id}: merge target {unit.merge_target!r} "
-                    "does not exist"
+                    f"{case.id}: merge target {unit.merge_target!r} does not exist"
                 )
         if unit.status != "merged" and unit.merge_target is not None:
             raise ValueError(
-                f"{case.id}: non-merged unit has merge_target "
-                f"{unit.merge_target!r}"
+                f"{case.id}: non-merged unit has merge_target {unit.merge_target!r}"
             )
         if not unit.reason.strip():
             raise ValueError(f"{case.id}: unit {unit.unit_id!r} lacks reason")
@@ -286,10 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(score.to_dict(), sort_keys=True))
     else:
-        print(
-            f"{fixture.name}: {score.matches}/{score.total} "
-            f"({score.accuracy:.0%})"
-        )
+        print(f"{fixture.name}: {score.matches}/{score.total} ({score.accuracy:.0%})")
     return 0 if not score.mismatches else 1
 
 

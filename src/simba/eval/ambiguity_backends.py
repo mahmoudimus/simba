@@ -220,9 +220,7 @@ def _read_output_ids(path: pathlib.Path) -> list[str]:
     if not path.exists():
         return []
     return [
-        line.strip()
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line
+        line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line
     ]
 
 

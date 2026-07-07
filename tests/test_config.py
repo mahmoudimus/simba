@@ -52,9 +52,7 @@ class TestTomlMerge:
         global_dir.mkdir()
         global_toml = global_dir / "config.toml"
         global_toml.write_text("[test_section]\nname = 'global_name'\n")
-        monkeypatch.setattr(
-            simba.config, "_global_path", lambda: global_toml
-        )
+        monkeypatch.setattr(simba.config, "_global_path", lambda: global_toml)
         cfg = simba.config.load("test_section", root=tmp_path)
         assert cfg.name == "global_name"
 
@@ -66,9 +64,7 @@ class TestTomlMerge:
         global_dir.mkdir()
         global_toml = global_dir / "config.toml"
         global_toml.write_text("[test_section]\nport = 1111\n")
-        monkeypatch.setattr(
-            simba.config, "_global_path", lambda: global_toml
-        )
+        monkeypatch.setattr(simba.config, "_global_path", lambda: global_toml)
         # Local sets port=2222
         local_toml = tmp_path / ".simba" / "config.toml"
         local_toml.parent.mkdir(parents=True)
@@ -89,9 +85,7 @@ class TestSetAndReset:
         self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         global_toml = tmp_path / "global" / "config.toml"
-        monkeypatch.setattr(
-            simba.config, "_global_path", lambda: global_toml
-        )
+        monkeypatch.setattr(simba.config, "_global_path", lambda: global_toml)
         simba.config.set_value(
             "test_section", "name", "custom", scope="global", root=tmp_path
         )
@@ -102,29 +96,17 @@ class TestSetAndReset:
         simba.config.set_value(
             "test_section", "port", "7777", scope="local", root=tmp_path
         )
-        assert (
-            simba.config.get_effective("test_section", "port", root=tmp_path)
-            == 7777
-        )
-        simba.config.reset_value(
-            "test_section", "port", scope="local", root=tmp_path
-        )
-        assert (
-            simba.config.get_effective("test_section", "port", root=tmp_path)
-            == 9999
-        )
+        assert simba.config.get_effective("test_section", "port", root=tmp_path) == 7777
+        simba.config.reset_value("test_section", "port", scope="local", root=tmp_path)
+        assert simba.config.get_effective("test_section", "port", root=tmp_path) == 9999
 
     def test_set_unknown_key(self, tmp_path: pathlib.Path) -> None:
         with pytest.raises(KeyError, match="Unknown key"):
-            simba.config.set_value(
-                "test_section", "bogus", "x", root=tmp_path
-            )
+            simba.config.set_value("test_section", "bogus", "x", root=tmp_path)
 
     def test_set_unknown_section(self, tmp_path: pathlib.Path) -> None:
         with pytest.raises(KeyError, match="Unknown config section"):
-            simba.config.set_value(
-                "no_such_section", "x", "y", root=tmp_path
-            )
+            simba.config.set_value("no_such_section", "x", "y", root=tmp_path)
 
 
 class TestTypeCoercion:

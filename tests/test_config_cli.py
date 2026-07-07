@@ -23,8 +23,15 @@ class TestCmdList:
         simba.config_cli._ensure_registry()
         sections = simba.config.list_sections()
         expected = (
-            "memory", "kg", "sync", "rlm", "hooks", "search",
-            "episodes", "eval", "llm",
+            "memory",
+            "kg",
+            "sync",
+            "rlm",
+            "hooks",
+            "search",
+            "episodes",
+            "eval",
+            "llm",
         )
         for name in expected:
             assert name in sections, f"{name!r} not registered for `simba config`"
@@ -105,12 +112,8 @@ class TestCmdReset:
     ) -> None:
         import simba.memory.config
 
-        simba.config.set_value(
-            "memory", "port", 1234, scope="local", root=tmp_path
-        )
-        rc = simba.config_cli.cmd_reset(
-            "memory.port", global_flag=False, root=tmp_path
-        )
+        simba.config.set_value("memory", "port", 1234, scope="local", root=tmp_path)
+        rc = simba.config_cli.cmd_reset("memory.port", global_flag=False, root=tmp_path)
         assert rc == 0
         captured = capsys.readouterr()
         assert "Reset memory.port" in captured.out

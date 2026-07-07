@@ -109,17 +109,15 @@ class DocumentSearcher:
                         match_text=m.group(0),
                         start_char=start,
                         end_char=end,
-                        context_before=doc.text[max(0, start - ctx_chars):start],
-                        context_after=doc.text[end:end + ctx_chars],
+                        context_before=doc.text[max(0, start - ctx_chars) : start],
+                        context_after=doc.text[end : end + ctx_chars],
                     )
                 )
             return out
 
         executor = ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(_run).result(
-                timeout=self._cfg.regex_timeout_seconds
-            )
+            return executor.submit(_run).result(timeout=self._cfg.regex_timeout_seconds)
         except FutureTimeoutError as exc:
             raise SearchError(
                 f"regex search timed out (>{self._cfg.regex_timeout_seconds}s)"
@@ -129,7 +127,7 @@ class DocumentSearcher:
 
     def peek(self, doc_id: str, start_char: int, end_char: int) -> str:
         doc = self._store.get(doc_id)
-        return doc.text[max(0, start_char):min(len(doc.text), end_char)]
+        return doc.text[max(0, start_char) : min(len(doc.text), end_char)]
 
     def head(self, doc_id: str, n_lines: int = 20) -> str:
         return "\n".join(self._store.get(doc_id).lines[:n_lines])

@@ -661,9 +661,9 @@ def _payload_budget_regression_case(
     return {
         "case_id": case_id,
         "question": str(
-            (candidate_payload or baseline_payload or {}).get("case", {}).get(
-                "question", ""
-            )
+            (candidate_payload or baseline_payload or {})
+            .get("case", {})
+            .get("question", "")
         ),
         "baseline_answer_number": (baseline_output or {}).get("answer_number"),
         "candidate_answer_number": (candidate_output or {}).get("answer_number"),
@@ -751,11 +751,7 @@ def _outputs_by_case(
     outputs_path: str | pathlib.Path,
 ) -> dict[str, dict[str, typing.Any]]:
     rows = interpretation_runner.load_jsonl(outputs_path)
-    return {
-        str(row.get("case_id", "")): row
-        for row in rows
-        if isinstance(row, dict)
-    }
+    return {str(row.get("case_id", "")): row for row in rows if isinstance(row, dict)}
 
 
 def _span_survival_case(
@@ -809,9 +805,7 @@ def _span_survival_case(
         "case_id": case_id,
         "question": str((needle_case or {}).get("question", "")),
         "needle_count": len(needles),
-        "all_needles_present": all(
-            item["status"] == "present" for item in needles
-        )
+        "all_needles_present": all(item["status"] == "present" for item in needles)
         if needles
         else False,
         "has_truncation_loss": any(
@@ -1304,11 +1298,7 @@ def _write_json(path: pathlib.Path, artifact: typing.Any) -> None:
 
 
 def _parse_case_ids(raw: str) -> tuple[str, ...]:
-    return tuple(
-        item.strip()
-        for item in re.split(r"[,\s]+", raw)
-        if item.strip()
-    )
+    return tuple(item.strip() for item in re.split(r"[,\s]+", raw) if item.strip())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1520,18 +1510,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.build_budget_regression_diagnostic:
         if args.candidate_payloads is None:
             parser.error(
-                "--build-budget-regression-diagnostic requires "
-                "--candidate-payloads"
+                "--build-budget-regression-diagnostic requires --candidate-payloads"
             )
         if args.baseline_outputs is None:
             parser.error(
-                "--build-budget-regression-diagnostic requires "
-                "--baseline-outputs"
+                "--build-budget-regression-diagnostic requires --baseline-outputs"
             )
         if args.candidate_outputs is None:
             parser.error(
-                "--build-budget-regression-diagnostic requires "
-                "--candidate-outputs"
+                "--build-budget-regression-diagnostic requires --candidate-outputs"
             )
         artifact = build_payload_budget_regression_diagnostic(
             budget_ab_report_path=args.budget_ab_report,

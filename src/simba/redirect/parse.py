@@ -15,11 +15,28 @@ import shlex
 
 _SHELL_WRAPPERS = {"cmd", "powershell", "pwsh", "bash", "sh", "zsh"}
 _UV_RUN_OPTS_WITH_VALUE = {
-    "--python", "--with", "--with-requirements", "--with-editable", "--directory",
-    "--project", "--index", "--extra", "--group", "--no-group", "--only-group",
-    "--config-file", "--env-file", "--python-platform", "--resolution",
-    "--index-strategy", "--keyring-provider", "--link-mode", "--refresh-package",
-    "--upgrade-package", "--no-binary-package", "--no-build-package",
+    "--python",
+    "--with",
+    "--with-requirements",
+    "--with-editable",
+    "--directory",
+    "--project",
+    "--index",
+    "--extra",
+    "--group",
+    "--no-group",
+    "--only-group",
+    "--config-file",
+    "--env-file",
+    "--python-platform",
+    "--resolution",
+    "--index-strategy",
+    "--keyring-provider",
+    "--link-mode",
+    "--refresh-package",
+    "--upgrade-package",
+    "--no-binary-package",
+    "--no-build-package",
 }
 
 

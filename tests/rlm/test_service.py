@@ -58,8 +58,12 @@ def test_recall_serializes_pointers(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "simba.hooks._memory_client.recall_memories",
         lambda *a, **k: [
-            {"content": "c", "sessionSource": "s1",
-             "projectPath": "/p", "similarity": 0.9},
+            {
+                "content": "c",
+                "sessionSource": "s1",
+                "projectPath": "/p",
+                "similarity": 0.9,
+            },
         ],
     )
     out = _svc(tmp_path).recall("q", cwd="/p")

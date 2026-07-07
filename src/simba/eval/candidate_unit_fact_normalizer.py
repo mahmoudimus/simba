@@ -386,8 +386,7 @@ def build_report(
     parsed_rows = [
         row
         for row in normalizer_rows
-        if row.get("parse_status") == PARSE_STATUS_PARSED
-        and not _provider_failed(row)
+        if row.get("parse_status") == PARSE_STATUS_PARSED and not _provider_failed(row)
     ]
     decisions = collections.Counter(str(row.get("decision", "")) for row in parsed_rows)
     predicates = collections.Counter(
@@ -692,11 +691,7 @@ def _append_forbidden_term_errors(
     raw: dict[str, typing.Any],
     errors: list[str],
 ) -> None:
-    visible = {
-        key: value
-        for key, value in raw.items()
-        if key not in {"reason"}
-    }
+    visible = {key: value for key, value in raw.items() if key not in {"reason"}}
     rendered = json.dumps(visible, sort_keys=True).lower()
     for term in _FORBIDDEN_TERMS:
         if term in rendered:
@@ -733,11 +728,7 @@ def _arguments_field(
     if bad_keys:
         errors.append(f"{key} keys must be strings")
         return {}
-    bad_values = [
-        item
-        for item in value.values()
-        if isinstance(item, list | dict)
-    ]
+    bad_values = [item for item in value.values() if isinstance(item, list | dict)]
     if bad_values:
         errors.append(f"{key} values must be scalar or null")
         return {}
@@ -793,9 +784,8 @@ def _invalid_result(
 
 
 def _provider_failed(row: dict[str, typing.Any]) -> bool:
-    return (
-        int(row.get("provider_exit_code", 0) or 0) != 0
-        or bool(row.get("provider_timed_out", False))
+    return int(row.get("provider_exit_code", 0) or 0) != 0 or bool(
+        row.get("provider_timed_out", False)
     )
 
 

@@ -121,8 +121,7 @@ def manifest_row_to_case(row: dict[str, typing.Any]) -> ambiguity.AmbiguityCase:
     certain = max(0, int(row.get("clingo_certain") or 0))
     possible = max(certain, int(row.get("clingo_possible") or certain))
     records = [
-        {"id": f"{qid}_certain_{idx}", "status": "certain"}
-        for idx in range(certain)
+        {"id": f"{qid}_certain_{idx}", "status": "certain"} for idx in range(certain)
     ]
     records.extend(
         {"id": f"{qid}_possible_{idx}", "status": "possible"}
@@ -584,8 +583,7 @@ def _sentence_mentions_intent(sentence: str, intent: IntentSpec) -> bool:
     if _sentence_mentions_terms(sentence, intent.target_terms):
         return True
     return any(
-        re.search(pattern, low)
-        for pattern in _concept_patterns(intent.concept_ids)
+        re.search(pattern, low) for pattern in _concept_patterns(intent.concept_ids)
     )
 
 
@@ -836,10 +834,13 @@ def _iter_user_session_texts_with_ids(
     ids = row.get("haystack_session_ids", [])
     for idx, session in enumerate(row.get("haystack_sessions", [])):
         sid = str(ids[idx]) if idx < len(ids) else str(idx)
-        yield sid, " ".join(
-            str(message.get("content", ""))
-            for message in session
-            if message.get("role") == "user"
+        yield (
+            sid,
+            " ".join(
+                str(message.get("content", ""))
+                for message in session
+                if message.get("role") == "user"
+            ),
         )
 
 

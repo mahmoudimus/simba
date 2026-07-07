@@ -368,9 +368,10 @@ def test_bench_subtlememory_driver_loop_picks_winning_variant(
     assert out["driver_loop"]["summary"]["winner_positive"] is True
     assert out["driver_loop"]["summary"]["promotion_gate_passed"] is True
     artifact = json.loads(loop_path.read_text())
-    assert artifact["summary"]["winner_config_overrides"][
-        "session_expansion_top_sessions"
-    ] == 2
+    assert (
+        artifact["summary"]["winner_config_overrides"]["session_expansion_top_sessions"]
+        == 2
+    )
     assert artifact["summary"]["promotion_gate"]["passed"] is True
     record = json.loads(pathlib.Path(bcfg.results_path).read_text().splitlines()[0])
     assert record["driver_loop"]["path"] == str(loop_path)

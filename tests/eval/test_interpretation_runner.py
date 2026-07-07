@@ -73,10 +73,7 @@ def test_build_gate1_report_counts_parse_and_duplicate_metrics() -> None:
         "range": 1,
     }
     assert report["case_coverage"]["covers_exactly_expected_cases"] is True
-    assert (
-        report["acceptance"]["outputs_cover_exactly_expected_cases"]
-        is True
-    )
+    assert report["acceptance"]["outputs_cover_exactly_expected_cases"] is True
     assert (
         report["acceptance"]["accepted_provider_outputs_cover_exactly_expected_cases"]
         is True
@@ -95,9 +92,7 @@ def test_build_gate1_report_rejects_parseable_provider_failures() -> None:
             {
                 "case_id": "q1",
                 "provider": "fake-provider",
-                "raw_output": json.dumps(
-                    {"case_id": "q1", "interpretations": []}
-                ),
+                "raw_output": json.dumps({"case_id": "q1", "interpretations": []}),
                 "parse_status": "parsed",
                 "parse_errors": ["provider exited with code 1"],
                 "provider_exit_code": 1,
@@ -181,9 +176,7 @@ def test_fail18_noun_leakage_check_derives_question_terms() -> None:
     )
 
     leakage = report["fail18_noun_leakage_check"]
-    assert leakage["check_kind"] == (
-        "derived_question_terms_against_prompt_contract"
-    )
+    assert leakage["check_kind"] == ("derived_question_terms_against_prompt_contract")
     assert "pottery" in leakage["forbidden_terms"]
     assert leakage["found_terms"] == ["pottery"]
     assert leakage["passed"] is False

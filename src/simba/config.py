@@ -25,6 +25,7 @@ _REGISTRY: dict[str, type] = {}
 # Decorator
 # ---------------------------------------------------------------------------
 
+
 def configurable(section: str):
     """Class decorator — register a dataclass as a configurable section."""
 
@@ -38,6 +39,7 @@ def configurable(section: str):
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
+
 
 def _global_path() -> pathlib.Path:
     return pathlib.Path.home() / ".config" / "simba" / "config.toml"
@@ -61,6 +63,7 @@ def _find_root(root: pathlib.Path | None = None) -> pathlib.Path:
 # TOML I/O
 # ---------------------------------------------------------------------------
 
+
 def _load_toml(path: pathlib.Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -80,6 +83,7 @@ def _write_toml(path: pathlib.Path, data: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Type coercion
 # ---------------------------------------------------------------------------
+
 
 def _coerce(value: str, target_type: type) -> Any:
     """Coerce a CLI string to *target_type*."""
@@ -108,6 +112,7 @@ def _field_type(cls: type, field_name: str) -> type:
 # ---------------------------------------------------------------------------
 # Core API
 # ---------------------------------------------------------------------------
+
 
 def list_sections() -> dict[str, type]:
     """Return a copy of the registry."""

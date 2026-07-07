@@ -30,6 +30,7 @@ Identity is ``group_label`` (the dedup / individuation relation): rows with the
 same label are the SAME individual. A group is *certain* if it has any In member,
 *possible* if it is not entirely Excluded.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -56,8 +57,7 @@ class Row:
 
     def __post_init__(self) -> None:
         if self.status not in STATUSES:
-            raise ValueError(
-                f"status must be one of {STATUSES}, got {self.status!r}")
+            raise ValueError(f"status must be one of {STATUSES}, got {self.status!r}")
 
 
 @dataclasses.dataclass
@@ -109,8 +109,9 @@ def _group_value(rows: list[Row]) -> float:
 def evaluate_sum(ir: IR) -> tuple[float, float]:
     """Return ``(certain_sum, possible_sum)`` over distinct individuals."""
     g = _groups(ir)
-    certain = sum(_group_value(rows) for rows in g.values()
-                  if any(r.status == "In" for r in rows))
+    certain = sum(
+        _group_value(rows) for rows in g.values() if any(r.status == "In" for r in rows)
+    )
     possible = sum(_group_value(rows) for rows in g.values())
     return certain, possible
 
@@ -127,9 +128,9 @@ def _ir_to_asp(ir: IR) -> str:
         gid = f"g{i}"
         lines.append(f"instance({gid}).")
         if any(r.status == "In" for r in rows):
-            lines.append(f"in_scope({gid}).")        # DefinitelyIn (fact)
+            lines.append(f"in_scope({gid}).")  # DefinitelyIn (fact)
         else:
-            lines.append(f"{{ in_scope({gid}) }}.")   # PossiblyIn (choice)
+            lines.append(f"{{ in_scope({gid}) }}.")  # PossiblyIn (choice)
     return "\n".join(lines) + "\n"
 
 
@@ -163,10 +164,12 @@ def clingo_check(ir: IR) -> tuple[bool, tuple[int, int]]:
         return best
 
     def cautious_min(cap: int) -> int:
-        prog = (base + "cnt(N) :- N = #count{ X : match(X) }.\n"
-                + "".join(f"atleast({k}) :- cnt(N), N >= {k}.\n"
-                          for k in range(cap + 1))
-                + "#show atleast/1.\n")
+        prog = (
+            base
+            + "cnt(N) :- N = #count{ X : match(X) }.\n"
+            + "".join(f"atleast({k}) :- cnt(N), N >= {k}.\n" for k in range(cap + 1))
+            + "#show atleast/1.\n"
+        )
         ctl = clingo.Control(["--models=0", "--enum-mode=cautious"])
         ctl.add("base", [], prog)
         ctl.ground([("base", [])])

@@ -232,9 +232,9 @@ def test_build_report_normalizes_cached_schema(monkeypatch, tmp_path) -> None:
     assert report.cache_status == "schema-cache"
     assert concepts["day"].purpose == "answer_bearing"
     assert concepts["hawaii"].purpose == "constraint"
-    assert ontology_router._required_answer_concept_ids(
-        report.schema, "count"
-    ) == ["day"]
+    assert ontology_router._required_answer_concept_ids(report.schema, "count") == [
+        "day"
+    ]
 
 
 def test_normalize_schema_decomposes_duration_places() -> None:
@@ -260,9 +260,7 @@ def test_normalize_schema_decomposes_duration_places() -> None:
 
     normalized = ontology_router.normalize_schema(schema)
     concepts = {concept.id: concept for concept in normalized.concepts}
-    edge_relations = {
-        (edge.relation, edge.target) for edge in normalized.edges
-    }
+    edge_relations = {(edge.relation, edge.target) for edge in normalized.edges}
 
     assert {"day", "hawaii", "new_york_city"} <= set(concepts)
     assert concepts["day"].purpose == "answer_bearing"
@@ -271,9 +269,7 @@ def test_normalize_schema_decomposes_duration_places() -> None:
     assert ("counts", "day") in edge_relations
     assert ("constrains", "hawaii") in edge_relations
     assert ("constrains", "new_york_city") in edge_relations
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["day"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == ["day"]
 
 
 def test_normalize_schema_decomposes_wedding_attendance_idempotently() -> None:
@@ -300,9 +296,9 @@ def test_normalize_schema_decomposes_wedding_attendance_idempotently() -> None:
         "wedding",
         "attendance",
     ]
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["wedding"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == [
+        "wedding"
+    ]
 
 
 def test_normalize_schema_demotes_time_amount_activities() -> None:
@@ -336,9 +332,7 @@ def test_normalize_schema_demotes_time_amount_activities() -> None:
     assert concepts["hour"].purpose == "answer_bearing"
     assert concepts["jogging"].purpose == "constraint"
     assert concepts["yoga"].purpose == "constraint"
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["hour"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == ["hour"]
 
 
 def test_normalize_schema_canonicalizes_model_kit_aliases() -> None:
@@ -438,9 +432,7 @@ def test_normalize_schema_canonicalizes_owned_musical_instrument() -> None:
 
     normalized = ontology_router.normalize_schema(schema)
 
-    assert [concept.id for concept in normalized.concepts] == [
-        "musical_instrument"
-    ]
+    assert [concept.id for concept in normalized.concepts] == ["musical_instrument"]
     assert ontology_router._required_answer_concept_ids(
         normalized, "current_inventory"
     ) == ["musical_instrument"]
@@ -464,9 +456,9 @@ def test_normalize_schema_canonicalizes_hyphenated_art_event() -> None:
 
     assert concept.id == "art_event"
     assert "event" in concept.aliases
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["art_event"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == [
+        "art_event"
+    ]
 
 
 def test_normalize_schema_canonicalizes_composed_hours_answer() -> None:
@@ -493,9 +485,7 @@ def test_normalize_schema_canonicalizes_composed_hours_answer() -> None:
 
     assert list(concepts) == ["hour"]
     assert concepts["hour"].purpose == "answer_bearing"
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["hour"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == ["hour"]
 
 
 def test_normalize_schema_marks_count_measure_as_meta() -> None:
@@ -522,9 +512,9 @@ def test_normalize_schema_marks_count_measure_as_meta() -> None:
     concepts = {concept.id: concept for concept in normalized.concepts}
 
     assert concepts["wedding_count"].purpose == "meta"
-    assert ontology_router._required_answer_concept_ids(
-        normalized, "count"
-    ) == ["wedding"]
+    assert ontology_router._required_answer_concept_ids(normalized, "count") == [
+        "wedding"
+    ]
 
 
 def test_schema_from_json_normalizes_llm_candidate() -> None:
@@ -641,9 +631,7 @@ def test_probe_fail18_summarizes_without_remote(tmp_path) -> None:
     assert summary.material_concepts == 1
     assert summary.results[0].answer_type == "canonical_entity_count"
     assert summary.results[0].schema.concepts[0].id == "model_kit"
-    assert summary.results[0].to_dict()["required_answer_concepts"] == [
-        "model_kit"
-    ]
+    assert summary.results[0].to_dict()["required_answer_concepts"] == ["model_kit"]
 
 
 def test_required_score_ignores_incidental_year_hit() -> None:
@@ -721,9 +709,9 @@ def test_required_score_keeps_typed_quantity_answer_node() -> None:
         "How many points do I need to earn to redeem a free skincare product?"
     )
 
-    assert ontology_router._required_answer_concept_ids(
-        schema, "threshold_lookup"
-    ) == ["loyalty_points"]
+    assert ontology_router._required_answer_concept_ids(schema, "threshold_lookup") == [
+        "loyalty_points"
+    ]
 
 
 def test_required_reliability_uses_gamma_style_min_gate() -> None:

@@ -18,9 +18,7 @@ import simba.rlm.engine as eng
 
 class TestResolveMaxContentLength:
     def test_default_is_200(self, monkeypatch) -> None:
-        monkeypatch.setattr(
-            simba.config, "load", lambda *a, **k: mcfg.MemoryConfig()
-        )
+        monkeypatch.setattr(simba.config, "load", lambda *a, **k: mcfg.MemoryConfig())
         assert mcfg.resolve_max_content_length() == 200
 
     def test_reads_custom_value(self, monkeypatch) -> None:
@@ -76,8 +74,6 @@ class TestPromptsHydrate:
         assert "200" not in out
 
     def test_llm_episode_prompt(self) -> None:
-        out = cons._LLM_EPISODE_PROMPT.format(
-            sid="s", cwd="c", members="m", maxlen=750
-        )
+        out = cons._LLM_EPISODE_PROMPT.format(sid="s", cwd="c", members="m", maxlen=750)
         assert "<=750-char summary>" in out
         assert "at most 750" in out

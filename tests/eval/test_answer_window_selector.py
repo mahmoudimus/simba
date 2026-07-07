@@ -625,8 +625,7 @@ def test_type_cue_prefers_maximal_question_type_targets(tmp_path: pathlib.Path) 
         ],
     )
     text = (
-        "USER: I signed the instrument yesterday.\n"
-        "USER: I still own an old drum set."
+        "USER: I signed the instrument yesterday.\nUSER: I still own an old drum set."
     )
     config = selector.WindowSelectorConfig(
         window_radius_chars=80,
@@ -688,10 +687,7 @@ def test_type_cue_is_role_gated_to_user_evidence(tmp_path: pathlib.Path) -> None
             ),
         ],
     )
-    text = (
-        "ASSISTANT: A piano needs regular tuning.\n"
-        "USER: I own an old drum set."
-    )
+    text = "ASSISTANT: A piano needs regular tuning.\nUSER: I own an old drum set."
     config = selector.WindowSelectorConfig(
         window_radius_chars=80,
         max_windows_per_session=2,

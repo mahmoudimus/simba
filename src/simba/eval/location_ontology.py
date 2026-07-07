@@ -15,8 +15,8 @@ import pathlib
 import re
 import typing
 
-DEFAULT_LOCATION_PATH = pathlib.Path(__file__).parent / "datasets" / (
-    "location_containment.json"
+DEFAULT_LOCATION_PATH = (
+    pathlib.Path(__file__).parent / "datasets" / ("location_containment.json")
 )
 MAX_RATIFICATION_DEPTH = 6
 _TOKEN_RE = re.compile(r"[a-z0-9]+")

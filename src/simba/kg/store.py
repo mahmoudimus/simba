@@ -354,9 +354,7 @@ def kg_supersede(
             )
             losers = [_row_to_dict(r) for r in rows]
 
-    closed = kg_invalidate(
-        subject, predicate, old_object, project_path=project_path
-    )
+    closed = kg_invalidate(subject, predicate, old_object, project_path=project_path)
     added = kg_add(
         subject,
         predicate,

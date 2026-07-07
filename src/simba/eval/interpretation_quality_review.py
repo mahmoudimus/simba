@@ -166,8 +166,7 @@ def build_fail18_quality_review(
             "rows_with_expected_answer_shape": sum(
                 1
                 for case in cases
-                if set(case.expected_answer_shapes)
-                & set(case.observed_answer_shapes)
+                if set(case.expected_answer_shapes) & set(case.observed_answer_shapes)
             ),
             "rows_missing_expected_ambiguity_types": sum(
                 1 for case in cases if case.missing_ambiguity_types
@@ -313,9 +312,8 @@ def _gold_compatible_interpretation_ids(
         if any(_same_number(value, gold_value) for value in values):
             compatible.append(str(interpretation.get("interpretation_id", "")))
             continue
-        if (
-            interpretation.get("expected_answer_shape") == "range"
-            and _range_contains(values, gold_value)
+        if interpretation.get("expected_answer_shape") == "range" and _range_contains(
+            values, gold_value
         ):
             compatible.append(str(interpretation.get("interpretation_id", "")))
     return tuple(item for item in compatible if item)

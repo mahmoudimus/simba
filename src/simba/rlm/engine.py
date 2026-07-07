@@ -143,9 +143,7 @@ class ClaudeCliEngine:
         maxlen = simba.memory.config.resolve_max_content_length()
         template = getattr(self._cfg, "digest_prompt", "") or _DIGEST_PROMPT
         self.run(
-            _build_digest_prompt(
-                transcript_id, cwd, template=template, maxlen=maxlen
-            ),
+            _build_digest_prompt(transcript_id, cwd, template=template, maxlen=maxlen),
             cwd=cwd,
         )
 
@@ -306,8 +304,9 @@ def run_completion_worker(
     store = store_fn or _store_memory
 
     val_enabled = getattr(cfg, "extraction_validation_enabled", False) if cfg else False
-    val_min_support = getattr(cfg, "extraction_validation_min_support", 0.5) if cfg \
-        else 0.5
+    val_min_support = (
+        getattr(cfg, "extraction_validation_min_support", 0.5) if cfg else 0.5
+    )
 
     reply = client.complete(prompt) or ""
     n = 0
@@ -319,8 +318,10 @@ def run_completion_worker(
             import simba.memory.extraction_validation as _ev
 
             if not _ev.validate_extraction(
-                mem["content"], prompt,
-                min_support=val_min_support, check_polarity=False,
+                mem["content"],
+                prompt,
+                min_support=val_min_support,
+                check_polarity=False,
             ).ok:
                 continue
         if store(mem, cwd=cwd, session_source=session_source):

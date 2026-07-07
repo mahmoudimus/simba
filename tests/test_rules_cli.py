@@ -27,16 +27,12 @@ def _rule(mid, project, content="Bash: boom", created="2026-05-30T00:00:00Z"):
 
 
 def _patch_list(monkeypatch, memories):
-    monkeypatch.setattr(
-        rc.httpx, "get", lambda *a, **k: _Resp({"memories": memories})
-    )
+    monkeypatch.setattr(rc.httpx, "get", lambda *a, **k: _Resp({"memories": memories}))
 
 
 class TestAddScoping:
     def test_add_resolves_project_id(self, monkeypatch) -> None:
-        monkeypatch.setattr(
-            simba.db, "resolve_project_id", lambda p=None: "resolved-X"
-        )
+        monkeypatch.setattr(simba.db, "resolve_project_id", lambda p=None: "resolved-X")
         sent: dict = {}
 
         def _post(url, json=None, **k):
@@ -44,9 +40,7 @@ class TestAddScoping:
             return _Resp({"status": "stored", "id": "m1"})
 
         monkeypatch.setattr(rc.httpx, "post", _post)
-        rc.main(
-            ["add", "--tool", "Bash", "--correction", "do X", "--project", "/repo"]
-        )
+        rc.main(["add", "--tool", "Bash", "--correction", "do X", "--project", "/repo"])
         # Stored under the resolved id (matcher recalls by the same), not /repo.
         assert sent["projectPath"] == "resolved-X"
 
@@ -87,9 +81,7 @@ class TestPrune:
 
     def test_all_projects_deletes_everything(self, monkeypatch, capsys) -> None:
         monkeypatch.setattr(simba.db, "resolve_project_id", lambda p=None: "proj-A")
-        _patch_list(
-            monkeypatch, [_rule("m1", "proj-A"), _rule("m2", "proj-B")]
-        )
+        _patch_list(monkeypatch, [_rule("m1", "proj-A"), _rule("m2", "proj-B")])
         deleted: list[str] = []
 
         def _delete(url, **k):
@@ -105,15 +97,12 @@ class TestPrune:
 
     def test_scopes_to_current_project_by_default(self, monkeypatch) -> None:
         monkeypatch.setattr(simba.db, "resolve_project_id", lambda p=None: "proj-A")
-        _patch_list(
-            monkeypatch, [_rule("m1", "proj-A"), _rule("m2", "proj-B")]
-        )
+        _patch_list(monkeypatch, [_rule("m1", "proj-A"), _rule("m2", "proj-B")])
         deleted: list[str] = []
         monkeypatch.setattr(
             rc.httpx,
             "delete",
-            lambda url, **k: deleted.append(url.rsplit("/", 1)[-1])
-            or _Resp({}, 200),
+            lambda url, **k: deleted.append(url.rsplit("/", 1)[-1]) or _Resp({}, 200),
         )
 
         rc.main(["prune"])
@@ -132,8 +121,7 @@ class TestPrune:
         monkeypatch.setattr(
             rc.httpx,
             "delete",
-            lambda url, **k: deleted.append(url.rsplit("/", 1)[-1])
-            or _Resp({}, 200),
+            lambda url, **k: deleted.append(url.rsplit("/", 1)[-1]) or _Resp({}, 200),
         )
 
         rc.main(["prune", "--older-than", "14d"])

@@ -657,9 +657,7 @@ def review_adjudication_row(
     readings = [item for item in row.get("readings", []) if isinstance(item, dict)]
     span_results = _span_results(readings, payload)
     readings_with_resolved_pivot = {
-        str(item["reading_id"])
-        for item in span_results
-        if bool(item["span_resolves"])
+        str(item["reading_id"]) for item in span_results if bool(item["span_resolves"])
     }
     answer_values = {
         _normalize_answer_value(str(reading.get("answer_value", "")))
@@ -904,9 +902,7 @@ def _pivot_spans(raw_spans: typing.Any, errors: list[str]) -> list[PivotSpan]:
         span = _string_field(raw, "span", span_errors)
         why_pivot = _string_field(raw, "why_pivot", span_errors)
         if span_errors:
-            errors.extend(
-                f"pivot_spans[{index}]: {error}" for error in span_errors
-            )
+            errors.extend(f"pivot_spans[{index}]: {error}" for error in span_errors)
             continue
         spans.append(
             PivotSpan(
@@ -1123,9 +1119,10 @@ def _is_temporal_duration(review: dict[str, typing.Any]) -> bool:
 
 
 def _provider_failed(row: dict[str, typing.Any]) -> bool:
-    return bool(row.get("provider_timed_out", False)) or int(
-        row.get("provider_exit_code", 0) or 0
-    ) != 0
+    return (
+        bool(row.get("provider_timed_out", False))
+        or int(row.get("provider_exit_code", 0) or 0) != 0
+    )
 
 
 def _payloads_hide_system_outputs(payload_artifact: dict[str, typing.Any]) -> bool:

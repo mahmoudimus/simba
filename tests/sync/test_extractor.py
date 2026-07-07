@@ -28,9 +28,7 @@ def _no_live_llm(monkeypatch: pytest.MonkeyPatch) -> None:
         def available(self) -> bool:
             return False
 
-    monkeypatch.setattr(
-        "simba.llm.client.get_client", lambda *a, **k: _Unavailable()
-    )
+    monkeypatch.setattr("simba.llm.client.get_client", lambda *a, **k: _Unavailable())
 
 
 @pytest.fixture()
@@ -293,11 +291,15 @@ class TestRunExtractLlm:
         client = MagicMock()
         mock_client_cls.return_value = client
         # content matches the regex ("use X for Y"); llm adds a second triple
-        memories = [{
-            "id": "m1", "type": "WORKING_SOLUTION",
-            "content": "use ruff for linting", "context": "",
-            "createdAt": "2025-01-01T00:00:00",
-        }]
+        memories = [
+            {
+                "id": "m1",
+                "type": "WORKING_SOLUTION",
+                "content": "use ruff for linting",
+                "context": "",
+                "createdAt": "2025-01-01T00:00:00",
+            }
+        ]
         client.get.return_value = _mock_list_response(memories)
         with patch(
             "simba.db.get_db", side_effect=lambda *a, **kw: _mock_get_db(db_dir)
@@ -321,8 +323,13 @@ class TestRunExtractLlm:
         client = MagicMock()
         mock_client_cls.return_value = client
         memories = [
-            {"id": f"m{i}", "type": "PATTERN", "content": f"fact {i}",
-             "context": "", "createdAt": f"2025-01-0{i}T00:00:00"}
+            {
+                "id": f"m{i}",
+                "type": "PATTERN",
+                "content": f"fact {i}",
+                "context": "",
+                "createdAt": f"2025-01-0{i}T00:00:00",
+            }
             for i in (1, 2, 3)
         ]
         client.get.return_value = _mock_list_response(memories)

@@ -195,8 +195,7 @@ def build_fail18_tuned_generation_artifact(
         )
     return {
         "name": (
-            "fail18-ambiguous-nlidb-gate1-payloads-"
-            f"{strategy_name.replace('_', '-')}"
+            f"fail18-ambiguous-nlidb-gate1-payloads-{strategy_name.replace('_', '-')}"
         ),
         "artifact_kind": "provider_payloads",
         "gate": "gate1",
@@ -347,18 +346,16 @@ def build_fail18_retrieval_tuning_experiment(
         },
         "summary": {
             "best_strategy": best["strategy_name"],
-            "best_answer_session_recall": best["summary"][
-                "answer_session_recall"
-            ],
+            "best_answer_session_recall": best["summary"]["answer_session_recall"],
             "best_rows_with_all_answer_sessions_in_payload": best["summary"][
                 "rows_with_all_answer_sessions_in_payload"
             ],
             "baseline_answer_session_recall": baseline["summary"][
                 "answer_session_recall"
             ],
-            "baseline_rows_with_all_answer_sessions_in_payload": baseline[
-                "summary"
-            ]["rows_with_all_answer_sessions_in_payload"],
+            "baseline_rows_with_all_answer_sessions_in_payload": baseline["summary"][
+                "rows_with_all_answer_sessions_in_payload"
+            ],
         },
         "decision": {
             "retrieval_change_should_remain_diagnostic": True,
@@ -429,9 +426,7 @@ def _tuned_evidence_sessions(
             "assistant_selection_score": session.assistant_selection_score,
             "boost_score": session.boost_score,
             "boost_reasons": list(session.boost_reasons),
-            "matched_question_terms_user": list(
-                session.matched_question_terms_user
-            ),
+            "matched_question_terms_user": list(session.matched_question_terms_user),
             "matched_question_terms_assistant": list(
                 session.matched_question_terms_assistant
             ),
@@ -710,14 +705,10 @@ def _expanded_rank_sessions(
                 "provider_id"
             ),
             simulated_trimmed_chars=int(
-                selected.get(str(item["raw_session_id"]), {}).get(
-                    "trimmed_chars", 0
-                )
+                selected.get(str(item["raw_session_id"]), {}).get("trimmed_chars", 0)
             ),
             simulated_truncated=bool(
-                selected.get(str(item["raw_session_id"]), {}).get(
-                    "truncated", False
-                )
+                selected.get(str(item["raw_session_id"]), {}).get("truncated", False)
             ),
             matched_question_terms_user=tuple(item["matched_question_terms_user"]),
             matched_question_terms_assistant=tuple(
@@ -756,9 +747,7 @@ def _answer_session_result(
         "assistant_selection_score": ranked_session.assistant_selection_score,
         "boost_score": ranked_session.boost_score,
         "boost_reasons": list(ranked_session.boost_reasons),
-        "matched_question_terms_user": list(
-            ranked_session.matched_question_terms_user
-        ),
+        "matched_question_terms_user": list(ranked_session.matched_question_terms_user),
         "matched_question_terms_assistant": list(
             ranked_session.matched_question_terms_assistant
         ),
@@ -879,10 +868,9 @@ def _evidence_boosts(
     if is_duration_question and _DURATION_RE.search(lowered_user):
         boost += 8
         reasons.append("duration_mention")
-    if (
-        any(term in lowered_question for term in ("money", "raise", "charity"))
-        and _MONEY_RE.search(user_text)
-    ):
+    if any(
+        term in lowered_question for term in ("money", "raise", "charity")
+    ) and _MONEY_RE.search(user_text):
         boost += 8
         reasons.append("money_amount_mention")
     if scoring == "candidate_unit_coverage_v1":
@@ -922,13 +910,10 @@ def _candidate_unit_coverage_boosts(
 ) -> tuple[int, tuple[str, ...]]:
     boost = 0
     reasons: list[str] = []
-    if (
-        ("bake" in lowered_question or "baking" in lowered_question)
-        and re.search(
-            r"\b(bake|baked|baking|bread|cake|cookies?|baguette|"
-            r"sourdough|oven|recipe)\b",
-            lowered_user,
-        )
+    if ("bake" in lowered_question or "baking" in lowered_question) and re.search(
+        r"\b(bake|baked|baking|bread|cake|cookies?|baguette|"
+        r"sourdough|oven|recipe)\b",
+        lowered_user,
     ):
         boost += 10
         reasons.append("baking_event_mention")

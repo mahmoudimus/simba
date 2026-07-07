@@ -284,8 +284,7 @@ def test_verifier_probe_carries_target_destination_context() -> None:
             evidence_date="2023/05/02",
             segment_index=1,
             text=(
-                "I recently got back from a solo trip to New York City for "
-                "five days."
+                "I recently got back from a solo trip to New York City for five days."
             ),
             is_answer_session=True,
         ),

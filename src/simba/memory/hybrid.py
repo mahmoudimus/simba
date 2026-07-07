@@ -264,10 +264,10 @@ async def _session_expansion_records(
         return []
     out: list[dict[str, typing.Any]] = []
     for sid in session_sources:
-        query = table.query().where(
-            f"sessionSource = {_lance_literal(sid)}"
-        ).limit(
-            limit_per_session
+        query = (
+            table.query()
+            .where(f"sessionSource = {_lance_literal(sid)}")
+            .limit(limit_per_session)
         )
         rows = await query.to_list()
         for raw in rows:
@@ -285,9 +285,12 @@ async def _records_by_ids(
         return []
     out: list[dict[str, typing.Any]] = []
     for memory_id in memory_ids:
-        rows = await table.query().where(f"id = {_lance_literal(memory_id)}").limit(
-            1
-        ).to_list()
+        rows = (
+            await table.query()
+            .where(f"id = {_lance_literal(memory_id)}")
+            .limit(1)
+            .to_list()
+        )
         if rows and _passes_filters(rows[0], filters):
             out.append(_session_record(rows[0]))
     return out
@@ -417,9 +420,7 @@ async def hybrid_search(
                 table,
                 sessions,
                 filters,
-                limit_per_session=getattr(
-                    cfg, "session_expansion_max_per_session", 12
-                ),
+                limit_per_session=getattr(cfg, "session_expansion_max_per_session", 12),
             )
             if session_records:
                 fused = simba.memory.session_expand.fold_session_records(

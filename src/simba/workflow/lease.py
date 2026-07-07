@@ -76,9 +76,7 @@ def acquire(
         except pw.IntegrityError:
             # Lost the create race on UNIQUE (queue, dedup_key) — re-read and
             # apply the same lock semantics to the winner's row.
-            existing = WfTask.get(
-                (WfTask.queue == queue) & (WfTask.dedup_key == key)
-            )
+            existing = WfTask.get((WfTask.queue == queue) & (WfTask.dedup_key == key))
             return _reacquire(existing, stale_after_seconds, now)
 
 

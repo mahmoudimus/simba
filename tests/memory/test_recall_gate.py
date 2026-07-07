@@ -4,6 +4,7 @@ Distinct from the per-result ``min_similarity`` floor: this judges the BEST
 candidate and suppresses the WHOLE recall when even it is too weak — MemX-style
 abstention to cut spurious recalls (LME ``_abs`` / over-retention).
 """
+
 from __future__ import annotations
 
 from simba.memory.scoring import apply_rejection_gate, truncate_to_budget
@@ -39,8 +40,12 @@ class TestRejectionGate:
 
     def test_custom_score_key(self) -> None:
         mems = [{"id": "x", "rerank_score": 0.9}]
-        assert apply_rejection_gate(
-            mems, enabled=True, threshold=0.5, score_key="rerank_score") == mems
+        assert (
+            apply_rejection_gate(
+                mems, enabled=True, threshold=0.5, score_key="rerank_score"
+            )
+            == mems
+        )
 
     def test_zero_threshold_keeps_everything_when_enabled(self) -> None:
         mems = [_m(0.0)]
@@ -74,8 +79,10 @@ class TestTruncateToBudget:
         assert len(out) == 8
 
     def test_context_counts_toward_budget(self) -> None:
-        recs = [{"id": "1", "content": "a" * 40, "context": "b" * 40},
-                {"id": "2", "content": "c" * 40}]
+        recs = [
+            {"id": "1", "content": "a" * 40, "context": "b" * 40},
+            {"id": "2", "content": "c" * 40},
+        ]
         # rec1 ~20 tokens (80 chars), budget 15 -> only rec1 (top always in)
         out = truncate_to_budget(recs, max_results=10, token_budget=15)
         assert [r["id"] for r in out] == ["1"]

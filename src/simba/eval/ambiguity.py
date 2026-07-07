@@ -276,16 +276,10 @@ def _count_lot_products(
         threshold = sorted(counts, reverse=True)[top_n - 1]
     else:
         raise ValueError(f"unknown product threshold: {kind}")
-    ids = [
-        str(record["id"])
-        for record in records
-        if int(record["items"]) >= threshold
-    ]
+    ids = [str(record["id"]) for record in records if int(record["items"]) >= threshold]
     if kind == "above_average":
         ids = [
-            str(record["id"])
-            for record in records
-            if int(record["items"]) > threshold
+            str(record["id"]) for record in records if int(record["items"]) > threshold
         ]
     return {"count": len(ids)}, ids
 
@@ -318,15 +312,11 @@ def _count_apple_purchases(
     entity_kind = str(params["entity_kind"])
     if entity_kind == "merchant_apple_inc":
         ids = [
-            str(record["id"])
-            for record in records
-            if record.get("merchant") == "Apple"
+            str(record["id"]) for record in records if record.get("merchant") == "Apple"
         ]
     elif entity_kind == "apple_product_brand":
         ids = [
-            str(record["id"])
-            for record in records
-            if record.get("brand") == "Apple"
+            str(record["id"]) for record in records if record.get("brand") == "Apple"
         ]
     elif entity_kind == "grocery_apples":
         ids = [

@@ -19,7 +19,7 @@ _ARTICLES = ("the ", "a ", "an ")
 _WS = re.compile(r"\s+")
 _EDGE_PUNCT = ".,;:!?"
 # straight + curly quotes/backtick (curly via escapes to avoid ambiguous-unicode)
-_QUOTES = "\"\'`" + "\u201c\u201d\u2018\u2019"
+_QUOTES = "\"'`" + "\u201c\u201d\u2018\u2019"
 
 
 def normalize_entity(name: str) -> str:

@@ -98,9 +98,7 @@ class HaluSession:
             memory_points=[
                 MemoryPoint.from_dict(m) for m in (raw.get("memory_points") or [])
             ],
-            questions=[
-                HaluQuestion.from_dict(q) for q in (raw.get("questions") or [])
-            ],
+            questions=[HaluQuestion.from_dict(q) for q in (raw.get("questions") or [])],
             start_time=str(raw.get("start_time", "")),
             end_time=str(raw.get("end_time", "")),
         )
@@ -121,9 +119,7 @@ class HaluUser:
         )
 
 
-def load_halumem(
-    path: str | pathlib.Path, *, user_limit: int = 0
-) -> list[HaluUser]:
+def load_halumem(path: str | pathlib.Path, *, user_limit: int = 0) -> list[HaluUser]:
     """Load a HaluMem ``*.jsonl`` (one user/line). ``user_limit>0`` subsamples
     the first N users (the corpus is >1M tokens/user — see docs/plans/10)."""
     users: list[HaluUser] = []

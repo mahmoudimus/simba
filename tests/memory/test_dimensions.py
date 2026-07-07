@@ -4,6 +4,7 @@ Typed write-side fields (time / location / reason / purpose / keywords) that mak
 aggregation DETERMINISTIC: tag a memory at write time, then filter/count by field at
 read time instead of re-individuating in-head. Borrowed from DimMem (arXiv 2605.15759).
 """
+
 from __future__ import annotations
 
 from simba.memory.dimensions import (
@@ -79,8 +80,9 @@ class TestFilterBy:
             {"id": "2", "dims": Dimensions(time="2023-04-01")},
             {"id": "3", "dims": Dimensions()},  # undated
         ]
-        out = filter_by(recs, lambda r: r["dims"],
-                        time_start="2023-05-01", time_end="2023-05-31")
+        out = filter_by(
+            recs, lambda r: r["dims"], time_start="2023-05-01", time_end="2023-05-31"
+        )
         assert [r["id"] for r in out] == ["1"]
 
 

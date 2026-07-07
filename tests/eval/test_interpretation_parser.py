@@ -29,9 +29,7 @@ def test_parse_interpretation_response_accepts_valid_record() -> None:
     assert result.parse_status == "parsed"
     assert result.case_id == "q1"
     assert result.parse_errors == ()
-    assert result.interpretations[0].to_dict()["ambiguity_types"] == [
-        "scope_ambiguous"
-    ]
+    assert result.interpretations[0].to_dict()["ambiguity_types"] == ["scope_ambiguous"]
 
 
 def test_parse_interpretation_response_rejects_markdown_wrapped_json() -> None:

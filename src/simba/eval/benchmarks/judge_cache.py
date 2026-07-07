@@ -29,9 +29,7 @@ class JudgeCache:
     @staticmethod
     def key(judge_model: str, question: str, gold: str, predicted: str) -> str:
         h = hashlib.sha1()
-        h.update(
-            f"{judge_model}{_SEP}{question}{_SEP}{gold}{_SEP}{predicted}".encode()
-        )
+        h.update(f"{judge_model}{_SEP}{question}{_SEP}{gold}{_SEP}{predicted}".encode())
         return h.hexdigest()
 
     def get(

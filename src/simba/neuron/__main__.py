@@ -51,8 +51,17 @@ def _install_mcp(
     simba_bin = shutil.which("simba") or sys.argv[0]
     result = subprocess.run(
         [
-            claude, "mcp", "add", "neuron", *scope, "--",
-            simba_bin, "neuron", "run", "--root-dir", str(root_dir),
+            claude,
+            "mcp",
+            "add",
+            "neuron",
+            *scope,
+            "--",
+            simba_bin,
+            "neuron",
+            "run",
+            "--root-dir",
+            str(root_dir),
         ],
         check=False,
     )
@@ -71,12 +80,8 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # --- run ---
-    run_parser = subparsers.add_parser(
-        "run", help="Run the MCP server (internal use)"
-    )
-    run_parser.add_argument(
-        "--root-dir", type=Path, required=True, help="Project root"
-    )
+    run_parser = subparsers.add_parser("run", help="Run the MCP server (internal use)")
+    run_parser.add_argument("--root-dir", type=Path, required=True, help="Project root")
 
     # --- proxy ---
     proxy_parser = subparsers.add_parser(
@@ -125,9 +130,7 @@ def main() -> int:
         import simba.orchestration.proxy
 
         root_dir = args.root_dir.resolve()
-        simba.orchestration.proxy.run_proxy(
-            pid_file=args.pid_file, root_dir=root_dir
-        )
+        simba.orchestration.proxy.run_proxy(pid_file=args.pid_file, root_dir=root_dir)
         return 0
 
     # Default: run mode

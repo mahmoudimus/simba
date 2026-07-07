@@ -75,9 +75,7 @@ def ndcg_at_k(ranked: Sequence[str], relevant: Iterable[str], k: int) -> float:
     if not rel or k <= 0:
         return 0.0
     dcg = sum(
-        1.0 / math.log2(i + 1)
-        for i, r in enumerate(ranked[:k], start=1)
-        if r in rel
+        1.0 / math.log2(i + 1) for i, r in enumerate(ranked[:k], start=1) if r in rel
     )
     ideal_hits = min(len(rel), k)
     idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_hits + 1))

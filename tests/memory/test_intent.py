@@ -95,6 +95,8 @@ def test_is_knowledge_update_excludes_genuine_conflict_and_plain() -> None:
     assert intent.is_knowledge_update("") is False
     # "current" as a substring of another word must not trigger.
     assert intent.is_knowledge_update("how does the concurrent queue drain") is False
+
+
 # ── aggregation / multi-session detection (MS breadth PR) ─────────────────────
 # Population drawn from real LongMemEval-S multi-session questions that the count
 # predicate does NOT catch (no "how many X" instance-count shape) yet are still
