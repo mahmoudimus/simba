@@ -79,6 +79,105 @@ def test_nudges_render_heartbeat_and_candidates(monkeypatch) -> None:
     assert "simba memory promote" in text
 
 
+def test_nudges_graduation_ready_and_not_applying(monkeypatch) -> None:
+    """Spec 33 Part 8 rule R1: nudge fires ONLY when the DATA criteria are
+    met AND maintenance_apply hasn't already flipped. The bench guards
+    (LME-S/LoCoMo/HaluMem) stay manual — this only informs, never flips."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+
+    def fake_get(url, params=None, timeout=0.0):
+        assert url.endswith("/digest")
+        return _Resp(
+            {
+                "heartbeat": {
+                    "at": "2026-07-04T00:00:00Z",
+                    "apply": False,
+                    "decay": {},
+                },
+                "promotions": {"total": 0, "top": []},
+                "supersessions": {"pending": 0},
+                "gaps": {"total": 0, "top": []},
+                "graduation": {
+                    "signalDays": 15.0,
+                    "usedRatio": 0.75,
+                    "daysMet": True,
+                    "ratioMet": True,
+                    "ready": True,
+                    "benchGuards": "manual",
+                },
+            }
+        )
+
+    monkeypatch.setattr(session_start.httpx, "get", fake_get)
+    text = session_start._lifecycle_nudges(cfg)
+    assert "maintenance_apply data criteria MET" in text
+    assert "15d signals" in text
+    assert "75% fired rules used" in text
+    assert "simba config set memory.maintenance_apply true" in text
+
+
+def test_nudges_graduation_silent_when_not_ready(monkeypatch) -> None:
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+
+    def fake_get(url, params=None, timeout=0.0):
+        return _Resp(
+            {
+                "heartbeat": {
+                    "at": "2026-07-04T00:00:00Z",
+                    "apply": False,
+                    "decay": {},
+                },
+                "promotions": {"total": 0, "top": []},
+                "supersessions": {"pending": 0},
+                "gaps": {"total": 0, "top": []},
+                "graduation": {
+                    "signalDays": 5.0,
+                    "usedRatio": 0.2,
+                    "daysMet": False,
+                    "ratioMet": False,
+                    "ready": False,
+                    "benchGuards": "manual",
+                },
+            }
+        )
+
+    monkeypatch.setattr(session_start.httpx, "get", fake_get)
+    text = session_start._lifecycle_nudges(cfg)
+    assert "maintenance_apply data criteria MET" not in text
+
+
+def test_nudges_graduation_silent_when_already_applying(monkeypatch) -> None:
+    """ready=True but maintenance_apply already flipped (heartbeat.apply is
+    True) -> no nudge; the lever's already turned, nagging would be noise."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+
+    def fake_get(url, params=None, timeout=0.0):
+        return _Resp(
+            {
+                "heartbeat": {
+                    "at": "2026-07-04T00:00:00Z",
+                    "apply": True,
+                    "decay": {},
+                },
+                "promotions": {"total": 0, "top": []},
+                "supersessions": {"pending": 0},
+                "gaps": {"total": 0, "top": []},
+                "graduation": {
+                    "signalDays": 20.0,
+                    "usedRatio": 0.9,
+                    "daysMet": True,
+                    "ratioMet": True,
+                    "ready": True,
+                    "benchGuards": "manual",
+                },
+            }
+        )
+
+    monkeypatch.setattr(session_start.httpx, "get", fake_get)
+    text = session_start._lifecycle_nudges(cfg)
+    assert "maintenance_apply data criteria MET" not in text
+
+
 def test_nudges_off_by_default_no_http(monkeypatch) -> None:
     def _boom(*a, **kw):  # pragma: no cover - must not be reached
         raise AssertionError("no HTTP when nudges disabled")

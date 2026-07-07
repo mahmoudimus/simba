@@ -15,9 +15,11 @@ import simba.db
 import simba.memory.config
 import simba.memory.demand as demand
 import simba.memory.fts
+import simba.memory.maintenance as maintenance
 import simba.memory.server
 import simba.memory.supersession as supersession
 import simba.memory.usage as usage
+import simba.memory.usage_events as usage_events
 import simba.tailor.hook as tailor_hook
 
 
@@ -43,8 +45,12 @@ def _client(tmp_path, lance_table, mock_embed, cfg) -> httpx.AsyncClient:
 
 @pytest.mark.asyncio
 async def test_digest_aggregates_lifecycle_state(
-    tmp_path, lance_table, mock_embed
+    tmp_path, lance_table, mock_embed, monkeypatch
 ) -> None:
+    # Graduation readiness fetches TOOL_RULE ids via a daemon self-call; stub
+    # it so the test never depends on a real (or stray) daemon on the
+    # configured port.
+    monkeypatch.setattr(maintenance, "_fetch_tool_rule_ids", lambda url: [])
     cfg = simba.memory.config.MemoryConfig()
     with simba.db.connect(tmp_path):
         usage.bump_quality("mem_hot", 1.0, use=4, noise=0)
@@ -75,13 +81,14 @@ async def test_digest_aggregates_lifecycle_state(
 
 @pytest.mark.asyncio
 async def test_digest_surfaces_repeat_failures(
-    tmp_path, lance_table, mock_embed
+    tmp_path, lance_table, mock_embed, monkeypatch
 ) -> None:
     """Spec 33 v2 rule R3: the reflections ledger (tailor-style failure
     captures) is write-only until now — a normalized error recurring across
     >=2 distinct sessions >=3 days apart surfaces as a rule-draft candidate."""
     import time as _time
 
+    monkeypatch.setattr(maintenance, "_fetch_tool_rule_ids", lambda url: [])
     cfg = simba.memory.config.MemoryConfig()
     with simba.db.connect(tmp_path):
         tailor_hook.Reflection.create(
@@ -115,7 +122,38 @@ async def test_digest_surfaces_repeat_failures(
 
 
 @pytest.mark.asyncio
-async def test_digest_empty_state(tmp_path, lance_table, mock_embed) -> None:
+async def test_digest_surfaces_graduation_readiness(
+    tmp_path, lance_table, mock_embed, monkeypatch
+) -> None:
+    """Spec 33 Part 8 rule R1: the digest surfaces the DATA-side readiness
+    check for `maintenance_apply` — informational only, this never flips it
+    (only a human does, after the manual LME-S/LoCoMo/HaluMem bench guards)."""
+    import time as _time
+
+    monkeypatch.setattr(maintenance, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    cfg = simba.memory.config.MemoryConfig()
+    now = _time.time()
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=now - 20 * 86400.0)
+        usage.bump_quality("r1", now, match=1, use=1)
+        usage.bump_quality("r2", now, match=1, use=1)
+
+    async with _client(tmp_path, lance_table, mock_embed, cfg) as ac:
+        resp = await ac.get("/digest")
+    assert resp.status_code == 200
+    grad = resp.json()["graduation"]
+    assert grad["daysMet"] is True
+    assert grad["ratioMet"] is True
+    assert grad["ready"] is True
+    assert grad["usedRatio"] == 1.0
+    assert grad["benchGuards"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_digest_empty_state(
+    tmp_path, lance_table, mock_embed, monkeypatch
+) -> None:
+    monkeypatch.setattr(maintenance, "_fetch_tool_rule_ids", lambda url: [])
     cfg = simba.memory.config.MemoryConfig()
     async with _client(tmp_path, lance_table, mock_embed, cfg) as ac:
         # No last_maintenance either.
@@ -133,3 +171,11 @@ async def test_digest_empty_state(tmp_path, lance_table, mock_embed) -> None:
     assert body["gaps"]["total"] == 0
     assert body["repeatFailures"]["total"] == 0
     assert body["repeatFailures"]["top"] == []
+    assert body["graduation"] == {
+        "signalDays": 0.0,
+        "usedRatio": 0.0,
+        "daysMet": False,
+        "ratioMet": False,
+        "ready": False,
+        "benchGuards": "manual",
+    }

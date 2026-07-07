@@ -15,6 +15,7 @@ import pytest
 
 import simba.db
 import simba.memory.usage as usage
+import simba.memory.usage_events as usage_events
 from simba.memory.maintenance import MaintenanceScheduler, run_maintenance
 
 _DAY = 86400.0
@@ -45,6 +46,8 @@ def _cfg(**kw):
         repeat_failure_min_sessions=2,
         repeat_failure_min_days_apart=3.0,
         repeat_failure_top_n=3,
+        maintenance_graduation_min_days=14.0,
+        maintenance_graduation_min_used_ratio=0.6,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
@@ -226,6 +229,180 @@ def test_repeat_failure_no_reflections_reports_zero(tmp_path: pathlib.Path) -> N
         now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
     )
     assert result["repeat_failures"] == {"clusters": 0, "top": []}
+
+
+# --- Graduation readiness (spec 33 Part 8 rule R1) --------------------------
+#
+# The DATA half of the criteria gating `maintenance_apply`'s flip to True:
+# >= maintenance_graduation_min_days of accumulated usage-signal history
+# (usage_events, earliest to now) AND >= maintenance_graduation_min_used_ratio
+# of TOOL_RULE memories that FIRED carrying a `last_used` stamp. "Fired" here
+# means `memory_usage.match_count > 0` (see test_graduation_fired_is_match_
+# count_not_inject_count for why, not inject_count). The bench guards (LME-S/
+# LoCoMo/HaluMem) are explicitly manual and never automated by this check —
+# it only ever informs, never flips the lever.
+
+
+def test_graduation_ready_when_days_and_ratio_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Both DATA criteria met -> ready. 2/3 fired TOOL_RULEs carry last_used
+    (0.667 >= the 0.6 floor); 20d of signal history clears the 14d floor."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2", "r3"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1, use=1)
+        usage.bump_quality("r3", _NOW, match=1)  # fired, never used
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["signalDays"] == pytest.approx(20.0, abs=0.01)
+    assert grad["usedRatio"] == pytest.approx(2 / 3, abs=0.001)
+    assert grad["daysMet"] is True
+    assert grad["ratioMet"] is True
+    assert grad["ready"] is True
+    assert grad["benchGuards"] == "manual"
+
+
+def test_graduation_not_ready_when_only_days_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2", "r3"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1)
+        usage.bump_quality("r3", _NOW, match=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is True
+    assert grad["ratioMet"] is False
+    assert grad["ready"] is False
+
+
+def test_graduation_not_ready_when_only_ratio_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 5 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1, use=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is False
+    assert grad["ratioMet"] is True
+    assert grad["ready"] is False
+
+
+def test_graduation_not_ready_when_neither_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 5 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1)
+        usage.bump_quality("r2", _NOW, match=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is False
+    assert grad["ratioMet"] is False
+    assert grad["ready"] is False
+
+
+def test_graduation_no_events_reports_zero_days_not_started(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: [])
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["signalDays"] == 0.0
+    assert grad["daysMet"] is False
+
+
+def test_graduation_no_fired_rules_reports_zero_ratio(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """No TOOL_RULE has ever fired (matched) yet -> ratio 0.0, not a division
+    error and not vacuously 1.0."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1"])
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("r1", _NOW, inject=1, use=1)  # never matched
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["usedRatio"] == 0.0
+    assert grad["ratioMet"] is False
+
+
+def test_graduation_fired_is_match_count_not_inject_count(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """'Fired' = memory_usage.match_count > 0 (bumped every time
+    `_recall_tool_rules` surfaces a TOOL_RULE as a gate candidate via the
+    daemon's POST /recall), NOT inject_count > 0 (wired only to the separate
+    UserPromptSubmit /recall/ack lane, which the tool-rule gate never calls
+    — it posts `use` feedback directly the moment it actually fires). A
+    TOOL_RULE with inject+use but zero match must not count as fired."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("r1", _NOW, match=1, use=1)  # fired + used
+        usage.bump_quality("r2", _NOW, inject=1, use=1)  # injected, never matched
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    # Only r1 counts as fired; it is used -> ratio 1.0, not diluted by r2.
+    assert grad["usedRatio"] == 1.0
+
+
+def test_graduation_readiness_ignores_maintenance_apply(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """READ-ONLY: reports identically in shadow and apply passes. This check
+    never itself flips maintenance_apply — a human does, after the manual
+    bench guards."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+    shadow = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    applied = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True),
+        daemon_url="http://unused",
+    )
+    assert shadow["graduation"] == applied["graduation"]
 
 
 def test_maintenance_tempfile_sweep_shadow_then_apply(

@@ -108,6 +108,9 @@ def run_maintenance(
     result["reflection"] = _run_reflection(cwd, daemon_url, dry_run)
     result["promotions"] = _count_promotion_candidates(cwd, cfg)
     result["repeat_failures"] = _cluster_repeat_failures(cwd, cfg)
+    result["graduation"] = _graduation_readiness(
+        now=now, cwd=cwd, cfg=cfg, daemon_url=daemon_url
+    )
     result["tempfiles"] = _sweep_session_tempfiles(now=now, cfg=cfg, dry_run=dry_run)
 
     # Forgetting-run tracker (spec 33 v2 rule R5, hebb-mind borrow): every
@@ -285,6 +288,104 @@ def _cluster_repeat_failures(cwd: pathlib.Path, cfg: typing.Any) -> dict:
         return {"clusters": len(clusters), "top": clusters[:top_n]}
     except Exception:
         logger.debug("[maintenance] repeat-failure clustering failed", exc_info=True)
+        return {"error": True}
+
+
+def _fetch_tool_rule_ids(daemon_url: str) -> list[str]:
+    """TOOL_RULE memory ids via ``GET /list?type=TOOL_RULE`` — mirrors the
+    hygiene pass's server-filtered fetch (``run_hygiene_pass``). Fail-soft
+    ``[]`` on any HTTP error; never raises."""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"{daemon_url}/list",
+            params={"type": "TOOL_RULE", "limit": 10000},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        memories = resp.json().get("memories", [])
+    except (httpx.HTTPError, ValueError):
+        logger.debug("[maintenance] graduation tool-rule fetch failed", exc_info=True)
+        return []
+    return [
+        m["id"]
+        for m in memories
+        if isinstance(m, dict) and m.get("type") == "TOOL_RULE" and m.get("id")
+    ]
+
+
+def _graduation_readiness(
+    *, now: float, cwd: pathlib.Path, cfg: typing.Any, daemon_url: str
+) -> dict:
+    """Data-side readiness for the ``maintenance_apply`` graduation gate
+    (spec 33 Part 8 rule R1). READ-ONLY, like ``_cluster_repeat_failures`` —
+    runs every heartbeat regardless of ``maintenance_apply`` and never
+    writes or flips anything; a human flips the lever by hand, after the
+    MANUAL bench guards (LME-S/LoCoMo/HaluMem — explicitly out of scope
+    here, hence ``benchGuards`` always reports ``"manual"``).
+
+    Two data criteria, both required for ``ready``:
+
+    - ``signalDays``: days between ``now`` and the EARLIEST ``usage_events``
+      row (any memory, session, or kind) — how long signals have been
+      accumulating. No events yet -> 0.0 (not started). Compared against
+      ``memory.maintenance_graduation_min_days``.
+    - ``usedRatio``: among TOOL_RULE memories that FIRED, the fraction whose
+      sidecar carries ``last_used > 0``. "Fired" here means
+      ``memory_usage.match_count > 0`` — the counter ``POST /recall`` bumps
+      every time ``_recall_tool_rules`` (PreToolUse) surfaces a TOOL_RULE as
+      a gate candidate. ``inject_count`` is deliberately NOT used: that
+      counter is wired only to the separate UserPromptSubmit
+      ``/recall/ack`` lane (``hooks.recall_ack_enabled``, default off) and
+      stays 0 for TOOL_RULE rows — the tool-rule gate never acks; it posts
+      ``use`` feedback directly the moment it actually fires (see
+      ``pre_tool_use.py``'s "Spec 33 Phase 1" comment). No fired rules yet
+      -> 0.0. Compared against
+      ``memory.maintenance_graduation_min_used_ratio``.
+
+    Fail-soft: any error -> ``{"error": True}`` (matches
+    ``_cluster_repeat_failures`` / ``_count_promotion_candidates``).
+    """
+    try:
+        import simba.db
+        import simba.memory.usage
+        import simba.memory.usage_events
+
+        min_days = float(getattr(cfg, "maintenance_graduation_min_days", 14.0))
+        min_ratio = float(getattr(cfg, "maintenance_graduation_min_used_ratio", 0.6))
+        tool_rule_ids = _fetch_tool_rule_ids(daemon_url)
+
+        with simba.db.connect(cwd):
+            earliest = simba.memory.usage_events.earliest_event_at()
+            signal_days = (
+                max(0.0, (now - earliest) / 86400.0) if earliest is not None else 0.0
+            )
+
+            fired = []
+            if tool_rule_ids:
+                rows = simba.memory.usage.MemoryUsage.select().where(
+                    simba.memory.usage.MemoryUsage.memory_id.in_(tool_rule_ids)
+                )
+                fired = [row for row in rows if row.match_count > 0]
+            used_ratio = (
+                sum(1 for row in fired if row.last_used > 0) / len(fired)
+                if fired
+                else 0.0
+            )
+
+        days_met = signal_days >= min_days
+        ratio_met = used_ratio >= min_ratio
+        return {
+            "signalDays": round(signal_days, 2),
+            "usedRatio": round(used_ratio, 4),
+            "daysMet": days_met,
+            "ratioMet": ratio_met,
+            "ready": days_met and ratio_met,
+            "benchGuards": "manual",
+        }
+    except Exception:
+        logger.debug("[maintenance] graduation readiness failed", exc_info=True)
         return {"error": True}
 
 

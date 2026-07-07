@@ -142,6 +142,23 @@ def _lifecycle_nudges(cfg, cwd: pathlib.Path | None = None) -> str:
             inbox.append(f"{gap_count} knowledge gap(s) — `simba memory gaps`")
         if inbox:
             lines.append("[Lifecycle] inbox: " + " | ".join(inbox))
+
+        # Graduation-readiness nudge (spec 33 Part 8 rule R1): surface ONLY
+        # when the DATA criteria are met AND maintenance_apply hasn't
+        # already flipped — `heartbeat.apply` mirrors the CURRENT config
+        # value (set by run_maintenance every pass), so it doubles as the
+        # "already applying" check without a second daemon round-trip. Once
+        # applying, this line would be stale noise (a human already turned
+        # the lever); progress otherwise lives in the digest, not here.
+        graduation = digest.get("graduation") or {}
+        if graduation.get("ready") and not heartbeat.get("apply"):
+            lines.append(
+                "[Lifecycle] maintenance_apply data criteria MET "
+                f"({graduation.get('signalDays', 0):.0f}d signals, "
+                f"{graduation.get('usedRatio', 0) * 100:.0f}% fired rules "
+                "used) — run bench guards, then: "
+                "simba config set memory.maintenance_apply true"
+            )
     else:
         try:
             resp = httpx.get(f"{base}/stats", timeout=1.0)

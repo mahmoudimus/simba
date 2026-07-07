@@ -1467,6 +1467,7 @@ async def boot_digest(request: fastapi.Request) -> dict:
         min_uses = int(getattr(config, "promotion_min_uses", 3))
         max_ratio = float(getattr(config, "promotion_max_noise_ratio", 0.5))
         min_sessions = int(getattr(config, "promotion_min_sessions", 1))
+        daemon_url = f"http://127.0.0.1:{getattr(config, 'port', 8741)}"
         with simba.db.connect(cwd):
             rows = simba.memory.usage.MemoryUsage.select().where(
                 (simba.memory.usage.MemoryUsage.use_count >= min_uses)
@@ -1511,6 +1512,9 @@ async def boot_digest(request: fastapi.Request) -> dict:
             repeat_failures = simba.memory.maintenance._cluster_repeat_failures(
                 cwd, config
             )
+            graduation = simba.memory.maintenance._graduation_readiness(
+                now=time.time(), cwd=cwd, cfg=config, daemon_url=daemon_url
+            )
         return {
             "promotions": {"total": len(candidates), "top": candidates[:3]},
             "supersessions": {"pending": pending},
@@ -1531,6 +1535,18 @@ async def boot_digest(request: fastapi.Request) -> dict:
                     for c in repeat_failures.get("top", [])
                 ],
             },
+            # Spec 33 Part 8 rule R1 — informational only; never flips
+            # maintenance_apply (a human does, after the manual bench
+            # guards). `.get(..., default)` keeps the shape whole even if
+            # the read-only pass itself failed (`{"error": True}`).
+            "graduation": {
+                "signalDays": graduation.get("signalDays", 0.0),
+                "usedRatio": graduation.get("usedRatio", 0.0),
+                "daysMet": graduation.get("daysMet", False),
+                "ratioMet": graduation.get("ratioMet", False),
+                "ready": graduation.get("ready", False),
+                "benchGuards": graduation.get("benchGuards", "manual"),
+            },
         }
 
     try:
@@ -1542,6 +1558,14 @@ async def boot_digest(request: fastapi.Request) -> dict:
             "supersessions": {"pending": 0},
             "gaps": {"total": 0, "top": []},
             "repeatFailures": {"total": 0, "top": []},
+            "graduation": {
+                "signalDays": 0.0,
+                "usedRatio": 0.0,
+                "daysMet": False,
+                "ratioMet": False,
+                "ready": False,
+                "benchGuards": "manual",
+            },
         }
     return {"heartbeat": heartbeat, **data}
 

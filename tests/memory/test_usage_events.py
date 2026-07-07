@@ -30,6 +30,21 @@ def test_record_and_distinct_sessions(tmp_path: pathlib.Path) -> None:
         assert usage_events.use_sessions_for(["mem_e", "mem_x"]) == {"mem_e": 2}
 
 
+def test_earliest_event_at_returns_none_when_empty(tmp_path: pathlib.Path) -> None:
+    with simba.db.connect(tmp_path):
+        assert usage_events.earliest_event_at() is None
+
+
+def test_earliest_event_at_returns_minimum_created_at(tmp_path: pathlib.Path) -> None:
+    """The graduation-readiness ``signal_days`` axis (spec 33 Part 8 rule R1)
+    reads from the EARLIEST event, any memory/session/kind."""
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_e", "s1", "use", now=50.0)
+        usage_events.record("mem_f", "s2", "noise", now=10.0)
+        usage_events.record("mem_g", "s3", "use", now=30.0)
+        assert usage_events.earliest_event_at() == 10.0
+
+
 @pytest_asyncio.fixture
 async def feedback_client(tmp_path: pathlib.Path):
     cfg = simba.memory.config.MemoryConfig(feedback_default_weight=0.3)

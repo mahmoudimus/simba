@@ -545,6 +545,21 @@ class MemoryConfig:
     # GET /digest); `clusters` always reports the true total, so nothing is
     # silently hidden by the cap.
     repeat_failure_top_n: int = 3
+    # Graduation readiness (spec 33 Part 8 rule R1 — DATA criteria only): the
+    # daemon-computable half of the gate for flipping `maintenance_apply` to
+    # True. `_graduation_readiness` (maintenance.py) compares accumulated
+    # usage-signal history (`usage_events`, earliest to now) and TOOL_RULE
+    # fired-rule `last_used` coverage against these two floors and surfaces
+    # `ready` in the maintenance result (`graduation`) and `GET /digest`. The
+    # OTHER half of R1 — LME-S/LoCoMo/HaluMem bench guards — is explicitly
+    # MANUAL and never automated: this check only informs a human, it never
+    # flips the lever itself.
+    maintenance_graduation_min_days: float = 14.0
+    # First shadow pass (spec 33 Part 8) found 57/60 TOOL_RULEs would-expire
+    # on the created-at clock alone — only ~5% carried `last_used`. 0.6 is
+    # the floor that catches that failure mode before `maintenance_apply`
+    # (which starts using `last_used`-derived signals) flips on.
+    maintenance_graduation_min_used_ratio: float = 0.6
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:
