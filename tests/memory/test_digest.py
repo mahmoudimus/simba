@@ -18,7 +18,6 @@ import simba.memory.fts
 import simba.memory.server
 import simba.memory.supersession as supersession
 import simba.memory.usage as usage
-import simba.memory.usage_events
 import simba.tailor.hook as tailor_hook
 
 
