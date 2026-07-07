@@ -749,9 +749,12 @@ class TestToolRuleProjectGate:
         assert called.get("yes") is True
         assert result is not None
 
-    def test_gate_fail_open_on_count_error(self, monkeypatch, tmp_path):
-        # count_memories returns None (daemon unreachable) -> proceed (do the
-        # check) so a real rule is never silently suppressed.
+    def test_gate_fail_closed_on_count_error(self, monkeypatch, tmp_path):
+        # count_memories returns None (daemon unreachable) -> fail CLOSED (skip
+        # the recall). The daemon being unreachable means the downstream recall
+        # would silently fail to [] anyway (recall_memories catches HTTPError),
+        # so there is no real rule protection to lose here -- only a doomed
+        # HTTP round-trip to avoid.
         class FakeCfg:
             rule_count_ttl = 300
 
@@ -759,7 +762,41 @@ class TestToolRuleProjectGate:
         monkeypatch.setattr(
             "simba.hooks._memory_client.count_memories", lambda **k: None
         )
-        assert pre_hook._project_has_tool_rules("/proj", FakeCfg()) is True
+        assert pre_hook._project_has_tool_rules("/proj", FakeCfg()) is False
+
+    def test_unreachable_answer_not_cached_and_gate_self_heals(
+        self, monkeypatch, tmp_path
+    ):
+        # The fail-closed False from an unreachable daemon must NOT be written
+        # to the TTL cache. Otherwise a transient blip during the SessionStart
+        # daemon-autostart window (~4.5s: 15 attempts x 300ms poll_interval)
+        # would wrongly suppress a real project's TOOL_RULEs for the full
+        # rule_count_ttl (default 300s) once the daemon comes back up. Simulate
+        # exactly that sequence: unreachable on the first call, reachable with
+        # rules on the very next call, no ttl sleep in between.
+        cache_path = tmp_path / "trc.json"
+        monkeypatch.setattr(pre_hook, "_TOOL_RULE_COUNT_CACHE", cache_path)
+
+        class FakeCfg:
+            rule_count_ttl = 300
+
+        cfg = FakeCfg()
+
+        monkeypatch.setattr(
+            "simba.hooks._memory_client.count_memories", lambda **k: None
+        )
+        assert pre_hook._project_has_tool_rules("/proj", cfg) is False
+        assert not cache_path.exists()  # nothing durable persisted for "unknown"
+
+        calls = {"n": 0}
+
+        def fake_count(**k):
+            calls["n"] += 1
+            return 2  # daemon is back and this project really has rules
+
+        monkeypatch.setattr("simba.hooks._memory_client.count_memories", fake_count)
+        assert pre_hook._project_has_tool_rules("/proj", cfg) is True
+        assert calls["n"] == 1  # re-probed fresh, not served a stale/poisoned entry
 
     def test_gate_caches_within_ttl(self, monkeypatch, tmp_path):
         calls = {"n": 0}
