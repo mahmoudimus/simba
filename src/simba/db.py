@@ -62,7 +62,21 @@ class BaseModel(pw.Model):
 
 
 _MODELS: list[type[pw.Model]] = []
-_schema_ready: set[str] = set()
+# path -> len(_MODELS) at the time DDL last ran for that path. Keying on the
+# model-set *size* (not just the path) matters because models are registered
+# by IMPORTING their module, and some subsystem modules are only imported
+# lazily inside route handlers (e.g. simba/memory/usage_events.py, pulled in
+# by a handful of simba/memory/routes.py handler bodies, never at module
+# level). If connect() ran DDL for a path before such a module was ever
+# imported, the model wasn't in _MODELS yet and its table never got created.
+# A bare "path seen before" flag then permanently skipped DDL for that path,
+# so the late-registered model's table was never created for the rest of the
+# process's life. _MODELS only ever grows (register_model dedupes by
+# identity), so a plain length comparison is a cheap, correct proxy for "the
+# registered model set changed since this path was last verified" -- no new
+# DDL runs when nothing changed (cheap on the hot path), but any newly
+# registered model invalidates every path's cache entry exactly once.
+_schema_ready: dict[str, int] = {}
 
 
 def register_model(*models: type[pw.Model]) -> None:
@@ -77,7 +91,11 @@ def connect(cwd: pathlib.Path | None = None) -> Generator[pw.SqliteDatabase]:
     """Bind the shared peewee database to ``simba.db`` and yield it.
 
     Re-entrant via peewee's ``connection_context`` (safe to nest for the same
-    repo).  Creates tables for all registered models once per database path.
+    repo).  Creates tables for all registered models once per (database path,
+    model-set) pair -- so a model registered after this path was already
+    marked ready (a lazily-imported subsystem module) still gets its table
+    created on the next connect for that path, instead of being silently
+    skipped for good.
     """
     path = str(get_db_path(cwd))
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -86,13 +104,13 @@ def connect(cwd: pathlib.Path | None = None) -> Generator[pw.SqliteDatabase]:
             database.close()
         database.init(path)
     with database.connection_context():
-        if path not in _schema_ready:
+        if _schema_ready.get(path) != len(_MODELS):
             # Run legacy raw initializers first (FTS5 virtual tables + triggers
             # that peewee models can't express), then create model tables.
             _init_schemas(database.connection())
             if _MODELS:
                 database.create_tables(_MODELS)
-            _schema_ready.add(path)
+            _schema_ready[path] = len(_MODELS)
         yield database
 
 

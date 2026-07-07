@@ -8,6 +8,7 @@ import sqlite3
 
 import pytest
 
+import simba._vendor.peewee as pw
 import simba.config
 import simba.db
 
@@ -164,3 +165,74 @@ class TestGetConnection:
         finally:
             if conn is not None:
                 conn.close()
+
+
+class TestConnectModelRegistrationCache:
+    """A peewee model registered (via ``register_model``) AFTER a path has
+    already been through ``connect()`` once must still get its table created
+    the next time that path connects.
+
+    Real-world sequence this reproduces: the daemon process calls
+    ``simba.db.connect(path)`` for the first time from a code path that
+    hasn't yet imported a lazily-loaded subsystem module (e.g.
+    ``simba/memory/usage_events.py``, which ``simba/memory/routes.py`` only
+    imports inside individual handler bodies, not at module level). Import
+    executing ``register_model(UsageEvent)`` moments later doesn't help: the
+    schema-ready cache was keyed on *path alone*, so every later ``connect()``
+    for that path skipped DDL for good -- the table never gets created for
+    the rest of the process's life.
+    """
+
+    def test_model_registered_after_first_connect_still_gets_migrated(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        class LateModel(simba.db.BaseModel):
+            name = pw.TextField()
+
+            class Meta:
+                table_name = "test_late_registered_model"
+
+        # 1) Something calls connect() BEFORE the lazy module has registered
+        #    its model -- mirrors a /recall request's fire-and-forget
+        #    `_bump_usage()` (imports only `simba.memory.usage`) winning the
+        #    race against `_record_demand()`/the `/digest` handler (which
+        #    import `simba.memory.demand` / `simba.memory.usage_events`).
+        with simba.db.connect(tmp_path):
+            pass
+
+        # 2) The lazy import now happens -- mirrors routes.py's function-body
+        #    `import simba.memory.usage_events`, which calls register_model()
+        #    at module-import time, *after* the connect() above already ran
+        #    DDL once for this path.
+        simba.db.register_model(LateModel)
+
+        # 3) A later request reuses the same (cached) path. On unfixed code
+        #    this raises peewee.OperationalError("no such table") because the
+        #    schema-ready cache keyed on path alone treats this path as fully
+        #    migrated already.
+        with simba.db.connect(tmp_path):
+            LateModel.create(name="x")
+            assert LateModel.select().where(LateModel.name == "x").count() == 1
+
+    def test_no_new_model_skips_ddl_on_second_connect(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fix must stay cheap on the hot path: a second ``connect()`` for
+        the same path with no newly-registered models must NOT re-run
+        ``create_tables``."""
+        with simba.db.connect(tmp_path):
+            pass
+
+        calls: list[int] = []
+        original = simba.db.database.create_tables
+
+        def _spy(models, **kwargs):
+            calls.append(len(models))
+            return original(models, **kwargs)
+
+        monkeypatch.setattr(simba.db.database, "create_tables", _spy)
+
+        with simba.db.connect(tmp_path):
+            pass
+
+        assert calls == []
