@@ -130,7 +130,16 @@ class MemoryConfig:
     # Let the background sync scheduler run the hygiene pass.
     hygiene_scheduler_enabled: bool = True
     sync_interval: int = 0
-    shutdown_timeout: int = 10
+    # Graceful-shutdown budget (seconds) --- the ONE knob governing both
+    # uvicorn's own `timeout_graceful_shutdown` (server.py's uvicorn.run
+    # call) and `simba.memory.background.drain()`'s wait-for-fire-and-forget-
+    # tasks budget in the daemon's shutdown hook (handoff item 10, spec 33
+    # follow-up). Float (was int prior to this change) so tests can drive a
+    # sub-second grace without truncation. Live 2026-07-08: a SIGTERM
+    # breached this window ("Cancel 54 running task(s)") because those
+    # fire-and-forget tasks were never tracked/awaited at all; see
+    # background.py's module docstring for the full failure analysis.
+    shutdown_timeout: float = 10.0
     # Continuous extraction (the "Continuous" gap). When on, the Stop hook reads only
     # the NEW transcript window each turn (incremental cursor, O(new)) and enqueues it
     # for the scored extract->score->keep/drop worker. DEFAULT-OFF: this ships the

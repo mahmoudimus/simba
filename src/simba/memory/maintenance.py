@@ -295,6 +295,15 @@ def _fetch_tool_rule_ids(daemon_url: str) -> list[str]:
     """TOOL_RULE memory ids via ``GET /list?type=TOOL_RULE`` — mirrors the
     hygiene pass's server-filtered fetch (``run_hygiene_pass``). Fail-soft
     ``[]`` on any HTTP error; never raises."""
+    import simba.memory.background
+
+    if simba.memory.background.is_shutting_down():
+        # Handoff item 10: once the daemon starts shutting down, this
+        # loopback GET can never complete (uvicorn has stopped serving) ---
+        # skip it immediately instead of guaranteeing a graceful-shutdown
+        # timeout breach.
+        return []
+
     import httpx
 
     try:
@@ -499,6 +508,13 @@ def _fetch_type_map(daemon_url: str) -> dict[str, str] | None:
     """``memory_id -> TYPE`` over the corpus via ``GET /list`` (the capacity-cap
     pattern: types live only in LanceDB). Fail-soft ``None`` → decay falls back
     to the base half-life for every row."""
+    import simba.memory.background
+
+    if simba.memory.background.is_shutting_down():
+        # Handoff item 10: same shutdown guard as _fetch_tool_rule_ids ---
+        # this loopback GET can never complete once uvicorn stops serving.
+        return None
+
     import httpx
 
     try:

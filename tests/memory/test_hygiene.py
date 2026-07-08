@@ -123,6 +123,69 @@ def test_hygiene_skips_recently_used_rules(tmp_path, monkeypatch) -> None:
     assert result.expired_count == 1
 
 
+def test_hygiene_skips_entirely_when_shutting_down(monkeypatch) -> None:
+    """Handoff item 10: once daemon shutdown begins, hygiene's self-HTTP GET
+    must not fire at all --- once uvicorn stops serving, a loopback request
+    to the daemon's own endpoint can never complete, guaranteeing a graceful-
+    shutdown timeout breach if a pass is mid-flight."""
+    import simba.memory.background as background
+    from simba.memory.config import MemoryConfig
+    from simba.memory.hygiene import run_hygiene_pass
+
+    def _boom(*a, **kw):
+        raise AssertionError("httpx.get must not be called while shutting down")
+
+    background.mark_shutting_down()
+    with patch("httpx.get", side_effect=_boom):
+        result = run_hygiene_pass(
+            daemon_url="http://localhost:8741",
+            cfg=MemoryConfig(tool_rule_max_age_days=30),
+        )
+    assert result.expired_count == 0
+    assert result.errors == 0
+
+
+def test_hygiene_stops_deleting_once_shutdown_flips_mid_loop(monkeypatch) -> None:
+    """A pass already past the initial GET must stop issuing NEW deletes the
+    moment shutdown begins, instead of working through the entire backlog ---
+    each further DELETE is another self-HTTP call that can never complete
+    once uvicorn stops serving."""
+    import simba.memory.background as background
+    from simba.memory.config import MemoryConfig
+    from simba.memory.hygiene import run_hygiene_pass
+
+    old = _iso(_now() - timedelta(days=40))
+    memories = [
+        {"id": "m_first", "type": "TOOL_RULE", "createdAt": old},
+        {"id": "m_second", "type": "TOOL_RULE", "createdAt": old},
+    ]
+    deleted: list[str] = []
+
+    def fake_get(url, **kw):
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        r.json.return_value = {"memories": memories, "total": 2}
+        return r
+
+    def fake_delete(url, **kw):
+        deleted.append(url.split("/")[-1])
+        background.mark_shutting_down()  # flips mid-loop, after the 1st delete
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        return r
+
+    with (
+        patch("httpx.get", side_effect=fake_get),
+        patch("httpx.delete", side_effect=fake_delete),
+    ):
+        result = run_hygiene_pass(
+            daemon_url="http://localhost:8741",
+            cfg=MemoryConfig(tool_rule_max_age_days=30),
+        )
+    assert deleted == ["m_first"]
+    assert result.expired_count == 1
+
+
 def test_hygiene_dry_run_counts_without_delete(monkeypatch) -> None:
     """Shadow mode (spec 33): count would-expire rules, never DELETE."""
     from simba.memory.config import MemoryConfig

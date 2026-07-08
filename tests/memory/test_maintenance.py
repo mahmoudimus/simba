@@ -686,6 +686,70 @@ def test_run_maintenance_fetches_type_map_for_multipliers(
     assert rows["mem_p"].strength > rows["mem_g"].strength
 
 
+def test_fetch_type_map_skips_http_when_shutting_down(monkeypatch) -> None:
+    """Root cause (b), handoff item 10: once uvicorn stops serving, a
+    self-HTTP loopback call can never complete --- guaranteeing the graceful
+    shutdown timeout is breached if a maintenance pass is mid-flight. The
+    shutdown flag must short-circuit before any HTTP attempt."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    def _boom(*a, **kw):
+        raise AssertionError("httpx.get must not be called while shutting down")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    background.mark_shutting_down()
+
+    assert maint._fetch_type_map("http://x") is None
+
+
+def test_fetch_tool_rule_ids_skips_http_when_shutting_down(monkeypatch) -> None:
+    """Same guard as ``_fetch_type_map`` for the graduation-readiness fetch
+    (also reachable from ``GET /digest``'s ``_graduation_readiness`` call)."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    def _boom(*a, **kw):
+        raise AssertionError("httpx.get must not be called while shutting down")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    background.mark_shutting_down()
+
+    assert maint._fetch_tool_rule_ids("http://x") == []
+
+
+def test_fetch_type_map_calls_http_when_not_shutting_down(monkeypatch) -> None:
+    """Sanity check: the guard is additive --- normal operation is unaffected."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    assert background.is_shutting_down() is False
+
+    calls: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"memories": [{"id": "mem_a", "type": "PATTERN"}]}
+
+    def _fake_get(url, **kw):
+        calls["url"] = url
+        return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    assert maint._fetch_type_map("http://x") == {"mem_a": "PATTERN"}
+    assert calls["url"] == "http://x/list"
+
+
 @pytest.mark.asyncio
 async def test_scheduler_run_once_stores_and_reports(tmp_path: pathlib.Path) -> None:
     with simba.db.connect(tmp_path):

@@ -1338,7 +1338,7 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 | `sync_interval` | 0 | Sync interval in seconds (0=disabled) |
 | `outcome_quality_weight` | 0.0 | Default-off strength/decay contribution from `use_count` vs `noise_count` quality counters |
 | `diagnostics_after` | 50 | Emit diagnostics report every N requests |
-| `shutdown_timeout` | 10 | Graceful shutdown timeout in seconds |
+| `shutdown_timeout` | 10.0 | Graceful shutdown budget in seconds — governs both uvicorn's `timeout_graceful_shutdown` and the fire-and-forget background-task drain budget (one knob, both uses) |
 | `hybrid_enabled` | true | Fuse BM25 keyword arm with the vector arm (RRF) |
 | `rrf_k` | 20 | Reciprocal Rank Fusion rank constant (swept 2026-06-06: 20 beat 60 on LoCoMo) |
 | `fts_candidate_pool` | 20 | Candidates pulled per arm before fusion |

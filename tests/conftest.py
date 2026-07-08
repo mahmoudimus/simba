@@ -38,6 +38,22 @@ def _reset_db_globals():
 
 
 @pytest.fixture(autouse=True)
+def _reset_background_globals():
+    """Reset the shutdown-aware background-task registry between tests.
+
+    ``simba.memory.background`` (handoff item 10) tracks fire-and-forget
+    daemon tasks and a process-level shutdown flag in module globals ---
+    mirroring the existing ``_reset_db_globals`` pattern above, since a flag
+    left set (or a stale task reference) by one test must never leak into
+    the next.
+    """
+    yield
+    import simba.memory.background as _background
+
+    _background.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _block_real_model_loads(request, monkeypatch):
     """Globally forbid real GGUF reranker / local-LLM loads in the unit suite so no
     test reaches Hugging Face. The default ``reranker_mode="cross-encoder"`` would
