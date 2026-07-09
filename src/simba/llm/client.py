@@ -171,10 +171,15 @@ class LlmClient:
         provider = self._cfg.provider
         if provider == "claude-cli":
             return [
-                "claude", "-p", prompt,
-                "--model", self._cfg.model,
-                "--output-format", "json",
-                "--max-turns", "1",
+                "claude",
+                "-p",
+                prompt,
+                "--model",
+                self._cfg.model,
+                "--output-format",
+                "json",
+                "--max-turns",
+                "1",
                 # Load ONLY user settings (not project/local) so simba's own
                 # hooks — registered at project/local scope — don't fire when
                 # simba spawns its internal `claude -p`, which would re-enter the
@@ -183,7 +188,8 @@ class LlmClient:
                 # Preferred over --bare because it keeps keychain/OAuth auth
                 # (--bare skips keychain -> "Not logged in"). Caveat: if simba
                 # hooks are installed at USER scope this won't exclude them.
-                "--setting-sources", "user",
+                "--setting-sources",
+                "user",
                 *self._extra(),
             ]
         if provider == "llm-cli":
@@ -198,9 +204,12 @@ class LlmClient:
             # llama.cpp's CLI — fully local GGUF inference.
             return [
                 "llama-cli",
-                "-m", self._local_model(),
-                "-p", prompt,
-                "-n", str(self._cfg.max_tokens),
+                "-m",
+                self._local_model(),
+                "-p",
+                prompt,
+                "-n",
+                str(self._cfg.max_tokens),
                 "-no-cnv",
                 "--no-display-prompt",
                 *self._extra(),
@@ -209,9 +218,12 @@ class LlmClient:
             # Apple MLX local inference (mlx_lm.generate).
             return [
                 "mlx_lm.generate",
-                "--model", self._local_model(),
-                "--prompt", prompt,
-                "--max-tokens", str(self._cfg.max_tokens),
+                "--model",
+                self._local_model(),
+                "--prompt",
+                prompt,
+                "--max-tokens",
+                str(self._cfg.max_tokens),
                 *self._extra(),
             ]
         return []

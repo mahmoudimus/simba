@@ -80,7 +80,41 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     sync_task = await _start_sync_scheduler(app)
     maintenance_task = await _start_maintenance_scheduler(app)
     yield
-    # Shutdown: stop schedulers, wait briefly, then force-cancel.
+    await _shutdown_daemon(app, sync_task=sync_task, maintenance_task=maintenance_task)
+
+
+async def _shutdown_daemon(
+    app: fastapi.FastAPI,
+    *,
+    sync_task: asyncio.Task | None,  # type: ignore[type-arg]
+    maintenance_task: asyncio.Task | None,  # type: ignore[type-arg]
+) -> None:
+    """Stop schedulers, drain tracked background tasks, then force-cancel.
+
+    Handoff item 10 (2026-07-08 SIGTERM breach: uvicorn's graceful window
+    exceeded --- "Cancel 54 running task(s)"). Root causes and how this
+    function addresses them, in order:
+
+    (b) Marks the process-level shutdown flag FIRST, before anything else,
+        so a self-HTTP helper already mid-flight in a background pass
+        (maintenance/hygiene fetches --- see background.py's module
+        docstring) bails out on its very next check instead of hanging on a
+        loopback request that can never complete once uvicorn stops serving.
+    (existing) Stops the sync/maintenance schedulers and gives each a brief
+        window to finish before force-cancelling --- unchanged from before
+        this refactor (moved out of ``lifespan`` so it's testable without
+        a real DB/embedding-model startup).
+    (a) Drains simba.memory.background's registry --- the fire-and-forget
+        routes.py tasks (usage bumps, demand logging, HyDE/rerank cache
+        warms, ...) that were previously never tracked or awaited at
+        shutdown at all.
+
+    ``config.shutdown_timeout`` is the one knob governing both uvicorn's own
+    ``timeout_graceful_shutdown`` (see ``main()``) and this drain budget.
+    """
+    import simba.memory.background
+
+    simba.memory.background.mark_shutting_down()
     config: simba.memory.config.MemoryConfig = app.state.config
     sync_timeout = max(1, config.shutdown_timeout // 2)
     if sync_task is not None:
@@ -106,6 +140,7 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
             maintenance_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await maintenance_task
+    await simba.memory.background.drain(config.shutdown_timeout)
     await shutdown_embeddings(app)
 
 

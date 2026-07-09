@@ -191,8 +191,7 @@ def test_fail18_generation_artifact_is_payload_only() -> None:
     )
     assert "user_term_overlap" in artifact["evidence_selection"]["score_formula"]
     assert (
-        "_gitless/fail18_ambiguous_nlidb_gate1_payloads.json"
-        in artifact["commands"][0]
+        "_gitless/fail18_ambiguous_nlidb_gate1_payloads.json" in artifact["commands"][0]
     )
 
 

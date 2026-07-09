@@ -342,6 +342,57 @@ class TestProcessHook:
         context = json.loads(row["context"])
         assert isinstance(context, dict)
 
+    def test_stores_session_id_when_present(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Spec 33 v2 rule R3: the reflections-ledger reader clusters repeat
+        failures by distinct session, so the write path must capture the
+        hook payload's session_id (present on every Claude/Codex hook call)."""
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+
+        transcript_path = tmp_path / "transcript.jsonl"
+        error_msg = (
+            "Error: something failed in the request handler while "
+            "processing the main application module"
+        )
+        transcript_path.write_text(json.dumps({"toolUseResult": error_msg}) + "\n")
+        hook_input = json.dumps(
+            {
+                "transcript_path": str(transcript_path),
+                "cwd": str(tmp_path),
+                "session_id": "sess-xyz-123",
+            }
+        )
+        simba.tailor.hook.process_hook(hook_input)
+
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute("SELECT * FROM reflections").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == "sess-xyz-123"
+
+    def test_session_id_defaults_empty_when_absent(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+
+        transcript_path = tmp_path / "transcript.jsonl"
+        error_msg = (
+            "Error: no session id was supplied here at all in this "
+            "particular hook payload for this particular test"
+        )
+        transcript_path.write_text(json.dumps({"toolUseResult": error_msg}) + "\n")
+        hook_input = json.dumps(
+            {"transcript_path": str(transcript_path), "cwd": str(tmp_path)}
+        )
+        simba.tailor.hook.process_hook(hook_input)
+
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute("SELECT * FROM reflections").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == ""
+
     def test_exits_silently_on_empty_input(self):
         # Should not raise
         simba.tailor.hook.process_hook("")

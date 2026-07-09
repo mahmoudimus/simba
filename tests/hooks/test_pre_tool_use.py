@@ -6,6 +6,7 @@ import dataclasses
 import json
 import unittest.mock
 
+import simba.db
 import simba.hooks.config
 import simba.hooks.pre_tool_use
 
@@ -128,6 +129,103 @@ def _thinking_transcript(tmp_path, text):
     }
     transcript.write_text(json.dumps(entry) + "\n")
     return transcript
+
+
+class TestRecallMinQueryChars:
+    """MemOS borrow: parity with UserPromptSubmit's ``prompt_min_length`` floor.
+
+    The general thinking-block recall previously had no length floor at all
+    (deferred entirely to the daemon's similarity gate) — ``hooks.
+    recall_min_query_chars`` adds the same cheap short-circuit UserPromptSubmit
+    already has, so a near-empty thinking block never reaches the daemon.
+    """
+
+    def test_default_matches_prompt_min_length(self):
+        cfg = simba.hooks.config.HooksConfig()
+        assert cfg.recall_min_query_chars == 10
+        assert cfg.recall_min_query_chars == cfg.prompt_min_length
+
+    def test_short_thinking_skips_recall_entirely(self, tmp_path):
+        # "ok" is 2 chars, well under the 10-char default floor.
+        transcript = _thinking_transcript(tmp_path, "ok")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories"
+            ) as mock_recall,
+            unittest.mock.patch("simba.hooks.pre_tool_use._check_dedup") as mock_dedup,
+        ):
+            result = json.loads(
+                simba.hooks.pre_tool_use.main(
+                    {"tool_name": "Read", "transcript_path": str(transcript)}
+                )
+            )
+        mock_recall.assert_not_called()
+        mock_dedup.assert_not_called()  # gate short-circuits before dedup work
+        assert result["hookSpecificOutput"] == {"hookEventName": "PreToolUse"}
+
+    def test_long_enough_thinking_still_recalls(self, tmp_path):
+        # Exactly at the floor (10 chars) — inclusive boundary still recalls.
+        transcript = _thinking_transcript(tmp_path, "a" * 10)
+        memories = [{"type": "GOTCHA", "content": "at the floor", "similarity": 0.5}]
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories",
+                return_value=memories,
+            ) as mock_recall,
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            result = json.loads(
+                simba.hooks.pre_tool_use.main(
+                    {"tool_name": "Read", "transcript_path": str(transcript)}
+                )
+            )
+        mock_recall.assert_called_once()
+        ctx = result["hookSpecificOutput"].get("additionalContext", "")
+        assert "at the floor" in ctx
+
+    def test_custom_floor_configurable(self, tmp_path, monkeypatch):
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), recall_min_query_chars=50
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        # 22 chars — clears the default floor but not this raised one.
+        transcript = _thinking_transcript(tmp_path, "a fairly short thought")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories"
+            ) as mock_recall,
+            unittest.mock.patch("simba.hooks.pre_tool_use._check_dedup") as mock_dedup,
+        ):
+            simba.hooks.pre_tool_use.main(
+                {"tool_name": "Read", "transcript_path": str(transcript)}
+            )
+        mock_recall.assert_not_called()
+        mock_dedup.assert_not_called()
+
+    def test_zero_floor_disables_gate(self, tmp_path, monkeypatch):
+        # 0 = off: even a 1-char thinking block recalls (parity with
+        # prompt_min_length's own semantics, where 0 would mean "no floor").
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), recall_min_query_chars=0
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        transcript = _thinking_transcript(tmp_path, "x")
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories",
+                return_value=[],
+            ) as mock_recall,
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+        ):
+            simba.hooks.pre_tool_use.main(
+                {"tool_name": "Read", "transcript_path": str(transcript)}
+            )
+        mock_recall.assert_called_once()
 
 
 class _ViolatingLLM:
@@ -339,8 +437,17 @@ class TestPitfallGate:
         ctx = result["hookSpecificOutput"].get("additionalContext", "")
         assert "pitfall-warning" not in ctx  # gate suppressed on a read tool
 
-    def test_check_pitfall_disabled_returns_none(self):
-        # Unit: default config (gate off) → None regardless of input.
+    def test_check_pitfall_disabled_returns_none(self, monkeypatch):
+        # Unit: default config (gate off) → None regardless of input. Pin the
+        # dataclass default explicitly: _check_pitfall calls the real _hooks_cfg()
+        # itself, so an ambient .simba/config.toml with pitfall_gate_enabled=true
+        # would otherwise make this "gate off" characterization reach the real
+        # recall_memories daemon call instead of short-circuiting immediately.
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use,
+            "_hooks_cfg",
+            lambda: simba.hooks.config.HooksConfig(),
+        )
         assert simba.hooks.pre_tool_use._check_pitfall("anything", None) is None
 
 
@@ -361,11 +468,36 @@ class TestPitfallGatePayloadThinking:
             }
         ]
 
-    def test_payload_thinking_escalates_pitfall(self, tmp_path, monkeypatch):
+    @staticmethod
+    def _cfg(monkeypatch, **over):
+        """Pin ``_hooks_cfg`` for these tests, with ``rule_check_enabled`` forced
+        off regardless of ``over``.
+
+        Every test in this class passes a truthy ``tool_input``
+        (``{"command": "git revert"}``) with no ``cwd``, so ``run()`` also drives
+        the unrelated TOOL_RULE gate (``_recall_tool_rules``) alongside whatever
+        the pitfall gate is doing. That gate resolves its project id via
+        ``simba.db.resolve_project_id(None)`` -> the *process* cwd when the
+        payload has none — worktree-robust by design, ``find_repo_root`` walks
+        past a worktree's ``.git`` FILE up to the parent repo's ``.git``
+        DIRECTORY — and then asks the real daemon/cache whether that project has
+        TOOL_RULE rows. In a checkout with a populated ``.simba/`` (real rows,
+        or just a reachable daemon — ``_project_has_tool_rules`` fails OPEN when
+        the daemon can't be reached at all), that comes back True and the gate
+        consumes THIS file's ``recall_memories`` mock too, leaking an unrelated
+        ``escalated_block`` into these pitfall-only assertions. None of these
+        tests exercise TOOL_RULE, so it is pinned off here instead of relying on
+        cwd isolation alone (see ``test_isolated_from_populated_live_tool_rule_state``
+        below for the regression this closes).
+        """
         cfg = dataclasses.replace(
-            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
+            simba.hooks.config.HooksConfig(), rule_check_enabled=False, **over
         )
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        return cfg
+
+    def test_payload_thinking_escalates_pitfall(self, tmp_path, monkeypatch):
+        self._cfg(monkeypatch, pitfall_gate_enabled=True)
         monkeypatch.setattr(
             simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
         )
@@ -378,12 +510,16 @@ class TestPitfallGatePayloadThinking:
             ),
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
-            # No transcript_path — only payload thinking, as pi sends it.
+            # No transcript_path — only payload thinking, as pi sends it. cwd is
+            # pinned to the isolated tmp_path so the sibling redirect/check_command
+            # path (which reads real config independent of the _cfg pin above)
+            # can't consult whatever repo the suite happens to run from either.
             result = simba.hooks.pre_tool_use.run(
                 {
                     "tool_name": "Bash",
                     "tool_input": {"command": "git revert"},
                     "thinking": "I'll revert and xfail the test",
+                    "cwd": str(tmp_path),
                 }
             )
         assert result.escalated_block is not None
@@ -394,10 +530,7 @@ class TestPitfallGatePayloadThinking:
 
     def test_no_thinking_no_escalation(self, tmp_path, monkeypatch):
         # No transcript, no payload thinking → the gate never runs → no escalation.
-        cfg = dataclasses.replace(
-            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
-        )
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        self._cfg(monkeypatch, pitfall_gate_enabled=True)
         monkeypatch.setattr(
             simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
         )
@@ -405,17 +538,18 @@ class TestPitfallGatePayloadThinking:
             "simba.hooks._memory_client.recall_memories", return_value=self._hit()
         ):
             result = simba.hooks.pre_tool_use.run(
-                {"tool_name": "Bash", "tool_input": {"command": "git revert"}}
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git revert"},
+                    "cwd": str(tmp_path),
+                }
             )
         assert result.escalated_block is None
         assert "pitfall-warning" not in result.additional_context
 
     def test_disabled_gate_no_escalation_with_thinking(self, tmp_path, monkeypatch):
         # Gate OFF (default) → payload thinking is ignored, no escalation.
-        cfg = dataclasses.replace(
-            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=False
-        )
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        self._cfg(monkeypatch, pitfall_gate_enabled=False)
         monkeypatch.setattr(
             simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
         )
@@ -433,6 +567,50 @@ class TestPitfallGatePayloadThinking:
                     "tool_name": "Bash",
                     "tool_input": {"command": "git revert"},
                     "thinking": "I'll revert and xfail the test",
+                    "cwd": str(tmp_path),
+                }
+            )
+        assert result.escalated_block is None
+
+    def test_isolated_from_populated_live_tool_rule_state(self, tmp_path, monkeypatch):
+        """Regression fixture for the leak ``_cfg`` documents above.
+
+        Simulates the exact live-checkout condition from the bug report: the
+        resolved project genuinely HAS TOOL_RULE rows (a populated
+        ``.simba/simba.db``). Forcing that counterfactual explicitly (rather
+        than depending on whatever the real machine's daemon/``.simba`` happens
+        to contain when the suite runs) makes this test a deterministic tripwire
+        — it stays green only because ``_cfg`` pins ``rule_check_enabled=False``;
+        if that pin is ever removed, ``_recall_tool_rules`` reaches the
+        ``recall_memories`` mock below and leaks its hit into
+        ``escalated_block``, and this test goes red.
+        """
+        self._cfg(monkeypatch, pitfall_gate_enabled=False)
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
+        )
+        # The project resolves to a stable id that genuinely "has" TOOL_RULE rows.
+        monkeypatch.setattr(
+            simba.db, "resolve_project_id", lambda p=None: "live-like-project-id"
+        )
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_project_has_tool_rules", lambda *a, **k: True
+        )
+        with (
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=self._hit()
+            ),
+            unittest.mock.patch(
+                "simba.hooks.pre_tool_use._check_dedup", return_value=False
+            ),
+            unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
+        ):
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git revert"},
+                    "thinking": "I'll revert and xfail the test",
+                    "cwd": str(tmp_path),
                 }
             )
         assert result.escalated_block is None
@@ -441,10 +619,7 @@ class TestPitfallGatePayloadThinking:
         # When both are present, the payload thinking wins (pi never sends both, but
         # the precedence must be deterministic). Transcript holds a NON-violating
         # thought; the payload holds the violating one → the gate fires on the payload.
-        cfg = dataclasses.replace(
-            simba.hooks.config.HooksConfig(), pitfall_gate_enabled=True
-        )
-        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        self._cfg(monkeypatch, pitfall_gate_enabled=True)
         monkeypatch.setattr(
             simba.hooks.pre_tool_use, "_pitfall_llm_client", lambda _c: _ViolatingLLM()
         )
@@ -457,6 +632,13 @@ class TestPitfallGatePayloadThinking:
         monkeypatch.setattr(simba.hooks.pre_tool_use, "_check_pitfall", _check)
         transcript = _thinking_transcript(tmp_path, "harmless transcript thought")
         with (
+            # _check_pitfall is stubbed above, but the general thinking-block
+            # recall (tool_name "Bash" is in _ENABLED_TOOLS) still runs and would
+            # otherwise hit the real daemon; this test only cares about
+            # seen["thinking"], so an empty recall is enough.
+            unittest.mock.patch(
+                "simba.hooks._memory_client.recall_memories", return_value=[]
+            ),
             unittest.mock.patch(
                 "simba.hooks.pre_tool_use._check_dedup", return_value=False
             ),
@@ -468,6 +650,7 @@ class TestPitfallGatePayloadThinking:
                     "tool_input": {"command": "git revert"},
                     "transcript_path": str(transcript),
                     "thinking": "payload violating thought",
+                    "cwd": str(tmp_path),
                 }
             )
         assert seen["thinking"] == "payload violating thought"

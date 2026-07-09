@@ -27,11 +27,21 @@ def _init_reflections_schema(conn) -> None:
             error_type TEXT NOT NULL,
             snippet TEXT NOT NULL DEFAULT '',
             context TEXT NOT NULL DEFAULT '{}',
-            signature TEXT NOT NULL DEFAULT ''
+            signature TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_reflections_ts ON reflections(ts DESC);
         CREATE INDEX IF NOT EXISTS idx_reflections_type ON reflections(error_type);
     """)
+    # Migration for DBs created before session_id existed (spec 33 v2 rule
+    # R3): the reflections-ledger reader needs session identity to tell a
+    # REPEAT failure (recurring across >=2 distinct sessions) from the same
+    # session logging the same error more than once.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(reflections)")}
+    if "session_id" not in existing:
+        conn.execute(
+            "ALTER TABLE reflections ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"
+        )
 
 
 simba.db.register_schema(_init_reflections_schema)
@@ -44,6 +54,9 @@ class Reflection(simba.db.BaseModel):
     snippet = pw.TextField(default="")
     context = pw.TextField(default="{}")
     signature = pw.TextField(default="")
+    # Hook payload's session_id (spec 33 v2 rule R3): the reflections-ledger
+    # reader clusters by signature and needs this to count DISTINCT sessions.
+    session_id = pw.TextField(default="")
 
     class Meta:
         table_name = "reflections"
@@ -224,6 +237,7 @@ def process_hook(input_str: str) -> None:
     reflection = create_reflection_entry(error_type, snippet, context)
 
     cwd = hook_data.get("cwd", ".")
+    session_id = hook_data.get("session_id", "")
     try:
         with simba.db.connect(pathlib.Path(cwd)):
             Reflection.create(
@@ -233,6 +247,7 @@ def process_hook(input_str: str) -> None:
                 snippet=reflection["snippet"],
                 context=json.dumps(reflection["context"]),
                 signature=reflection["signature"],
+                session_id=session_id,
             )
     except Exception:
         pass

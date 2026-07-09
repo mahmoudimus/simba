@@ -63,9 +63,7 @@ def run(hook_input: dict) -> CanonicalResult:
     except Exception:
         return CanonicalResult()
 
-    return CanonicalResult(
-        additional_context=ledger, memory_count=len(memories)
-    )
+    return CanonicalResult(additional_context=ledger, memory_count=len(memories))
 
 
 def main(hook_input: dict) -> str:

@@ -128,9 +128,7 @@ def test_worker_loop_respects_max_tasks():
     processed = runner.worker_loop("q", lambda t: None, max_tasks=2, now=T0)
     assert processed == 2
     with simba.db.connect():
-        pending = store.WfTask.select().where(
-            store.WfTask.status == "pending"
-        ).count()
+        pending = store.WfTask.select().where(store.WfTask.status == "pending").count()
     assert pending == 1
 
 

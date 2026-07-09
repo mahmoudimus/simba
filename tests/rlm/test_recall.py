@@ -17,13 +17,15 @@ def test_route_maps_session_source_to_pointer(monkeypatch):
     monkeypatch.setattr(
         "simba.hooks._memory_client.recall_memories",
         lambda *a, **k: [
-            {"content": "decided X", "sessionSource": "s1",
-             "projectPath": "/p", "similarity": 0.8},
+            {
+                "content": "decided X",
+                "sessionSource": "s1",
+                "projectPath": "/p",
+                "similarity": 0.8,
+            },
         ],
     )
-    pointers = recall.route(
-        "what about X", cwd="/p", provider=_FakeProvider({"s1"})
-    )
+    pointers = recall.route("what about X", cwd="/p", provider=_FakeProvider({"s1"}))
     assert len(pointers) == 1
     p = pointers[0]
     assert p.transcript_id == "s1"
@@ -56,6 +58,7 @@ def test_route_handles_missing_session_source(monkeypatch):
 def test_route_empty_when_recall_fails(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("daemon down")
+
     monkeypatch.setattr("simba.hooks._memory_client.recall_memories", _boom)
     assert recall.route("q", cwd="/p", provider=_FakeProvider(set())) == []
 
@@ -64,22 +67,33 @@ def test_pointer_to_dict(monkeypatch):
     monkeypatch.setattr(
         "simba.hooks._memory_client.recall_memories",
         lambda *a, **k: [
-            {"content": "c", "sessionSource": "s1",
-             "projectPath": "/p", "similarity": 0.9},
+            {
+                "content": "c",
+                "sessionSource": "s1",
+                "projectPath": "/p",
+                "similarity": 0.9,
+            },
         ],
     )
     d = recall.route("q", cwd="/p", provider=_FakeProvider({"s1"}))[0].to_dict()
     assert d == {
-        "snippet": "c", "transcript_id": "s1", "project_path": "/p",
-        "similarity": 0.9, "available": True,
+        "snippet": "c",
+        "transcript_id": "s1",
+        "project_path": "/p",
+        "similarity": 0.9,
+        "available": True,
     }
 
 
 def test_pointers_from_memories_builds_pointers():
     ps = recall.pointers_from_memories(
         [
-            {"content": "c", "sessionSource": "s1",
-             "projectPath": "/p", "similarity": 0.9},
+            {
+                "content": "c",
+                "sessionSource": "s1",
+                "projectPath": "/p",
+                "similarity": 0.9,
+            },
             {"content": "no ss", "similarity": 0.5},
         ],
         "/p",

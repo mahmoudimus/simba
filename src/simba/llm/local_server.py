@@ -92,8 +92,9 @@ def ensure_server(
         if is_up(base_url):
             logger.info("local-server: ready at %s", base_url)
             return base_url
-    logger.warning("local-server: %s did not become ready in %.0fs", base_url,
-                   ready_timeout)
+    logger.warning(
+        "local-server: %s did not become ready in %.0fs", base_url, ready_timeout
+    )
     return None
 
 

@@ -73,6 +73,7 @@ def should_rerank(query: str, cfg: typing.Any) -> bool:
     except Exception:
         return True
 
+
 # Shared C-level llama.cpp log-suppression callback (kept alive at module scope
 # to prevent GC of the C callback), mirroring EmbeddingService._llama_log_cb.
 _LLAMA_LOG_CB: typing.Any = None

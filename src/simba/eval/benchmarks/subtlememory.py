@@ -317,9 +317,7 @@ def _readback_ranked_ids(dataset: Dataset, case: EvalCase) -> list[str]:
     }
     if not target_sessions:
         return list(case.relevant_ids)
-    return [
-        mem.id for mem in dataset.corpus if mem.session_source in target_sessions
-    ]
+    return [mem.id for mem in dataset.corpus if mem.session_source in target_sessions]
 
 
 def run_readback_recall(
@@ -549,9 +547,7 @@ def build_failure_ledger(
             ranked_sessions = _ranked_sessions(dataset, ranked_top)
             hit_sessions = set(ranked_sessions) & target_sessions
             readback_ranked = _readback_ranked_ids(dataset, case)
-            normal_recall = simba.eval.metrics.recall_at_k(
-                ranked, relevant, analysis_k
-            )
+            normal_recall = simba.eval.metrics.recall_at_k(ranked, relevant, analysis_k)
             readback_recall = simba.eval.metrics.recall_at_k(
                 readback_ranked, relevant, analysis_k
             )
@@ -584,8 +580,7 @@ def build_failure_ledger(
                     "gold_width_bound": len(relevant) > analysis_k,
                     "gap_label": label,
                     "top_hit_contents": [
-                        by_id[rid].content if rid in by_id else ""
-                        for rid in ranked_top
+                        by_id[rid].content if rid in by_id else "" for rid in ranked_top
                     ],
                 }
             )

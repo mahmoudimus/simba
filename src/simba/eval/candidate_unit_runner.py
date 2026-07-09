@@ -19,15 +19,9 @@ DEFAULT_QUALITY_REVIEW_PATH = pathlib.Path(
 DEFAULT_GATE1_PAYLOADS_PATH = pathlib.Path(
     "_gitless/fail18_ambiguous_nlidb_gate1_payloads.json"
 )
-DEFAULT_PAYLOADS_PATH = pathlib.Path(
-    "_gitless/fail18_candidate_unit_payloads.json"
-)
-DEFAULT_OUTPUTS_PATH = pathlib.Path(
-    "_gitless/fail18_candidate_unit_outputs.jsonl"
-)
-DEFAULT_REPORT_PATH = pathlib.Path(
-    "_gitless/fail18_candidate_unit_report.json"
-)
+DEFAULT_PAYLOADS_PATH = pathlib.Path("_gitless/fail18_candidate_unit_payloads.json")
+DEFAULT_OUTPUTS_PATH = pathlib.Path("_gitless/fail18_candidate_unit_outputs.jsonl")
+DEFAULT_REPORT_PATH = pathlib.Path("_gitless/fail18_candidate_unit_report.json")
 
 PARSE_STATUS_PARSED = "parsed"
 PARSE_STATUS_INVALID_JSON = "invalid_json"
@@ -291,10 +285,7 @@ def parse_candidate_unit_object(
     if answer_variable and answer_variable not in _ALLOWED_ANSWER_VARIABLES:
         errors.append(f"unknown answer_variable {answer_variable!r}")
     individuation_policy = _string_field(raw, "individuation_policy", errors)
-    if (
-        individuation_policy
-        and individuation_policy not in _ALLOWED_POLICIES
-    ):
+    if individuation_policy and individuation_policy not in _ALLOWED_POLICIES:
         errors.append(f"unknown individuation_policy {individuation_policy!r}")
     aggregation = _string_field(raw, "aggregation", errors)
     if aggregation and aggregation not in _ALLOWED_AGGREGATIONS:
@@ -400,8 +391,7 @@ def build_candidate_unit_report(
     parsed_rows = [
         row
         for row in rows
-        if row.get("parse_status") == PARSE_STATUS_PARSED
-        and not _provider_failed(row)
+        if row.get("parse_status") == PARSE_STATUS_PARSED and not _provider_failed(row)
     ]
     provider_failed_rows = [row for row in rows if _provider_failed(row)]
     case_reviews = [
@@ -414,9 +404,7 @@ def build_candidate_unit_report(
     rows_matching_gold = [
         case for case in case_reviews if case["recomputed_answer_matches_gold"]
     ]
-    total_latency = sum(
-        float(row.get("latency_seconds", 0.0) or 0.0) for row in rows
-    )
+    total_latency = sum(float(row.get("latency_seconds", 0.0) or 0.0) for row in rows)
     return {
         "name": "fail18-candidate-unit-provider-report",
         "artifact_kind": "candidate_unit_provider_report",
@@ -636,9 +624,7 @@ def _candidate_units(
         reason_code = _string_field(raw, "reason_code", unit_errors)
         reason = _string_field(raw, "reason", unit_errors)
         if unit_errors:
-            errors.extend(
-                f"candidate_units[{index}]: {error}" for error in unit_errors
-            )
+            errors.extend(f"candidate_units[{index}]: {error}" for error in unit_errors)
             continue
         units.append(
             ProviderCandidateUnit(
@@ -796,9 +782,8 @@ def _numbers_match(left: float | None, right: float | None) -> bool:
 
 
 def _provider_failed(row: dict[str, typing.Any]) -> bool:
-    return (
-        int(row.get("provider_exit_code", 0) or 0) != 0
-        or bool(row.get("provider_timed_out", False))
+    return int(row.get("provider_exit_code", 0) or 0) != 0 or bool(
+        row.get("provider_timed_out", False)
     )
 
 

@@ -26,9 +26,7 @@ class TestPermissionRequestHook:
                     {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
                 )
             )
-        assert out == {
-            "hookSpecificOutput": {"hookEventName": "PermissionRequest"}
-        }
+        assert out == {"hookSpecificOutput": {"hookEventName": "PermissionRequest"}}
 
     def test_unknown_tool_returns_empty(self):
         out = json.loads(
@@ -36,9 +34,7 @@ class TestPermissionRequestHook:
                 {"tool_name": "WebSearch", "tool_input": {"query": "x"}}
             )
         )
-        assert out["hookSpecificOutput"] == {
-            "hookEventName": "PermissionRequest"
-        }
+        assert out["hookSpecificOutput"] == {"hookEventName": "PermissionRequest"}
 
     def test_no_matching_memories_returns_empty(self):
         with unittest.mock.patch(
@@ -52,9 +48,7 @@ class TestPermissionRequestHook:
                     }
                 )
             )
-        assert out["hookSpecificOutput"] == {
-            "hookEventName": "PermissionRequest"
-        }
+        assert out["hookSpecificOutput"] == {"hookEventName": "PermissionRequest"}
 
     def test_weak_match_falls_through(self):
         with (
@@ -64,9 +58,7 @@ class TestPermissionRequestHook:
             ),
             unittest.mock.patch(
                 "simba.hooks._memory_client.recall_memories",
-                return_value=[
-                    {"content": "don't run rm -rf", "similarity": 0.55}
-                ],
+                return_value=[{"content": "don't run rm -rf", "similarity": 0.55}],
             ),
         ):
             out = json.loads(
@@ -77,9 +69,7 @@ class TestPermissionRequestHook:
                     }
                 )
             )
-        assert out["hookSpecificOutput"] == {
-            "hookEventName": "PermissionRequest"
-        }
+        assert out["hookSpecificOutput"] == {"hookEventName": "PermissionRequest"}
 
     def test_strong_match_denies(self):
         with (

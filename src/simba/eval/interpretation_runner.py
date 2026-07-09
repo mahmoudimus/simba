@@ -26,9 +26,7 @@ DEFAULT_PROVENANCE_PATH = pathlib.Path(
 DEFAULT_OUTPUTS_PATH = pathlib.Path(
     "_gitless/fail18_ambiguous_nlidb_gate1_outputs.jsonl"
 )
-DEFAULT_REPORT_PATH = pathlib.Path(
-    "_gitless/fail18_ambiguous_nlidb_gate1_report.json"
-)
+DEFAULT_REPORT_PATH = pathlib.Path("_gitless/fail18_ambiguous_nlidb_gate1_report.json")
 DEFAULT_PROVIDER_COMMAND = (
     "claude -p --no-session-persistence --safe-mode --tools '' "
     "--system-prompt 'Return exactly one strict JSON object matching the "
@@ -243,9 +241,7 @@ def build_gate1_report(
         if row.get("parse_status") == interpretation_parser.PARSE_STATUS_PARSED
     ]
     provider_failed_rows = [row for row in rows if _provider_failed(row)]
-    provider_success_rows = [
-        row for row in rows if not _provider_failed(row)
-    ]
+    provider_success_rows = [row for row in rows if not _provider_failed(row)]
     parsed_rows = [
         row
         for row in provider_success_rows
@@ -257,9 +253,7 @@ def build_gate1_report(
         if row.get("parse_status") != interpretation_parser.PARSE_STATUS_PARSED
         or _provider_failed(row)
     ]
-    interpretation_counts = [
-        len(row.get("interpretations", [])) for row in parsed_rows
-    ]
+    interpretation_counts = [len(row.get("interpretations", [])) for row in parsed_rows]
     total_interpretations = sum(interpretation_counts)
     ambiguity_distribution: collections.Counter[str] = collections.Counter()
     shape_distribution: collections.Counter[str] = collections.Counter()
@@ -272,9 +266,7 @@ def build_gate1_report(
             if shape:
                 shape_distribution[str(shape)] += 1
 
-    duplicate_count, duplicate_rows = _duplicate_interpretation_summary(
-        parsed_rows
-    )
+    duplicate_count, duplicate_rows = _duplicate_interpretation_summary(parsed_rows)
     latencies = [
         float(row["latency_seconds"])
         for row in rows
@@ -334,9 +326,7 @@ def build_gate1_report(
             round(total_interpretations / len(rows), 3) if rows else 0.0
         ),
         "ambiguity_type_distribution": dict(sorted(ambiguity_distribution.items())),
-        "expected_answer_shape_distribution": dict(
-            sorted(shape_distribution.items())
-        ),
+        "expected_answer_shape_distribution": dict(sorted(shape_distribution.items())),
         "duplicate_interpretation_count": duplicate_count,
         "duplicate_interpretation_rows": duplicate_rows,
         "case_coverage": {
@@ -347,9 +337,7 @@ def build_gate1_report(
             "extra_case_ids": extra_case_ids,
             "duplicate_case_ids": duplicate_case_ids,
         },
-        "fail18_noun_leakage_check": _fail18_noun_leakage_check(
-            payload_artifact
-        ),
+        "fail18_noun_leakage_check": _fail18_noun_leakage_check(payload_artifact),
         "provider_cost_or_latency_if_available": {
             "cost": None,
             "latency_seconds_total": round(sum(latencies), 3),
@@ -462,17 +450,12 @@ def _fail18_noun_leakage_check(
     checked_text = "\n".join(checked_values).lower()
     checked_tokens = set(re.findall(r"[a-z0-9]+", checked_text))
     forbidden_terms = sorted(
-        set(_PROMPT_NOUN_LEAKAGE_SEED_TERMS)
-        | _payload_question_terms(payload_artifact)
+        set(_PROMPT_NOUN_LEAKAGE_SEED_TERMS) | _payload_question_terms(payload_artifact)
     )
     found = [
         term
         for term in forbidden_terms
-        if (
-            term in checked_text
-            if " " in term
-            else term in checked_tokens
-        )
+        if (term in checked_text if " " in term else term in checked_tokens)
     ]
     return {
         "check_kind": "derived_question_terms_against_prompt_contract",

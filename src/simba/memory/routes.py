@@ -24,6 +24,7 @@ import starlette.responses
 import simba.harness.client
 import simba.harness.core
 import simba.memory.anticipated
+import simba.memory.background
 import simba.memory.conflict
 import simba.memory.conflict_store
 import simba.memory.dimensions
@@ -41,8 +42,12 @@ logger = logging.getLogger("simba.memory")
 
 router = fastapi.APIRouter()
 
-# Background tasks need a strong reference to avoid GC before completion.
-_background_tasks: set[asyncio.Task[None]] = set()
+# Shared with simba.memory.background: spawn() tracks tasks created here (and
+# hybrid.py's bg_tasks= reranker task, added directly below) in the SAME
+# registry so drain() can find every outstanding fire-and-forget task at
+# daemon shutdown (handoff item 10). The name stays for hybrid.py's existing
+# ``bg_tasks=_background_tasks`` call site --- only the backing set moved.
+_background_tasks = simba.memory.background.TASKS
 
 
 async def _bg_hyde(
@@ -231,11 +236,9 @@ def _maybe_log_demand(
         return
     best = float(results[0].get("similarity", 0.0) or 0.0) if results else 0.0
     cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
-    task = asyncio.create_task(
+    simba.memory.background.spawn(
         asyncio.to_thread(_record_demand, recall_query, len(results), best, cwd)
     )
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
 
 
 def _last_used_map(memory_ids: list[str], cwd: pathlib.Path) -> dict[str, float]:
@@ -589,9 +592,7 @@ class DiagnosticsMiddleware(starlette.middleware.base.BaseHTTPMiddleware):
             diag.record_latency(request.url.path, (time.monotonic() - t0) * 1000)
             if diag.should_report():
                 table = getattr(request.app.state, "table", None)
-                task = asyncio.create_task(diag.emit_report(table))
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                simba.memory.background.spawn(diag.emit_report(table))
         return response
 
 
@@ -999,11 +1000,9 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
             cached_ids = [m["id"] for m in cached if m.get("id")]
             if cached_ids:
                 cached_cwd = pathlib.Path(getattr(request.app.state, "cwd", "."))
-                task = asyncio.create_task(
+                simba.memory.background.spawn(
                     _bump_usage(cached_ids, time.time(), cached_cwd)
                 )
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
             _maybe_log_demand(request, config, body, recall_query, cached)
             return {"memories": cached, "queryTimeMs": 0, "cached": True}
 
@@ -1075,11 +1074,9 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
     if hyde_llm_on and hyde_cache is not None and llm_client is not None:
         hyde_key = hyde_cache.signature(body.query)
         if hyde_cache.get(hyde_key) is None:
-            task = asyncio.create_task(
+            simba.memory.background.spawn(
                 _bg_hyde(hyde_cache, hyde_key, body.query, llm_client)
             )
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
 
     # Multi-arm HyDE (opt-in): a 2nd vector arm over plan.hyde_text — the focus
     # terms in keyword mode, or the LLM hypothetical answer in llm mode.
@@ -1206,16 +1203,12 @@ async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict
         # each write adds a LanceDB version, which ballooned a store to 37GB/25k
         # versions. Bounded retention (the default) suppresses it.
         if getattr(config, "lancedb_version_retention_seconds", 86_400) <= 0:
-            task1 = asyncio.create_task(
+            simba.memory.background.spawn(
                 simba.memory.vector_db.update_access_tracking(table, recalled_ids)
             )
-            _background_tasks.add(task1)
-            task1.add_done_callback(_background_tasks.discard)
 
         # Authoritative sqlite usage store (drives decay/feedback ranking).
-        task2 = asyncio.create_task(_bump_usage(recalled_ids, now_epoch, cwd))
-        _background_tasks.add(task2)
-        task2.add_done_callback(_background_tasks.discard)
+        simba.memory.background.spawn(_bump_usage(recalled_ids, now_epoch, cwd))
 
     if recall_cache is not None and cache_key is not None:
         recall_cache.put(cache_key, results, now=time.time())
@@ -1459,6 +1452,7 @@ async def boot_digest(request: fastapi.Request) -> dict:
     def _sync() -> dict:
         import simba.db
         import simba.memory.demand
+        import simba.memory.maintenance
         import simba.memory.supersession
         import simba.memory.usage
         import simba.memory.usage_events
@@ -1466,6 +1460,7 @@ async def boot_digest(request: fastapi.Request) -> dict:
         min_uses = int(getattr(config, "promotion_min_uses", 3))
         max_ratio = float(getattr(config, "promotion_max_noise_ratio", 0.5))
         min_sessions = int(getattr(config, "promotion_min_sessions", 1))
+        daemon_url = f"http://127.0.0.1:{getattr(config, 'port', 8741)}"
         with simba.db.connect(cwd):
             rows = simba.memory.usage.MemoryUsage.select().where(
                 (simba.memory.usage.MemoryUsage.use_count >= min_uses)
@@ -1506,12 +1501,44 @@ async def boot_digest(request: fastapi.Request) -> dict:
                 max_best=float(getattr(config, "demand_gap_max_best", 0.5)),
                 limit=3,
             )
+
+            repeat_failures = simba.memory.maintenance._cluster_repeat_failures(
+                cwd, config
+            )
+            graduation = simba.memory.maintenance._graduation_readiness(
+                now=time.time(), cwd=cwd, cfg=config, daemon_url=daemon_url
+            )
         return {
             "promotions": {"total": len(candidates), "top": candidates[:3]},
             "supersessions": {"pending": pending},
             "gaps": {
                 "total": len(gap_rows),
                 "top": [g["query"] for g in gap_rows],
+            },
+            "repeatFailures": {
+                "total": repeat_failures.get("clusters", 0),
+                "top": [
+                    {
+                        "signature": c["signature"],
+                        "errorType": c["error_type"],
+                        "sessions": c["sessions"],
+                        "spanDays": c["span_days"],
+                        "occurrences": c["occurrences"],
+                    }
+                    for c in repeat_failures.get("top", [])
+                ],
+            },
+            # Spec 33 Part 8 rule R1 — informational only; never flips
+            # maintenance_apply (a human does, after the manual bench
+            # guards). `.get(..., default)` keeps the shape whole even if
+            # the read-only pass itself failed (`{"error": True}`).
+            "graduation": {
+                "signalDays": graduation.get("signalDays", 0.0),
+                "usedRatio": graduation.get("usedRatio", 0.0),
+                "daysMet": graduation.get("daysMet", False),
+                "ratioMet": graduation.get("ratioMet", False),
+                "ready": graduation.get("ready", False),
+                "benchGuards": graduation.get("benchGuards", "manual"),
             },
         }
 
@@ -1523,6 +1550,15 @@ async def boot_digest(request: fastapi.Request) -> dict:
             "promotions": {"total": 0, "top": []},
             "supersessions": {"pending": 0},
             "gaps": {"total": 0, "top": []},
+            "repeatFailures": {"total": 0, "top": []},
+            "graduation": {
+                "signalDays": 0.0,
+                "usedRatio": 0.0,
+                "daysMet": False,
+                "ratioMet": False,
+                "ready": False,
+                "benchGuards": "manual",
+            },
         }
     return {"heartbeat": heartbeat, **data}
 
@@ -1849,9 +1885,7 @@ async def trigger_sync(request: fastapi.Request) -> dict:
     if scheduler is None:
         return {"status": "not_configured"}
 
-    task = asyncio.create_task(scheduler.run_once())
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    simba.memory.background.spawn(scheduler.run_once())
 
     return {"status": "triggered", "cycle": scheduler.cycle_count + 1}
 

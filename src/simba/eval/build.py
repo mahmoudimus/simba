@@ -65,8 +65,6 @@ def build_from_memories(
                 continue
             query = generate_query(m, client=client)
             if query:
-                cases.append(
-                    EvalCase(id=f"q_{mid}", query=query, relevant_ids=[mid])
-                )
+                cases.append(EvalCase(id=f"q_{mid}", query=query, relevant_ids=[mid]))
 
     return Dataset(name=name, corpus=corpus, cases=cases)

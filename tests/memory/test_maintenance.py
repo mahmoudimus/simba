@@ -15,6 +15,7 @@ import pytest
 
 import simba.db
 import simba.memory.usage as usage
+import simba.memory.usage_events as usage_events
 from simba.memory.maintenance import MaintenanceScheduler, run_maintenance
 
 _DAY = 86400.0
@@ -42,9 +43,39 @@ def _cfg(**kw):
         promotion_min_uses=3,
         promotion_max_noise_ratio=0.5,
         session_tempfile_max_age_days=0.0,
+        repeat_failure_min_sessions=2,
+        repeat_failure_min_days_apart=3.0,
+        repeat_failure_top_n=3,
+        maintenance_graduation_min_days=14.0,
+        maintenance_graduation_min_used_ratio=0.6,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
+
+
+def _seed_reflection(
+    *,
+    id_: str,
+    ts_epoch: float,
+    signature: str,
+    session_id: str,
+    error_type: str = "error",
+) -> None:
+    """Insert a reflections row directly (bypassing the Stop-hook capture
+    pipeline) so clustering tests can control signature/session/timing."""
+    import time as _time
+
+    import simba.tailor.hook as tailor_hook
+
+    tailor_hook.Reflection.create(
+        id=id_,
+        ts=_time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(ts_epoch)),
+        error_type=error_type,
+        snippet="",
+        context="{}",
+        signature=signature,
+        session_id=session_id,
+    )
 
 
 def test_maintenance_reports_promotion_candidates(tmp_path: pathlib.Path) -> None:
@@ -58,6 +89,320 @@ def test_maintenance_reports_promotion_candidates(tmp_path: pathlib.Path) -> Non
         now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
     )
     assert result["promotions"]["candidates"] == 1
+
+
+def test_maintenance_reports_repeat_failure_cluster(tmp_path: pathlib.Path) -> None:
+    """Spec 33 v2 rule R3: the reflections ledger (tailor-style failure
+    captures) has been write-only since inception. A normalized error
+    (``signature``) recurring across >=2 distinct sessions >=3 days apart is
+    a rule candidate by definition."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 5 * _DAY,
+            signature="error-cannot-find-module",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-cannot-find-module",
+            session_id="session-b",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 1
+    top = result["repeat_failures"]["top"][0]
+    assert top["signature"] == "error-cannot-find-module"
+    assert top["sessions"] == 2
+    assert top["span_days"] >= 3.0
+    assert top["occurrences"] == 2
+
+
+def test_repeat_failure_excludes_single_session(tmp_path: pathlib.Path) -> None:
+    """Same signature, same session, wide time span: still just ONE session
+    reporting the failure — not a cross-session repeat."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 10 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 0
+    assert result["repeat_failures"]["top"] == []
+
+
+def test_repeat_failure_excludes_short_span(tmp_path: pathlib.Path) -> None:
+    """Two distinct sessions but under the 3-day span floor: not yet a
+    REPEAT failure (could just be one bad afternoon)."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 0.5 * _DAY,
+            signature="error-timeout",
+            session_id="session-b",
+        )
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"]["clusters"] == 0
+
+
+def test_repeat_failure_clustering_ignores_maintenance_apply(
+    tmp_path: pathlib.Path,
+) -> None:
+    """READ-ONLY: clustering never writes, so (unlike decay/hygiene/
+    adjudication) it must report identically in shadow and apply passes."""
+    with simba.db.connect(tmp_path):
+        _seed_reflection(
+            id_="r1",
+            ts_epoch=_NOW - 5 * _DAY,
+            signature="error-timeout",
+            session_id="session-a",
+        )
+        _seed_reflection(
+            id_="r2",
+            ts_epoch=_NOW - 1 * _DAY,
+            signature="error-timeout",
+            session_id="session-b",
+        )
+    shadow = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    applied = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True),
+        daemon_url="http://unused",
+    )
+    assert shadow["repeat_failures"] == applied["repeat_failures"]
+    assert shadow["repeat_failures"]["clusters"] == 1
+
+
+def test_repeat_failure_top_bounded(tmp_path: pathlib.Path) -> None:
+    """``top`` is capped at repeat_failure_top_n; ``clusters`` always reports
+    the true total so nothing is silently hidden."""
+    with simba.db.connect(tmp_path):
+        for i in range(5):
+            sig = f"error-case-{i}"
+            _seed_reflection(
+                id_=f"{sig}-a",
+                ts_epoch=_NOW - 10 * _DAY,
+                signature=sig,
+                session_id="session-a",
+            )
+            _seed_reflection(
+                id_=f"{sig}-b",
+                ts_epoch=_NOW - 1 * _DAY,
+                signature=sig,
+                session_id="session-b",
+            )
+    result = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(repeat_failure_top_n=3),
+        daemon_url="http://unused",
+    )
+    assert result["repeat_failures"]["clusters"] == 5
+    assert len(result["repeat_failures"]["top"]) == 3
+
+
+def test_repeat_failure_no_reflections_reports_zero(tmp_path: pathlib.Path) -> None:
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    assert result["repeat_failures"] == {"clusters": 0, "top": []}
+
+
+# --- Graduation readiness (spec 33 Part 8 rule R1) --------------------------
+#
+# The DATA half of the criteria gating `maintenance_apply`'s flip to True:
+# >= maintenance_graduation_min_days of accumulated usage-signal history
+# (usage_events, earliest to now) AND >= maintenance_graduation_min_used_ratio
+# of TOOL_RULE memories that FIRED carrying a `last_used` stamp. "Fired" here
+# means `memory_usage.match_count > 0` (see test_graduation_fired_is_match_
+# count_not_inject_count for why, not inject_count). The bench guards (LME-S/
+# LoCoMo/HaluMem) are explicitly manual and never automated by this check —
+# it only ever informs, never flips the lever.
+
+
+def test_graduation_ready_when_days_and_ratio_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Both DATA criteria met -> ready. 2/3 fired TOOL_RULEs carry last_used
+    (0.667 >= the 0.6 floor); 20d of signal history clears the 14d floor."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2", "r3"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1, use=1)
+        usage.bump_quality("r3", _NOW, match=1)  # fired, never used
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["signalDays"] == pytest.approx(20.0, abs=0.01)
+    assert grad["usedRatio"] == pytest.approx(2 / 3, abs=0.001)
+    assert grad["daysMet"] is True
+    assert grad["ratioMet"] is True
+    assert grad["ready"] is True
+    assert grad["benchGuards"] == "manual"
+
+
+def test_graduation_not_ready_when_only_days_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2", "r3"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1)
+        usage.bump_quality("r3", _NOW, match=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is True
+    assert grad["ratioMet"] is False
+    assert grad["ready"] is False
+
+
+def test_graduation_not_ready_when_only_ratio_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 5 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+        usage.bump_quality("r2", _NOW, match=1, use=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is False
+    assert grad["ratioMet"] is True
+    assert grad["ready"] is False
+
+
+def test_graduation_not_ready_when_neither_met(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 5 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1)
+        usage.bump_quality("r2", _NOW, match=1)
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["daysMet"] is False
+    assert grad["ratioMet"] is False
+    assert grad["ready"] is False
+
+
+def test_graduation_no_events_reports_zero_days_not_started(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: [])
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["signalDays"] == 0.0
+    assert grad["daysMet"] is False
+
+
+def test_graduation_no_fired_rules_reports_zero_ratio(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """No TOOL_RULE has ever fired (matched) yet -> ratio 0.0, not a division
+    error and not vacuously 1.0."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1"])
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("r1", _NOW, inject=1, use=1)  # never matched
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    assert grad["usedRatio"] == 0.0
+    assert grad["ratioMet"] is False
+
+
+def test_graduation_fired_is_match_count_not_inject_count(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """'Fired' = memory_usage.match_count > 0 (bumped every time
+    `_recall_tool_rules` surfaces a TOOL_RULE as a gate candidate via the
+    daemon's POST /recall), NOT inject_count > 0 (wired only to the separate
+    UserPromptSubmit /recall/ack lane, which the tool-rule gate never calls
+    — it posts `use` feedback directly the moment it actually fires). A
+    TOOL_RULE with inject+use but zero match must not count as fired."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1", "r2"])
+    with simba.db.connect(tmp_path):
+        usage.bump_quality("r1", _NOW, match=1, use=1)  # fired + used
+        usage.bump_quality("r2", _NOW, inject=1, use=1)  # injected, never matched
+    result = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    grad = result["graduation"]
+    # Only r1 counts as fired; it is used -> ratio 1.0, not diluted by r2.
+    assert grad["usedRatio"] == 1.0
+
+
+def test_graduation_readiness_ignores_maintenance_apply(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """READ-ONLY: reports identically in shadow and apply passes. This check
+    never itself flips maintenance_apply — a human does, after the manual
+    bench guards."""
+    import simba.memory.maintenance as maint
+
+    monkeypatch.setattr(maint, "_fetch_tool_rule_ids", lambda url: ["r1"])
+    with simba.db.connect(tmp_path):
+        usage_events.record("mem_x", "session-a", "use", now=_NOW - 20 * _DAY)
+        usage.bump_quality("r1", _NOW, match=1, use=1)
+    shadow = run_maintenance(
+        now=_NOW, cwd=tmp_path, cfg=_cfg(), daemon_url="http://unused"
+    )
+    applied = run_maintenance(
+        now=_NOW,
+        cwd=tmp_path,
+        cfg=_cfg(maintenance_apply=True),
+        daemon_url="http://unused",
+    )
+    assert shadow["graduation"] == applied["graduation"]
 
 
 def test_maintenance_tempfile_sweep_shadow_then_apply(
@@ -339,6 +684,70 @@ def test_run_maintenance_fetches_type_map_for_multipliers(
         rows = usage.get_many(["mem_p", "mem_g"])
     assert calls["url"] == "http://x"
     assert rows["mem_p"].strength > rows["mem_g"].strength
+
+
+def test_fetch_type_map_skips_http_when_shutting_down(monkeypatch) -> None:
+    """Root cause (b), handoff item 10: once uvicorn stops serving, a
+    self-HTTP loopback call can never complete --- guaranteeing the graceful
+    shutdown timeout is breached if a maintenance pass is mid-flight. The
+    shutdown flag must short-circuit before any HTTP attempt."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    def _boom(*a, **kw):
+        raise AssertionError("httpx.get must not be called while shutting down")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    background.mark_shutting_down()
+
+    assert maint._fetch_type_map("http://x") is None
+
+
+def test_fetch_tool_rule_ids_skips_http_when_shutting_down(monkeypatch) -> None:
+    """Same guard as ``_fetch_type_map`` for the graduation-readiness fetch
+    (also reachable from ``GET /digest``'s ``_graduation_readiness`` call)."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    def _boom(*a, **kw):
+        raise AssertionError("httpx.get must not be called while shutting down")
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    background.mark_shutting_down()
+
+    assert maint._fetch_tool_rule_ids("http://x") == []
+
+
+def test_fetch_type_map_calls_http_when_not_shutting_down(monkeypatch) -> None:
+    """Sanity check: the guard is additive --- normal operation is unaffected."""
+    import httpx
+
+    import simba.memory.background as background
+    import simba.memory.maintenance as maint
+
+    assert background.is_shutting_down() is False
+
+    calls: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"memories": [{"id": "mem_a", "type": "PATTERN"}]}
+
+    def _fake_get(url, **kw):
+        calls["url"] = url
+        return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    assert maint._fetch_type_map("http://x") == {"mem_a": "PATTERN"}
+    assert calls["url"] == "http://x/list"
 
 
 @pytest.mark.asyncio

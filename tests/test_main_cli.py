@@ -1516,6 +1516,89 @@ def test_memory_import_curated_requires_dir(capsys) -> None:
     assert "Usage" in capsys.readouterr().err
 
 
+def test_memory_import_curated_run_writes_marker(tmp_path, monkeypatch, capsys) -> None:
+    """Spec 33 R4: a successful --run stamps .simba/curated-import.json with
+    the curated dir + import time, so SessionStart can nudge a re-import once
+    the curated MEMORY.md changes again."""
+    import time as time_mod
+
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"id": "mem_new", "status": "stored"}
+
+    monkeypatch.setattr(httpx, "post", lambda url, json=None, timeout=0.0: _Resp())
+    before = time_mod.time()
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir), "--run"]
+    )
+    after = time_mod.time()
+    assert rc == 0
+
+    marker_path = project_dir / ".simba" / "curated-import.json"
+    assert marker_path.exists()
+    marker = json.loads(marker_path.read_text())
+    assert marker["dir"] == str(tmp_path.resolve())
+    assert before <= marker["last_import_at"] <= after
+
+
+def test_memory_import_curated_dry_run_does_not_write_marker(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    def _boom(*a, **kw):  # pragma: no cover - must not be reached
+        raise AssertionError("dry run must not POST")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir)]
+    )
+    assert rc == 0
+    assert not (project_dir / ".simba" / "curated-import.json").exists()
+
+
+def test_memory_import_curated_partial_errors_does_not_write_marker(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A run with any store errors isn't "successful" — skip the marker so
+    the SessionStart nudge keeps firing until a clean run actually lands."""
+    import httpx
+
+    _write_curated(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, json=None, timeout=0.0: (_ for _ in ()).throw(
+            httpx.ConnectError("refused")
+        ),
+    )
+    rc = cli._memory_import_curated(
+        ["--dir", str(tmp_path), "--project-path", str(project_dir), "--run"]
+    )
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "errors 2 (of 2)" in out
+    assert not (project_dir / ".simba" / "curated-import.json").exists()
+
+
 def test_memory_compact_dry_run_reports_snapshot(monkeypatch, capsys) -> None:
     import httpx
 
@@ -2272,3 +2355,152 @@ def test_eval_ambiguity_generate_dispatches_codegen(monkeypatch, capsys) -> None
     assert calls
     assert {language for _, language in calls} == {"python"}
     assert "generated python ok" in out
+
+
+# ---------- simba db reconcile ----------
+
+
+def _db_reconcile_mem_row(mid: str, content: str, **over) -> dict:
+    base = {
+        "id": mid,
+        "type": "GOTCHA",
+        "content": content,
+        "context": "",
+        "tags": "[]",
+        "confidence": 0.85,
+        "sessionSource": "",
+        "projectPath": "proj-1",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "lastAccessedAt": "2026-01-01T00:00:00Z",
+        "accessCount": 0,
+        "vector": [0.1] * 768,
+    }
+    base.update(over)
+    return base
+
+
+def test_db_reconcile_errors_when_no_lance_store(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import simba.memory.reconcile
+
+    data_dir = tmp_path / ".simba" / "memory"
+    monkeypatch.setattr(
+        simba.memory.reconcile, "resolve_data_dir", lambda cwd: data_dir
+    )
+
+    rc = cli._db_reconcile(tmp_path, run=False)
+
+    assert rc == 1
+    assert "no LanceDB store" in capsys.readouterr().err
+
+
+def test_db_reconcile_dry_run_reports_drift_and_changes_nothing(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import asyncio
+
+    import simba.memory.fts as fts
+    import simba.memory.reconcile
+
+    # Isolation: this dev machine's global ~/.config/simba/config.toml sets
+    # memory.db_path to the real project store -- resolve_data_dir must be
+    # pinned to tmp_path or this test would touch live `.simba/` data.
+    data_dir = tmp_path / ".simba" / "memory"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        simba.memory.reconcile, "resolve_data_dir", lambda cwd: data_dir
+    )
+
+    async def _seed() -> None:
+        import lancedb
+
+        db = await lancedb.connect_async(str(data_dir / "memories.lance"))
+        await db.create_table(
+            "memories",
+            [
+                _db_reconcile_mem_row("m1", "ruff lints the python code"),
+                _db_reconcile_mem_row("m2", "pytest runs the suite"),
+                _db_reconcile_mem_row("m3", "uv manages the venv"),
+            ],
+        )
+
+    asyncio.run(_seed())
+    with fts.connect(data_dir / fts.FTS_FILENAME):
+        fts.upsert(_db_reconcile_mem_row("m1", "ruff lints the python code"))
+
+    rc = cli._db_reconcile(tmp_path, run=False)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "missing-fts" in out
+    assert "m2" in out
+    assert "m3" in out
+    with fts.connect(data_dir / fts.FTS_FILENAME):
+        assert fts.count() == 1  # dry-run must change nothing
+
+
+def test_db_reconcile_run_repairs_missing_fts_only(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    import asyncio
+
+    import simba.memory.fts as fts
+    import simba.memory.reconcile
+
+    data_dir = tmp_path / ".simba" / "memory"
+    data_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        simba.memory.reconcile, "resolve_data_dir", lambda cwd: data_dir
+    )
+
+    async def _seed() -> None:
+        import lancedb
+
+        db = await lancedb.connect_async(str(data_dir / "memories.lance"))
+        await db.create_table(
+            "memories",
+            [
+                _db_reconcile_mem_row("m1", "ruff lints the python code"),
+                _db_reconcile_mem_row("m2", "pytest runs the suite"),
+            ],
+        )
+
+    asyncio.run(_seed())
+    with fts.connect(data_dir / fts.FTS_FILENAME):
+        fts.upsert(_db_reconcile_mem_row("m1", "ruff lints the python code"))
+
+    rc = cli._db_reconcile(tmp_path, run=True)
+
+    assert rc == 0
+    assert "repaired" in capsys.readouterr().out
+    with fts.connect(data_dir / fts.FTS_FILENAME):
+        assert fts.count() == 2
+
+    rc2 = cli._db_reconcile(tmp_path, run=False)
+    assert rc2 == 0
+    assert "missing-fts: 0" in capsys.readouterr().out
+
+
+def test_cmd_db_reconcile_dispatches_run_flag(monkeypatch) -> None:
+    calls: list[tuple[pathlib.Path, bool]] = []
+    monkeypatch.setattr(
+        cli, "_db_reconcile", lambda cwd, run: calls.append((cwd, run)) or 0
+    )
+
+    rc = cli._cmd_db(["reconcile", "--run"])
+
+    assert rc == 0
+    assert calls[0][1] is True
+
+
+def test_cmd_db_reconcile_defaults_to_dry_run(monkeypatch) -> None:
+    calls: list[tuple[pathlib.Path, bool]] = []
+    monkeypatch.setattr(
+        cli, "_db_reconcile", lambda cwd, run: calls.append((cwd, run)) or 0
+    )
+
+    rc = cli._cmd_db(["reconcile"])
+
+    assert rc == 0
+    assert calls[0][1] is False

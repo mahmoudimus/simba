@@ -357,8 +357,8 @@ def detect_conflicts_on_write_logged(
     if not neighbors or llm_client is None:
         return []
     out: list[tuple[str, str]] = []
-    strategy = "write_conflict_pairwise_generous" if generous else (
-        "write_conflict_pairwise"
+    strategy = (
+        "write_conflict_pairwise_generous" if generous else ("write_conflict_pairwise")
     )
     config_hash = simba.memory.judge_log.stable_hash(
         {"max_neighbors": max_neighbors, "generous": generous}

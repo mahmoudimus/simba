@@ -40,8 +40,7 @@ INFILL_GENERATION_CONTRACT = (
     "Return exactly one strict JSON object. No markdown.",
     "Generate only missing natural-language interpretations that are not already "
     "covered by existing_interpretations.",
-    "Do not compute a final answer and do not choose one interpretation as the "
-    "winner.",
+    "Do not compute a final answer and do not choose one interpretation as the winner.",
     "Use only the question and supplied evidence. Do not use web knowledge.",
     "If the existing interpretations already cover all reasonable readings, "
     "return an empty interpretations list.",
@@ -68,9 +67,7 @@ class InfillMergeResult:
             "added_count": self.added_count,
             "duplicate_count": self.duplicate_count,
             "added_interpretation_ids": list(self.added_interpretation_ids),
-            "duplicate_interpretation_ids": list(
-                self.duplicate_interpretation_ids
-            ),
+            "duplicate_interpretation_ids": list(self.duplicate_interpretation_ids),
         }
 
 
@@ -270,9 +267,7 @@ def build_fail18_infill_report(
         "rows_with_added_interpretations": sum(
             1 for item in merge_results if item.added_count > 0
         ),
-        "added_interpretation_count": sum(
-            item.added_count for item in merge_results
-        ),
+        "added_interpretation_count": sum(item.added_count for item in merge_results),
         "duplicate_interpretation_count": sum(
             item.duplicate_count for item in merge_results
         ),
@@ -310,8 +305,7 @@ def merge_infill_rows(
         ]
         original_keys = {_interpretation_key(item) for item in original_interpretations}
         original_ids = {
-            str(item.get("interpretation_id", ""))
-            for item in original_interpretations
+            str(item.get("interpretation_id", "")) for item in original_interpretations
         }
         added: list[dict[str, typing.Any]] = []
         duplicate_ids: list[str] = []

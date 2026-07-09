@@ -97,8 +97,16 @@ class TestUserPromptSubmitMarker:
 
 
 class TestPreToolUseMarkerAppend:
-    def test_off_by_default_no_marker(self, tmp_path) -> None:
+    def test_off_by_default_no_marker(self, tmp_path, monkeypatch) -> None:
         # Characterization: a redirect deny output carries no marker when off.
+        # tool_input is truthy here, so PreToolUse also drives the unrelated
+        # TOOL_RULE gate (_recall_tool_rules); pinning cwd to tmp_path already
+        # keeps its project-id resolution isolated, but _project_has_tool_rules
+        # still asks the real daemon whether that (freshly-minted) project has
+        # rules. Stub it False so this test never depends on daemon reachability.
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_project_has_tool_rules", lambda *a, **k: False
+        )
         out = simba.hooks.pre_tool_use.main(
             {
                 "tool_name": "Read",

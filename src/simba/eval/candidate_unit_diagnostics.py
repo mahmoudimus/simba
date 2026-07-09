@@ -92,8 +92,7 @@ def build_candidate_unit_diagnostics(
             "rows_with_overmerge_risk": sum(
                 1
                 for case in cases
-                if "overmerged_distinct_unit_possible"
-                in case["diagnostic_issues"]
+                if "overmerged_distinct_unit_possible" in case["diagnostic_issues"]
             ),
         },
         "cases": cases,
@@ -128,9 +127,7 @@ def diagnose_case(
         str(item["raw_session_id"]) for item in present_answer_evidence
     }
     units = [
-        unit
-        for unit in output_row.get("candidate_units", [])
-        if isinstance(unit, dict)
+        unit for unit in output_row.get("candidate_units", []) if isinstance(unit, dict)
     ]
     units_by_raw_session = _units_by_raw_session(
         units=units,
@@ -203,9 +200,7 @@ def diagnose_case(
         "answer_session_ids_with_included_candidate_unit": sorted(
             answer_sessions_with_included_unit
         ),
-        "present_answer_session_ids_without_any_unit": list(
-            present_without_any_unit
-        ),
+        "present_answer_session_ids_without_any_unit": list(present_without_any_unit),
         "present_answer_session_ids_without_included_unit": list(
             present_without_included_unit
         ),

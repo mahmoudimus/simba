@@ -49,6 +49,7 @@ def config_snapshot(
     QA accuracy depends on which models answered and judged, so a record is only
     attributable to a model — e.g. gpt-oss vs Qwen — if both are captured.
     """
+
     def _as_dict(obj: object) -> dict[str, object]:
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
             return dataclasses.asdict(obj)

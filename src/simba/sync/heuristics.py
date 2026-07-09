@@ -173,9 +173,7 @@ def _extract_preference(content: str, context: str, memory_id: str) -> list[Trip
     return triples
 
 
-def _extract_tool_rule(
-    content: str, context: str, memory_id: str
-) -> list[Triple]:
+def _extract_tool_rule(content: str, context: str, memory_id: str) -> list[Triple]:
     proof = f"memory:{memory_id}"
     triples: list[Triple] = []
     # TOOL_RULE context is JSON with tool, pattern, error_source, correction

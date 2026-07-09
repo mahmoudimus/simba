@@ -130,7 +130,16 @@ class MemoryConfig:
     # Let the background sync scheduler run the hygiene pass.
     hygiene_scheduler_enabled: bool = True
     sync_interval: int = 0
-    shutdown_timeout: int = 10
+    # Graceful-shutdown budget (seconds) --- the ONE knob governing both
+    # uvicorn's own `timeout_graceful_shutdown` (server.py's uvicorn.run
+    # call) and `simba.memory.background.drain()`'s wait-for-fire-and-forget-
+    # tasks budget in the daemon's shutdown hook (handoff item 10, spec 33
+    # follow-up). Float (was int prior to this change) so tests can drive a
+    # sub-second grace without truncation. Live 2026-07-08: a SIGTERM
+    # breached this window ("Cancel 54 running task(s)") because those
+    # fire-and-forget tasks were never tracked/awaited at all; see
+    # background.py's module docstring for the full failure analysis.
+    shutdown_timeout: float = 10.0
     # Continuous extraction (the "Continuous" gap). When on, the Stop hook reads only
     # the NEW transcript window each turn (incremental cursor, O(new)) and enqueues it
     # for the scored extract->score->keep/drop worker. DEFAULT-OFF: this ships the
@@ -325,6 +334,22 @@ class MemoryConfig:
     # Weight of the strength term in composite_rescore. Missing usage rows score
     # 1.0 (no penalty for never-recalled memories).
     score_weight_strength: float = 0.4
+    # Usage-influence ranking (cognee borrow: feedback-weighted edges — the one
+    # non-redundant idea in cognee's graph-completion stack once the rest is
+    # ruled out as our already-killed graph-fold; docs/plans/08-borrow-survey.md).
+    # Blends a per-memory usage-QUALITY signal into composite_rescore, distinct
+    # from score_weight_strength (recency/access-driven decay): signal =
+    # (use_count - noise_count) / max(1, use_count + noise_count), in [-1, 1];
+    # mapped = (signal + 1) / 2, in [0, 1]; composite = composite * (1 - w) +
+    # mapped * w. Simple, bounded, monotonic in the signal. 0.0 (default) is an
+    # exact no-op: composite_rescore never reads usage_map for this term, and
+    # the recall call site never loads usage rows for it (lazy — see
+    # hybrid.py's composite-rescore section). Data-gated: enable only after
+    # >= 1 week of accumulated usage signals; graduate default per the
+    # SoTA-lever rule via a real re-runnable A/B on LME-S + LoCoMo (guard:
+    # HaluMem); note somnigraph finding — injection-suppression variants must
+    # beat always-inject to graduate.
+    usage_influence_weight: float = 0.0
     # When True, dormant memories are excluded from recall results.
     dormant_filter_enabled: bool = True
     # Default delta applied per good/bad feedback signal. Overridable per-call.
@@ -511,6 +536,39 @@ class MemoryConfig:
     # Derived ops telemetry (like the FTS mirror), a few hundred bytes per
     # pass — default ON; disable to write nothing.
     maintenance_log_enabled: bool = True
+    # Reflections-ledger reader (spec 33 v2 rule R3): the tailor-style
+    # `reflections` sqlite table (normalized failure captures from the Stop
+    # hook's error-capture pipeline) has been write-only since inception —
+    # 1,100+ rows, never read. READ-ONLY clustering pass (safe on every
+    # heartbeat regardless of maintenance_apply: nothing is written, so there
+    # is nothing to gate) groups rows by their stored `signature` and flags a
+    # REPEAT FAILURE when the same signature recurs across
+    # >= repeat_failure_min_sessions distinct sessions AND spans
+    # >= repeat_failure_min_days_apart days between its first and last
+    # occurrence. Surfaced (never auto-stored/auto-promoted) in the
+    # maintenance result (`repeat_failures`) and GET /digest
+    # (`repeatFailures`) as rule-draft candidates for a human to promote.
+    repeat_failure_min_sessions: int = 2
+    repeat_failure_min_days_apart: float = 3.0
+    # Cap on clusters surfaced in `top` (both the maintenance result and
+    # GET /digest); `clusters` always reports the true total, so nothing is
+    # silently hidden by the cap.
+    repeat_failure_top_n: int = 3
+    # Graduation readiness (spec 33 Part 8 rule R1 — DATA criteria only): the
+    # daemon-computable half of the gate for flipping `maintenance_apply` to
+    # True. `_graduation_readiness` (maintenance.py) compares accumulated
+    # usage-signal history (`usage_events`, earliest to now) and TOOL_RULE
+    # fired-rule `last_used` coverage against these two floors and surfaces
+    # `ready` in the maintenance result (`graduation`) and `GET /digest`. The
+    # OTHER half of R1 — LME-S/LoCoMo/HaluMem bench guards — is explicitly
+    # MANUAL and never automated: this check only informs a human, it never
+    # flips the lever itself.
+    maintenance_graduation_min_days: float = 14.0
+    # First shadow pass (spec 33 Part 8) found 57/60 TOOL_RULEs would-expire
+    # on the created-at clock alone — only ~5% carried `last_used`. 0.6 is
+    # the floor that catches that failure mode before `maintenance_apply`
+    # (which starts using `last_used`-derived signals) flips on.
+    maintenance_graduation_min_used_ratio: float = 0.6
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

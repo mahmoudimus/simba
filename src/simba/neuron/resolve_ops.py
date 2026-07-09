@@ -563,9 +563,7 @@ def replay_from_log(
     """
     verdicts = query_judge_verdicts(r_key_value, theta)
     if not verdicts:
-        raise ValueError(
-            f"replay_from_log: no verdict at ({r_key_value!r}, {theta!r})"
-        )
+        raise ValueError(f"replay_from_log: no verdict at ({r_key_value!r}, {theta!r})")
     vote = verdicts[-1].vote
     if strategy_id == "await":
         return resolve_await(f1, f2, judge_callback=lambda a, b: vote)

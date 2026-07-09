@@ -75,8 +75,7 @@ def test_index_markdown_transcript_and_project_filter(tmp_path: pathlib.Path) ->
     assert result.session_id == "claude-session"
     assert result.message_count == 2
     assert (
-        messages.search("release flag", project_path="/repo/other", cwd=tmp_path)
-        == []
+        messages.search("release flag", project_path="/repo/other", cwd=tmp_path) == []
     )
     hits = messages.search("release flag docs release md 7", cwd=tmp_path)
     assert hits[0]["project_path"] == "/repo/claude"

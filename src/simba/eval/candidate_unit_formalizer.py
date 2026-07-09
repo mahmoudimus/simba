@@ -558,8 +558,7 @@ def build_formalizer_report(
     parsed_rows = [
         row
         for row in formalizer_rows
-        if row.get("parse_status") == PARSE_STATUS_PARSED
-        and not _provider_failed(row)
+        if row.get("parse_status") == PARSE_STATUS_PARSED and not _provider_failed(row)
     ]
     rows_by_session = {
         (
@@ -643,20 +642,16 @@ def build_formalizer_report(
             "fact_predicate_counts": dict(sorted(fact_predicate_counts.items())),
             "fact_role_counts": dict(sorted(fact_role_counts.items())),
             "candidate_units_without_supporting_facts": sum(
-                len(case["candidate_units_without_supporting_facts"])
-                for case in cases
+                len(case["candidate_units_without_supporting_facts"]) for case in cases
             ),
             "candidate_units_with_contradicting_facts": sum(
-                len(case["candidate_units_with_contradicting_facts"])
-                for case in cases
+                len(case["candidate_units_with_contradicting_facts"]) for case in cases
             ),
             "excluded_units_with_supporting_facts": sum(
-                len(case["excluded_units_with_supporting_facts"])
-                for case in cases
+                len(case["excluded_units_with_supporting_facts"]) for case in cases
             ),
             "merged_units_with_supporting_facts": sum(
-                len(case["merged_units_with_supporting_facts"])
-                for case in cases
+                len(case["merged_units_with_supporting_facts"]) for case in cases
             ),
         },
         "cases": cases,
@@ -712,26 +707,22 @@ def _case_report(
         "candidate_units_without_supporting_facts": [
             unit
             for unit in unit_reports
-            if unit["status"] == "included"
-            and not unit["supporting_fact_ids"]
+            if unit["status"] == "included" and not unit["supporting_fact_ids"]
         ],
         "candidate_units_with_contradicting_facts": [
             unit
             for unit in unit_reports
-            if unit["status"] == "included"
-            and unit["contradicting_fact_ids"]
+            if unit["status"] == "included" and unit["contradicting_fact_ids"]
         ],
         "excluded_units_with_supporting_facts": [
             unit
             for unit in unit_reports
-            if unit["status"] == "excluded"
-            and unit["supporting_fact_ids"]
+            if unit["status"] == "excluded" and unit["supporting_fact_ids"]
         ],
         "merged_units_with_supporting_facts": [
             unit
             for unit in unit_reports
-            if unit["status"] == "merged"
-            and unit["supporting_fact_ids"]
+            if unit["status"] == "merged" and unit["supporting_fact_ids"]
         ],
         "candidate_units": unit_reports,
     }
@@ -743,15 +734,12 @@ def _unit_report(
     facts_by_session: dict[str, list[typing.Any]],
     case_provenance: dict[str, dict[str, typing.Any]],
 ) -> dict[str, typing.Any]:
-    evidence_session_ids = [
-        str(item) for item in unit.get("evidence_session_ids", [])
-    ]
+    evidence_session_ids = [str(item) for item in unit.get("evidence_session_ids", [])]
     linked_facts = [
         fact
         for evidence_id in evidence_session_ids
         for fact in facts_by_session.get(evidence_id, [])
-        if isinstance(fact, dict)
-        and _fact_matches_unit(unit=unit, fact=fact)
+        if isinstance(fact, dict) and _fact_matches_unit(unit=unit, fact=fact)
     ]
     linked_fact_ids = [str(fact.get("fact_id", "")) for fact in linked_facts]
     supporting_fact_ids = [
@@ -799,9 +787,7 @@ def _fact_matches_unit(
             ]
         )
     )
-    fact_tokens = _text_tokens(
-        _role_fact_text(fact)
-    )
+    fact_tokens = _text_tokens(_role_fact_text(fact))
     if not unit_tokens or not fact_tokens:
         return False
     overlap = unit_tokens & fact_tokens
@@ -969,11 +955,7 @@ def _arguments_field(
     if bad_keys:
         errors.append(f"{key} keys must be strings")
         return {}
-    bad_values = [
-        item
-        for item in value.values()
-        if isinstance(item, list | dict)
-    ]
+    bad_values = [item for item in value.values() if isinstance(item, list | dict)]
     if bad_values:
         errors.append(f"{key} values must be scalar or null")
         return {}
@@ -1023,9 +1005,8 @@ def _invalid_result(
 
 
 def _provider_failed(row: dict[str, typing.Any]) -> bool:
-    return (
-        int(row.get("provider_exit_code", 0) or 0) != 0
-        or bool(row.get("provider_timed_out", False))
+    return int(row.get("provider_exit_code", 0) or 0) != 0 or bool(
+        row.get("provider_timed_out", False)
     )
 
 

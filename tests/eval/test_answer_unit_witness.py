@@ -305,9 +305,10 @@ def test_review_witness_row_corrects_contradicted_no_acquisition_exclusion() -> 
     assert review["corrected_exclusion_count"] == 1
     assert "excluded_unit_contradicted" in review["quality_issues"]
     assert review["exclusion_contradictions"][0]["unit_id"] == "u3"
-    assert "got from my sister last month" in review["exclusion_contradictions"][0][
-        "contradicting_span"
-    ]
+    assert (
+        "got from my sister last month"
+        in review["exclusion_contradictions"][0]["contradicting_span"]
+    )
 
 
 def test_exclusion_contradiction_filters_non_acquisition_senses() -> None:

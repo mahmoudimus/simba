@@ -105,9 +105,7 @@ class TestMlxServer:
     def test_complete_via_http(self, monkeypatch) -> None:
         import httpx
 
-        cfg = _cfg(
-            provider="mlx-server", base_url="http://127.0.0.1:8082", model="m"
-        )
+        cfg = _cfg(provider="mlx-server", base_url="http://127.0.0.1:8082", model="m")
 
         def _post(url, json, timeout):
             assert url.endswith("/v1/chat/completions")
@@ -210,8 +208,10 @@ class TestCompleteClaudeCli:
         monkeypatch.setattr(
             subprocess,
             "run",
-            lambda argv, **kw: captured.update(env=kw.get("env"))
-            or _completed('{"is_error":false,"result":"x"}'),
+            lambda argv, **kw: (
+                captured.update(env=kw.get("env"))
+                or _completed('{"is_error":false,"result":"x"}')
+            ),
         )
         monkeypatch.setenv("DS_KEY", "secret")
         cfg = _cfg(

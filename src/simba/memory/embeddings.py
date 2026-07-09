@@ -211,10 +211,14 @@ class EmbeddingService:
 
         prefixed = self._prefixed(text, task)
         argv = [
-            "llm", "embed",
-            "-m", self.config.embedding_model,
-            "-c", prefixed,
-            "-f", "json",
+            "llm",
+            "embed",
+            "-m",
+            self.config.embedding_model,
+            "-c",
+            prefixed,
+            "-f",
+            "json",
         ]
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:

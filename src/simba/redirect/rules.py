@@ -99,9 +99,7 @@ def _evaluate_pattern_rules(
     return None
 
 
-def evaluate(
-    command: str, rules: list[RedirectRule], *, mode: str
-) -> Decision | None:
+def evaluate(command: str, rules: list[RedirectRule], *, mode: str) -> Decision | None:
     """Return a redirect Decision for ``command``, or None if no rule matches.
 
     ``mode`` is "deny" (block + suggest the corrected command) or "rewrite"

@@ -75,14 +75,10 @@ def _cmd_add(args: argparse.Namespace) -> int:
     if args.project:
         # Canonicalize to the same opaque id the learner stores and the matcher
         # recalls by, so a manually-added rule is actually reachable at runtime.
-        payload["projectPath"] = simba.db.resolve_project_id(
-            pathlib.Path(args.project)
-        )
+        payload["projectPath"] = simba.db.resolve_project_id(pathlib.Path(args.project))
 
     try:
-        resp = httpx.post(
-            f"{_daemon_url()}/store", json=payload, timeout=5.0
-        )
+        resp = httpx.post(f"{_daemon_url()}/store", json=payload, timeout=5.0)
         data = resp.json()
         if data.get("status") == "stored":
             print(f"Rule stored: {data.get('id', '?')}")
@@ -105,9 +101,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
     """List existing TOOL_RULE memories."""
     params: dict = {"type": "TOOL_RULE", "limit": 50}
     try:
-        resp = httpx.get(
-            f"{_daemon_url()}/list", params=params, timeout=5.0
-        )
+        resp = httpx.get(f"{_daemon_url()}/list", params=params, timeout=5.0)
         data = resp.json()
     except httpx.HTTPError as exc:
         print(f"Error contacting daemon: {exc}", file=sys.stderr)
@@ -225,9 +219,7 @@ def _cmd_prune(args: argparse.Namespace) -> int:
 def _cmd_remove(args: argparse.Namespace) -> int:
     """Delete a TOOL_RULE memory by ID."""
     try:
-        resp = httpx.delete(
-            f"{_daemon_url()}/memory/{args.rule_id}", timeout=5.0
-        )
+        resp = httpx.delete(f"{_daemon_url()}/memory/{args.rule_id}", timeout=5.0)
         if resp.status_code == 200:
             print(f"Removed rule {args.rule_id}")
             return 0
@@ -245,9 +237,7 @@ def main(args: list[str]) -> int:
 
     add_p = sub.add_parser("add", help="Add a tool rule")
     add_p.add_argument("--tool", required=True, help="Tool name (e.g. Bash)")
-    add_p.add_argument(
-        "--correction", required=True, help="What to do instead"
-    )
+    add_p.add_argument("--correction", required=True, help="What to do instead")
     add_p.add_argument("--pattern", default="", help="Command pattern")
     add_p.add_argument("--project", default="", help="Project path scope")
 

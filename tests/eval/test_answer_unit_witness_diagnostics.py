@@ -510,9 +510,7 @@ def test_payload_budget_regression_diagnostic_splits_flip_and_displacement(
         json.dumps(
             {
                 "summary": {
-                    "fail18": {
-                        "regressed_case_ids": ["flip_case", "displace_case"]
-                    }
+                    "fail18": {"regressed_case_ids": ["flip_case", "displace_case"]}
                 }
             }
         ),

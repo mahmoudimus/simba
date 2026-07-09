@@ -35,11 +35,7 @@ def _build_query(tool_name: str, tool_input: dict) -> str:
     if tool_name in ("apply_patch", "Edit", "Write"):
         # apply_patch ships a `command` (the patch text) for native edits;
         # MCP-style file tools may use file_path. Try both.
-        return (
-            tool_input.get("command")
-            or tool_input.get("file_path")
-            or ""
-        )[:200]
+        return (tool_input.get("command") or tool_input.get("file_path") or "")[:200]
     if tool_name.startswith("mcp__"):
         # MCP tools send all args under tool_input; serialize for matching.
         with contextlib.suppress(TypeError, ValueError):

@@ -30,9 +30,7 @@ _MARKER_RE = re.compile(r"<!--\s*BEGIN\s+SIMBA:(\w+)\s*-->")
 
 # Matches non-SIMBA markers: <!-- BEGIN NEURON:name -->, <!-- CORE -->,
 # <!-- BEGIN something -->, <!-- BEGIN ns:name --> (any namespace except SIMBA).
-_FOREIGN_BEGIN_RE = re.compile(
-    r"<!--\s*(?:BEGIN\s+)?(?!SIMBA:)(\w+(?::\w+)?)\s*-->"
-)
+_FOREIGN_BEGIN_RE = re.compile(r"<!--\s*(?:BEGIN\s+)?(?!SIMBA:)(\w+(?::\w+)?)\s*-->")
 _FOREIGN_BLOCK_RE = re.compile(
     r"(<!--\s*(?:BEGIN\s+)?(?!SIMBA:)(\w+(?::\w+)?)\s*-->)"
     r"(.*?)"
@@ -116,7 +114,8 @@ def scan_markers(root: Path, *, project_only: bool = False) -> list[MarkerHit]:
         files = _collect_project_files(root)
     else:
         files = [
-            f for f in sorted(root.rglob("*.md"))
+            f
+            for f in sorted(root.rglob("*.md"))
             if f.is_file() and not _is_excluded(f, root)
         ]
 
@@ -166,8 +165,7 @@ def cmd_audit(root: Path) -> int:
                 except ValueError:
                     display = str(loc.path)
                 print(
-                    f"  - {name} in {display}:{loc.line_no}"
-                    f" ({loc.content_len} chars)"
+                    f"  - {name} in {display}:{loc.line_no} ({loc.content_len} chars)"
                 )
         print()
 
@@ -211,13 +209,14 @@ def cmd_audit(root: Path) -> int:
             tokens = hit.content_len // 4
             total_chars += hit.content_len
             print(
-                f"  {display}:{hit.line_no}"
-                f"  {hit.content_len} chars (~{tokens} tokens)"
+                f"  {display}:{hit.line_no}  {hit.content_len} chars (~{tokens} tokens)"
             )
         total_tokens = total_chars // 4
-        signal = "[✓ rules]" if any(
-            "✓ rules" in hit.path.read_text() for hit in core_hits
-        ) else "(missing)"
+        signal = (
+            "[✓ rules]"
+            if any("✓ rules" in hit.path.read_text() for hit in core_hits)
+            else "(missing)"
+        )
         print(f"  Total: ~{total_tokens} tokens/msg | Signal: {signal}")
         print()
 
@@ -300,11 +299,7 @@ def _migrate_content(content: str) -> tuple[str, list[tuple[str, str]]]:
         # "NEURON:foo" → "foo", "CORE" → "core", "bar" → "bar"
         name = tag.split(":", 1)[1].lower() if ":" in tag else tag.lower()
         changes.append((tag, name))
-        return (
-            f"{simba.markers.begin_tag(name)}"
-            f"{body}"
-            f"{simba.markers.end_tag(name)}"
-        )
+        return f"{simba.markers.begin_tag(name)}{body}{simba.markers.end_tag(name)}"
 
     new_content = _FOREIGN_BLOCK_RE.sub(_replacer, content)
     return new_content, changes

@@ -28,9 +28,7 @@ class _FakeService:
 
 
 def test_rlm_tools_serialize_service_output(monkeypatch):
-    monkeypatch.setattr(
-        "simba.rlm.service.get_service", lambda: _FakeService()
-    )
+    monkeypatch.setattr("simba.rlm.service.get_service", lambda: _FakeService())
     assert json.loads(server.rlm_recall("q"))["pointers"][0]["transcript_id"] == "s1"
     grep_out = json.loads(server.rlm_grep("s1", "beta"))
     assert grep_out["matches"][0]["match_text"] == "beta"

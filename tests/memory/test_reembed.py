@@ -14,10 +14,20 @@ async def _make_table(db_path: pathlib.Path):
 
     db = await lancedb.connect_async(str(db_path))
     rows = [
-        {"id": "m1", "type": "GOTCHA", "content": "gh 401", "context": "token",
-         "vector": [0.1, 0.2, 0.3]},
-        {"id": "m2", "type": "PATTERN", "content": "rrf fusion", "context": "",
-         "vector": [0.4, 0.5, 0.6]},
+        {
+            "id": "m1",
+            "type": "GOTCHA",
+            "content": "gh 401",
+            "context": "token",
+            "vector": [0.1, 0.2, 0.3],
+        },
+        {
+            "id": "m2",
+            "type": "PATTERN",
+            "content": "rrf fusion",
+            "context": "",
+            "vector": [0.4, 0.5, 0.6],
+        },
     ]
     await db.create_table("memories", rows)
     return db

@@ -227,16 +227,28 @@ def test_should_rerank_gating_off_is_always_true() -> None:
 
 def test_should_rerank_skips_multi_endpoint_temporal() -> None:
     cfg = simba.memory.config.MemoryConfig(rerank_intent_gating=True)
-    assert reranker.should_rerank(
-        "How many days between the wedding and the move?", cfg) is False
-    assert reranker.should_rerank(
-        "Which happened first, the trip or the promotion?", cfg) is False
-    assert reranker.should_rerank(
-        "How long after starting the job did I buy the car?", cfg) is False
+    assert (
+        reranker.should_rerank("How many days between the wedding and the move?", cfg)
+        is False
+    )
+    assert (
+        reranker.should_rerank("Which happened first, the trip or the promotion?", cfg)
+        is False
+    )
+    assert (
+        reranker.should_rerank(
+            "How long after starting the job did I buy the car?", cfg
+        )
+        is False
+    )
 
 
 def test_should_rerank_keeps_latest_and_compositional() -> None:
     cfg = simba.memory.config.MemoryConfig(rerank_intent_gating=True)
     assert reranker.should_rerank("How often do I do yoga now?", cfg) is True
-    assert reranker.should_rerank(
-        "What did the engineer say about the database schema migration?", cfg) is True
+    assert (
+        reranker.should_rerank(
+            "What did the engineer say about the database schema migration?", cfg
+        )
+        is True
+    )

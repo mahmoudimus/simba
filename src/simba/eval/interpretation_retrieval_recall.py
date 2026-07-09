@@ -245,9 +245,7 @@ def _rank_sessions(
                     "truncated", False
                 )
             ),
-            matched_question_terms_user=tuple(
-                item["matched_question_terms_user"]
-            ),
+            matched_question_terms_user=tuple(item["matched_question_terms_user"]),
             matched_question_terms_assistant=tuple(
                 item["matched_question_terms_assistant"]
             ),
@@ -318,9 +316,7 @@ def _answer_session_result(
         "user_selection_score": ranked_session.user_selection_score,
         "assistant_selection_score": ranked_session.assistant_selection_score,
         "rendered_chars": ranked_session.rendered_chars,
-        "matched_question_terms_user": list(
-            ranked_session.matched_question_terms_user
-        ),
+        "matched_question_terms_user": list(ranked_session.matched_question_terms_user),
         "matched_question_terms_assistant": list(
             ranked_session.matched_question_terms_assistant
         ),

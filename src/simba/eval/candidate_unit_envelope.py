@@ -498,7 +498,8 @@ def classify_quantity_role(
         ):
             return VALUE_ROLE_ANSWER
         if re.search(
-            r"\b(clicks?|click through|ctr|impressions?|signups?)\b", local,
+            r"\b(clicks?|click through|ctr|impressions?|signups?)\b",
+            local,
         ):
             return VALUE_ROLE_DISTRACTOR
         if re.search(
@@ -517,9 +518,7 @@ def classify_quantity_role(
             question_text,
         ):
             return VALUE_ROLE_ANSWER
-        if re.search(
-            r"\b(how many|number of|total|count|amount|sum)\b", question_text
-        ):
+        if re.search(r"\b(how many|number of|total|count|amount|sum)\b", question_text):
             return VALUE_ROLE_ANSWER
         return VALUE_ROLE_DISTRACTOR
 
@@ -574,8 +573,7 @@ def _is_money_value(attribute: str, value: str, unit: str) -> bool:
     return (
         unit in _MONEY_UNITS
         or "$" in value
-        or attribute
-        in {"price", "cost", "amount_paid", "money_spent", "money.amount"}
+        or attribute in {"price", "cost", "amount_paid", "money_spent", "money.amount"}
     )
 
 
@@ -628,10 +626,9 @@ def _duration_quantity_days(row: QuantityFact) -> float | None:
 def _quantity_value_rows(
     bundle: EntityBundle, *, question: str = ""
 ) -> list[ValueFact]:
-    all_rows = (
-        _classified_value_rows(bundle, question=question)
-        + _classified_quantity_rows(bundle, question=question)
-    )
+    all_rows = _classified_value_rows(
+        bundle, question=question
+    ) + _classified_quantity_rows(bundle, question=question)
     answer_values = [
         row
         for row in all_rows
@@ -733,14 +730,12 @@ def _lookup_threshold_support(
     """
     support: dict[float, set[str]] = collections.defaultdict(set)
     for root in roots:
-        rows = (
-            _classified_value_rows(bundles[root], question=question)
-            + _classified_quantity_rows(bundles[root], question=question)
-        )
+        rows = _classified_value_rows(
+            bundles[root], question=question
+        ) + _classified_quantity_rows(bundles[root], question=question)
         for row in rows:
-            if (
-                row.role == VALUE_ROLE_THRESHOLD
-                and not _is_money_value(row.attribute, row.value, row.unit)
+            if row.role == VALUE_ROLE_THRESHOLD and not _is_money_value(
+                row.attribute, row.value, row.unit
             ):
                 support[row.numeric].add(root)
     return dict(support)
@@ -1422,10 +1417,10 @@ def aggregate_envelope(
     else:  # AGGREGATION_SUM
         certain = sum(bundles[root].usd or 0.0 for root in certain_roots)
         possible = sum(bundles[root].usd or 0.0 for root in possible_roots)
-    if (
-        certain == possible
-        and aggregation not in {AGGREGATION_DATE, AGGREGATION_ENTITY}
-    ):
+    if certain == possible and aggregation not in {
+        AGGREGATION_DATE,
+        AGGREGATION_ENTITY,
+    }:
         contested_roots = []
     return EnvelopeResult(
         aggregation=aggregation,
@@ -1700,7 +1695,7 @@ def _hash_text(value: typing.Any) -> str:
 
 
 def _answer_session_fingerprint(
-    answer_sessions: dict[str, tuple[str, str | None]]
+    answer_sessions: dict[str, tuple[str, str | None]],
 ) -> tuple[tuple[str, str, str | None], ...]:
     return tuple(
         sorted(
@@ -1758,9 +1753,7 @@ def _read_formalizer_cache_session_facts(
         if str(payload.get("evidence_session_id")) != session_id:
             continue
         errors: list[str] = []
-        parsed_facts = candidate_unit_formalizer._facts(
-            payload.get("facts"), errors
-        )
+        parsed_facts = candidate_unit_formalizer._facts(payload.get("facts"), errors)
         if errors:
             continue
         mtime = cache_file.stat().st_mtime_ns

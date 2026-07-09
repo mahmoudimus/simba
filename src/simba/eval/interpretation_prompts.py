@@ -427,9 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         pathlib.Path(args.path) if args.path else ambiguity_fail18.DEFAULT_MANIFEST
     )
     corpus_path = (
-        pathlib.Path(args.corpus)
-        if args.corpus
-        else ambiguity_fail18.DEFAULT_CORPUS
+        pathlib.Path(args.corpus) if args.corpus else ambiguity_fail18.DEFAULT_CORPUS
     )
     artifact = build_fail18_generation_artifact(
         manifest_path=manifest_path,

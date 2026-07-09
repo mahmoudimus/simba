@@ -55,8 +55,7 @@ def test_temporal_case_preserves_missing_date_range() -> None:
     report = ambiguity.evaluate_case(case)
 
     answers = {
-        result.interpretation_id: result.answer
-        for result in report.interpretations
+        result.interpretation_id: result.answer for result in report.interpretations
     }
     assert answers["few_2_known_only"] == {"count": 2}
     assert answers["few_3_known_only"] == {"count": 4}
@@ -175,15 +174,11 @@ def test_fail18_numeric_gold_preserves_decimal_human_answer() -> None:
 
 def test_fail18_answer_type_router() -> None:
     cases = {
-        "How many points do I need to earn to redeem a free skincare product?":
-            "threshold_lookup",
+        "How many points do I need to earn to redeem a free skincare product?": "threshold_lookup",  # noqa: E501
         "How many musical instruments do I currently own?": "current_inventory",
-        "How many times did I bake something in the past two weeks?":
-            "temporal_event_count",
-        "How many model kits have I worked on or bought?":
-            "canonical_entity_count",
-        "How many projects have I led or am currently leading?":
-            "role_filtered_count",
+        "How many times did I bake something in the past two weeks?": "temporal_event_count",  # noqa: E501
+        "How many model kits have I worked on or bought?": "canonical_entity_count",
+        "How many projects have I led or am currently leading?": "role_filtered_count",
     }
 
     for question, answer_type in cases.items():
@@ -199,8 +194,7 @@ def test_world_lexicon_resolves_typed_concepts_and_frames() -> None:
         for match in lexicon.resolve_concepts("a 1/72 scale B-29 bomber")
     }
     instrument_matches = {
-        match.concept_id
-        for match in lexicon.resolve_concepts("my acoustic guitar")
+        match.concept_id for match in lexicon.resolve_concepts("my acoustic guitar")
     }
 
     assert "scale_model_kit" in model_matches
@@ -240,9 +234,7 @@ def test_local_fail18_repair_lifts_remaining_misses() -> None:
     assert summary.contains_gold == 18
     assert summary.misses_gold == 0
     repaired = {
-        item.question_id: item
-        for item in summary.results
-        if item.repair_applied
+        item.question_id: item for item in summary.results if item.repair_applied
     }
     assert repaired["6d550036"].answer_space == {"count": 2}
     assert repaired["88432d0a"].answer_space == {"count": 4}
@@ -342,8 +334,7 @@ def test_quantifier_case_exposes_threshold_choice() -> None:
     case = _case("amb_lot_products")
     report = ambiguity.evaluate_case(case)
     answers = {
-        result.interpretation_id: result.answer
-        for result in report.interpretations
+        result.interpretation_id: result.answer for result in report.interpretations
     }
 
     assert answers == {

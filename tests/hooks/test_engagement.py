@@ -29,9 +29,7 @@ class TestLedgerBuilder:
         assert line == "🦁☑ recalled 0 · rule-warned: Edit drizzle/meta"
 
     def test_gate_action_on_idle(self) -> None:
-        line = eng.append_gate_action(
-            "🦁☑ idle (nothing matched)", "rewrote: foo.sh"
-        )
+        line = eng.append_gate_action("🦁☑ idle (nothing matched)", "rewrote: foo.sh")
         assert line == "🦁☑ idle (nothing matched) · rewrote: foo.sh"
 
     def test_marker_constant_matches_preflight(self) -> None:

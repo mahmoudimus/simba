@@ -94,6 +94,23 @@ class TestSupersedeDefaults:
         assert cfg.supersede_trust_margin > 0
 
 
+class TestUsageInfluenceDefaults:
+    def test_usage_influence_weight_default_off(self) -> None:
+        # Data-gated (cognee borrow): ships inert until >= 1 week of usage
+        # signals accumulate and a real A/B measures it. 0.0 is a no-op.
+        assert config.MemoryConfig().usage_influence_weight == 0.0
+
+
+class TestGraduationReadinessDefaults:
+    """Spec 33 Part 8 rule R1: the DATA criteria for `maintenance_apply`."""
+
+    def test_min_days_default(self) -> None:
+        assert config.MemoryConfig().maintenance_graduation_min_days == 14.0
+
+    def test_min_used_ratio_default(self) -> None:
+        assert config.MemoryConfig().maintenance_graduation_min_used_ratio == 0.6
+
+
 class TestHierarchicalRecallDefaults:
     def test_hierarchical_recall_off_by_default(self) -> None:
         # UNMEASURED lever (precision-dilution risk) -> default OFF so recall stays

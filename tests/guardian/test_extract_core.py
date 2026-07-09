@@ -155,15 +155,11 @@ class TestMain:
         result = simba.guardian.extract_core.main(cwd=tmp_path)
         assert "Real rules-file constraint" in result
 
-    def test_main_ignores_claude_skills_and_worktrees(
-        self, tmp_path: pathlib.Path
-    ):
+    def test_main_ignores_claude_skills_and_worktrees(self, tmp_path: pathlib.Path):
         rules = tmp_path / ".claude" / "rules"
         rules.mkdir(parents=True)
         (rules / "CORE_INSTRUCTIONS.md").write_text(
-            "<!-- BEGIN SIMBA:core -->\n"
-            "- Real guardian rule\n"
-            "<!-- END SIMBA:core -->\n"
+            "<!-- BEGIN SIMBA:core -->\n- Real guardian rule\n<!-- END SIMBA:core -->\n"
         )
         skill = tmp_path / ".claude" / "skills" / "demo"
         skill.mkdir(parents=True)

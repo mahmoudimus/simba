@@ -12,6 +12,7 @@ extractor fills location/reason/purpose), deterministic :func:`matches` /
 :func:`filter_by` for aggregation, and a context-blob (de)serializer so dimensions ride
 in the existing ``context`` field (no schema migration). Off by default.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -28,7 +29,7 @@ _BLOB_PREFIX = "\n\n⟦dims⟧"
 
 @dataclasses.dataclass
 class Dimensions:
-    time: str | None = None          # normalized: "yyyy-mm-dd" or "yyyy"
+    time: str | None = None  # normalized: "yyyy-mm-dd" or "yyyy"
     location: str | None = None
     reason: str | None = None
     purpose: str | None = None
@@ -72,14 +73,15 @@ def parse_dimensions(text: str) -> Dimensions:
     if lb == -1 or rb <= lb:
         return Dimensions()
     try:
-        data = json.loads(text[lb:rb + 1])
+        data = json.loads(text[lb : rb + 1])
     except (json.JSONDecodeError, ValueError):
         return Dimensions()
     if not isinstance(data, dict):
         return Dimensions()
     kw = data.get("keywords")
-    keywords = [str(x).strip() for x in kw if str(x).strip()] \
-        if isinstance(kw, list) else []
+    keywords = (
+        [str(x).strip() for x in kw if str(x).strip()] if isinstance(kw, list) else []
+    )
     return Dimensions(
         time=_opt_str(data.get("time")),
         location=_opt_str(data.get("location")),

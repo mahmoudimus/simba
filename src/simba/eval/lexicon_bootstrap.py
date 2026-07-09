@@ -99,9 +99,7 @@ def download_nltk_resources(root: pathlib.Path = DEFAULT_ROOT) -> list[ResourceS
     return statuses
 
 
-def write_manifest(
-    root: pathlib.Path, statuses: list[ResourceStatus]
-) -> pathlib.Path:
+def write_manifest(root: pathlib.Path, statuses: list[ResourceStatus]) -> pathlib.Path:
     root = pathlib.Path(root)
     root.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -152,8 +150,7 @@ def build_lancedb_table(
     db_path = pathlib.Path(root) / "lexicon.lance"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     rows = [
-        dataclasses.asdict(record)
-        for record in iter_nltk_records(root, limit=limit)
+        dataclasses.asdict(record) for record in iter_nltk_records(root, limit=limit)
     ]
     db = lancedb.connect(str(db_path))
     if rows:
@@ -300,9 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     root = pathlib.Path(args.root)
     statuses = (
-        download_nltk_resources(root)
-        if args.download
-        else check_nltk_resources(root)
+        download_nltk_resources(root) if args.download else check_nltk_resources(root)
     )
     manifest = write_manifest(root, statuses)
     jsonl_path = None

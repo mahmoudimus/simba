@@ -120,9 +120,7 @@ class Fail18OntologyItem:
             if _is_material_concept(concept)
         ]
         required = _required_answer_concept_ids(self.schema, self.answer_type)
-        reliability = _required_concept_reliabilities(
-            self.schema, required, self.hits
-        )
+        reliability = _required_concept_reliabilities(self.schema, required, self.hits)
         return {
             "question_id": self.question_id,
             "question": self.question,
@@ -143,15 +141,11 @@ class Fail18OntologyItem:
             ),
             "required_answer_concepts": required,
             "ratified_required_answer_concepts": sorted(
-                concept_id
-                for concept_id in required
-                if concept_id in ratified_concepts
+                concept_id for concept_id in required if concept_id in ratified_concepts
             ),
             "required_answer_complete": bool(required)
             and all(concept_id in ratified_concepts for concept_id in required),
-            "required_answer_reliability": [
-                item.to_dict() for item in reliability
-            ],
+            "required_answer_reliability": [item.to_dict() for item in reliability],
         }
 
 
@@ -466,9 +460,7 @@ def _schema_from_json(question: str, raw: typing.Any) -> MicroSchema | None:
         aliases = tuple(str(alias) for alias in item.get("aliases", []) if alias)
         purpose = str(item.get("purpose") or item.get("role") or "").strip().lower()
         source_hints = tuple(
-            str(source)
-            for source in item.get("source_hints", [])
-            if source
+            str(source) for source in item.get("source_hints", []) if source
         ) or _DOMAIN_SOURCES.get(domain, ("schema", "lov"))
         concepts.append(
             MicroConcept(
@@ -710,9 +702,7 @@ def _normalize_concept(
             )
         return tuple(out)
     if _is_hour_duration_concept(text):
-        hour_purpose = (
-            "answer_bearing" if _asks_for_time_amount(question) else purpose
-        )
+        hour_purpose = "answer_bearing" if _asks_for_time_amount(question) else purpose
         return (
             _concept(
                 "hour",
@@ -828,9 +818,7 @@ def _concept(
     )
 
 
-def _merge_concept(
-    old: MicroConcept | None, new: MicroConcept
-) -> MicroConcept:
+def _merge_concept(old: MicroConcept | None, new: MicroConcept) -> MicroConcept:
     if old is None:
         return new
     aliases = tuple(dict.fromkeys((*old.aliases, *new.aliases)))
@@ -1291,9 +1279,7 @@ def _ratify_terms(
     return RatificationHit("", source, False, error="unknown source")
 
 
-def _ratify_schema_org(
-    terms: tuple[str, ...], *, timeout: float
-) -> RatificationHit:
+def _ratify_schema_org(terms: tuple[str, ...], *, timeout: float) -> RatificationHit:
     import httpx
 
     resp = httpx.get(_SOURCE_ENDPOINTS["schema"], timeout=timeout)
@@ -1528,14 +1514,11 @@ def _is_material_concept(concept: MicroConcept) -> bool:
     return concept.id not in {"user", "person", "count"}
 
 
-def _required_answer_concept_ids(
-    schema: MicroSchema, answer_type: str
-) -> list[str]:
+def _required_answer_concept_ids(schema: MicroSchema, answer_type: str) -> list[str]:
     explicit = [
         concept.id
         for concept in schema.concepts
-        if concept.purpose == "answer_bearing"
-        and not _is_meta_concept(concept)
+        if concept.purpose == "answer_bearing" and not _is_meta_concept(concept)
     ]
     if explicit:
         return explicit

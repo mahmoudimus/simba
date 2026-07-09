@@ -52,6 +52,16 @@ def distinct_use_sessions(memory_id: str) -> int:
     )
 
 
+def earliest_event_at() -> float | None:
+    """Epoch of the EARLIEST recorded event (any memory, session, or kind).
+
+    ``None`` when the table is empty. The graduation-readiness check's
+    ``signal_days`` axis (spec 33 Part 8 rule R1) measures how long usage
+    signals have been accumulating from this value.
+    """
+    return UsageEvent.select(pw.fn.MIN(UsageEvent.created_at)).scalar()
+
+
 def use_sessions_for(memory_ids: list[str]) -> dict[str, int]:
     """Bulk distinct-use-session counts; ids with no events are absent."""
     ids = [i for i in memory_ids if i]

@@ -71,9 +71,7 @@ def test_fail18_baseline_records_saved_fixture_and_live_prompt_gap(
                 "prompt_version": "v1",
                 "matches": 0,
                 "total": 1,
-                "results": [
-                    {"id": "q1", "gold": 2, "pred": 1, "match": False}
-                ],
+                "results": [{"id": "q1", "gold": 2, "pred": 1, "match": False}],
             }
         ),
         encoding="utf-8",
@@ -94,8 +92,7 @@ def test_fail18_baseline_records_saved_fixture_and_live_prompt_gap(
         "misses_gold": 0,
     }
     assert (
-        baseline["modes"]["clingo_manifest_range"]["source"]
-        == "clingo_manifest_range"
+        baseline["modes"]["clingo_manifest_range"]["source"] == "clingo_manifest_range"
     )
     assert (
         baseline["modes"]["clingo_manifest_range"]["executor"]

@@ -48,8 +48,9 @@ def verify(response: str, cwd_str: str | None, cfg) -> str | None:
 
         types = [
             t.strip().upper()
-            for t in getattr(cfg, "pitfall_gate_types", "FAILURE,PREFERENCE,GOTCHA")
-            .split(",")
+            for t in getattr(
+                cfg, "pitfall_gate_types", "FAILURE,PREFERENCE,GOTCHA"
+            ).split(",")
             if t.strip()
         ]
         if not types:

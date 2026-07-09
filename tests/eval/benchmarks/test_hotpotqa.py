@@ -71,12 +71,22 @@ def test_pooled_shares_one_large_corpus_across_questions():
 
 def test_pooled_dedupes_shared_titles():
     raw = [
-        {"_id": "x", "question": "q", "answer": "a", "type": "bridge",
-         "context": [["Shared", ["s1."]], ["OnlyX", ["x1."]]],
-         "supporting_facts": [["Shared", 0], ["OnlyX", 0]]},
-        {"_id": "y", "question": "q2", "answer": "b", "type": "bridge",
-         "context": [["Shared", ["s1."]], ["OnlyY", ["y1."]]],
-         "supporting_facts": [["Shared", 0], ["OnlyY", 0]]},
+        {
+            "_id": "x",
+            "question": "q",
+            "answer": "a",
+            "type": "bridge",
+            "context": [["Shared", ["s1."]], ["OnlyX", ["x1."]]],
+            "supporting_facts": [["Shared", 0], ["OnlyX", 0]],
+        },
+        {
+            "_id": "y",
+            "question": "q2",
+            "answer": "b",
+            "type": "bridge",
+            "context": [["Shared", ["s1."]], ["OnlyY", ["y1."]]],
+            "supporting_facts": [["Shared", 0], ["OnlyY", 0]],
+        },
     ]
     d = hq.load_hotpotqa_pooled(raw)[0]
     assert {m.id for m in d.corpus} == {"Shared", "OnlyX", "OnlyY"}  # Shared once

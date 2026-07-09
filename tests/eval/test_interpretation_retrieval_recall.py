@@ -62,9 +62,7 @@ def test_retrieval_recall_reports_outside_topk_answer_session(
                         [
                             {
                                 "role": "user",
-                                "content": (
-                                    "Camping days camping days camping days."
-                                ),
+                                "content": ("Camping days camping days camping days."),
                             }
                         ],
                         [

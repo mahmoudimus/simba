@@ -2485,6 +2485,26 @@ def _memory_import_curated(args: list[str]) -> int:
         f"import-curated: stored {stored}, duplicates {duplicates}, "
         f"errors {errors} (of {len(plan)})"
     )
+
+    # Re-import cadence marker (spec 33 R4): on a fully clean --run, stamp
+    # dir + time so SessionStart can nudge a re-import once the curated
+    # MEMORY.md changes again — the bridge stays fresh without a human
+    # remembering it. A cadence marker, not a memory store: safe (and
+    # intended) to overwrite every clean run. Skipped when any item errored
+    # (daemon down, etc.) so the nudge keeps firing until a run truly lands.
+    # Best-effort — a marker write failure must never flip the exit code.
+    if errors == 0:
+        with contextlib.suppress(Exception):
+            target_root = (
+                pathlib.Path(project_path).expanduser()
+                if project_path
+                else pathlib.Path.cwd()
+            )
+            marker_dir = target_root / ".simba"
+            marker_dir.mkdir(parents=True, exist_ok=True)
+            marker = {"dir": str(root.resolve()), "last_import_at": time.time()}
+            (marker_dir / "curated-import.json").write_text(json.dumps(marker))
+
     return 0 if errors == 0 else 1
 
 
@@ -2939,6 +2959,8 @@ Subcommands:
     agents [options]       Show agent runs
     sessions [options]     Show project memory sessions
     migrate                Migrate data from old per-module databases
+    reconcile [--run]      Audit drift across LanceDB/FTS/usage stores
+                           (dry-run by default; --run repairs missing FTS rows)
 
 Options:
     --limit N              Max rows to display (default: 20)
@@ -3008,6 +3030,8 @@ def _cmd_db(args: list[str]) -> int:
         return _db_sessions(cwd, limit)
     elif subcmd == "migrate":
         return _db_migrate(cwd)
+    elif subcmd == "reconcile":
+        return _db_reconcile(cwd, run="--run" in args)
     else:
         print(f"Unknown db subcommand: {subcmd}")
         print(_DB_USAGE)
@@ -3400,6 +3424,51 @@ def _db_migrate(cwd: pathlib.Path) -> int:
         f"  rm -rf {simba_dir}/neuron/ {simba_dir}/search/ "
         f"{simba_dir}/tailor/reflections.jsonl"
     )
+    return 0
+
+
+def _db_reconcile(cwd: pathlib.Path, *, run: bool) -> int:
+    """Audit (and, with --run, repair) drift across LanceDB/FTS/usage stores.
+
+    Dry-run by default: only prints the 3-way drift report. ``--run`` repairs
+    ONLY the safe direction (re-upserting Lance rows missing from the FTS
+    mirror) — it never deletes Lance rows, never deletes usage rows, and never
+    touches vectors. Ghost FTS rows and orphaned usage rows are always
+    report-only.
+    """
+    import asyncio
+
+    import simba.memory.fts
+    import simba.memory.reconcile
+
+    data_dir = simba.memory.reconcile.resolve_data_dir(cwd)
+    lance_path = data_dir / "memories.lance"
+    if not lance_path.exists():
+        print(f"Error: no LanceDB store found at {lance_path}", file=sys.stderr)
+        return 1
+
+    async def _run() -> simba.memory.reconcile.ReconcileReport:
+        import lancedb
+
+        db = await lancedb.connect_async(str(lance_path))
+        table = await db.open_table("memories")
+        fts_path = data_dir / simba.memory.fts.FTS_FILENAME
+        return await simba.memory.reconcile.reconcile(table, fts_path, cwd, apply=run)
+
+    try:
+        report = asyncio.run(_run())
+    except Exception as exc:
+        print(f"Error: failed to open memory stores: {exc}", file=sys.stderr)
+        return 1
+
+    print(simba.memory.reconcile.format_report(report))
+    print()
+    if run:
+        print(f"mode: --run (repaired {len(report.repaired_ids)} missing-fts row(s))")
+    elif report.missing_fts_ids:
+        print("mode: dry-run (pass --run to upsert missing-fts rows from LanceDB)")
+    else:
+        print("mode: dry-run (no repairs needed)")
     return 0
 
 

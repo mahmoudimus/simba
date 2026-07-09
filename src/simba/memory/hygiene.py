@@ -74,6 +74,15 @@ def run_hygiene_pass(
     if cfg.tool_rule_max_age_days == 0:
         return HygieneResult(dry_run=dry_run)
 
+    import simba.memory.background
+
+    if simba.memory.background.is_shutting_down():
+        # Handoff item 10: once the daemon starts shutting down, the list
+        # fetch below can never complete (uvicorn has stopped serving) ---
+        # skip the whole pass rather than guarantee a graceful-shutdown
+        # timeout breach.
+        return HygieneResult(dry_run=dry_run)
+
     cutoff = datetime.now(tz=UTC) - timedelta(days=cfg.tool_rule_max_age_days)
     cutoff_iso = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
     last_used_map = _last_used_epochs(cwd) if cwd is not None else {}
@@ -109,6 +118,11 @@ def run_hygiene_pass(
         if dry_run:
             expired += 1
             continue
+        if simba.memory.background.is_shutting_down():
+            # Stop issuing NEW deletes the moment shutdown begins --- each
+            # is another self-HTTP call that can never complete once
+            # uvicorn stops serving (handoff item 10).
+            break
         try:
             dresp = httpx.delete(f"{daemon_url}/memory/{mid}", timeout=15.0)
             dresp.raise_for_status()

@@ -232,14 +232,17 @@ def _rule_freshness(memory: dict, cfg) -> str | None:
 
 
 def _project_has_tool_rules(project_id: str, cfg) -> bool:
-    """True if the project has >=1 ``TOOL_RULE`` memory (TTL-cached, fail-open).
+    """True if the project has >=1 ``TOOL_RULE`` memory (TTL-cached, fail-closed).
 
     Most projects have no learned rules, so the per-tool-call embed+recall the
     rule check would otherwise run is pure waste (a guaranteed miss). We cache the
     project's count for ``cfg.rule_count_ttl`` seconds and skip the recall when it
     is zero. A ``ttl`` of 0 disables the skip. On any uncertainty (the daemon
-    can't be reached → count is ``None``) we return ``True`` so a real rule is
-    never silently suppressed.
+    can't be reached → count is ``None``) we return ``False`` and skip the recall:
+    ``recall_memories`` would hit the same unreachable daemon and silently return
+    ``[]`` anyway, so fail-open buys no real rule protection during an outage,
+    only a doomed extra HTTP round-trip per tool call. See the ``count is None``
+    branch below for why this answer is never cached.
     """
     ttl = getattr(cfg, "rule_count_ttl", 0)
     if not ttl or ttl <= 0:
@@ -262,7 +265,14 @@ def _project_has_tool_rules(project_id: str, cfg) -> bool:
         memory_type="TOOL_RULE", project_path=project_id
     )
     if count is None:
-        return True  # fail-open: couldn't determine → do the check
+        # Fail-CLOSED, deliberately UNCACHED. An unreachable daemon means the
+        # recall below would fail silently too, so skipping it changes no
+        # observable output — it only avoids a doomed round-trip. Returning
+        # before the cache write (below) keeps this "unknown" from sticking
+        # for the full rule_count_ttl once the daemon is back: the next tool
+        # call re-probes fresh instead of replaying a poisoned answer through
+        # e.g. the ~4.5s SessionStart daemon-autostart window.
+        return False
 
     cache[project_id] = {"count": count, "ts": now}
     with contextlib.suppress(OSError, TypeError):
@@ -626,8 +636,18 @@ def run(hook_input: dict) -> CanonicalResult:
                 # escalated_block: the doctrine you set is the stronger signal.
                 escalated_block = directive
 
-        # General thinking-block recall (unchanged; only for the enabled tool set).
-        if tool_name in _ENABLED_TOOLS and thinking and not _check_dedup(thinking):
+        # General thinking-block recall (only for the enabled tool set). Length floor
+        # mirrors UserPromptSubmit's prompt_min_length (MemOS borrow, parity): a
+        # thinking snippet shorter than hooks.recall_min_query_chars skips the
+        # embed+recall call entirely — checked before dedup so a too-short query
+        # never touches the hash cache either.
+        min_query_chars = getattr(_hcfg, "recall_min_query_chars", 10)
+        if (
+            tool_name in _ENABLED_TOOLS
+            and thinking
+            and len(thinking) >= min_query_chars
+            and not _check_dedup(thinking)
+        ):
             project_path = cwd_str if cwd_str else None
             # Defer the cosine floor to the daemon's intent-aware selection.
             memories = simba.hooks._memory_client.recall_memories(

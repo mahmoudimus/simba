@@ -261,8 +261,10 @@ class TestRecallBroadWidening:
         # which is default-on as of the 2026-06-14 SoTA-lever policy).
         resp = await ac.post(
             "/recall",
-            json={"query": "what is the history of the config schema",
-                  "projectPath": "p1"},
+            json={
+                "query": "what is the history of the config schema",
+                "projectPath": "p1",
+            },
         )
         assert resp.status_code == 200
         assert captured["max_results"] == app.state.config.max_results_broad

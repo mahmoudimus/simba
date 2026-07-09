@@ -33,9 +33,7 @@ class InterpretationRecord:
     def from_dict(cls, raw: dict[str, typing.Any]) -> InterpretationRecord:
         return cls(
             interpretation_id=str(raw["interpretation_id"]),
-            natural_language_interpretation=str(
-                raw["natural_language_interpretation"]
-            ),
+            natural_language_interpretation=str(raw["natural_language_interpretation"]),
             ambiguity_types=normalize_ambiguity_types(
                 tuple(str(item) for item in raw.get("ambiguity_types", ()))
             ),
@@ -56,9 +54,7 @@ class InterpretationRecord:
     def to_dict(self) -> dict[str, typing.Any]:
         return {
             "interpretation_id": self.interpretation_id,
-            "natural_language_interpretation": (
-                self.natural_language_interpretation
-            ),
+            "natural_language_interpretation": (self.natural_language_interpretation),
             "ambiguity_types": [item.value for item in self.ambiguity_types],
             "assumptions": list(self.assumptions),
             "expected_answer_shape": self.expected_answer_shape.value,

@@ -20,12 +20,24 @@ _SAMPLE = {
         ],
     },
     "qa": [
-        {"question": "When did Caroline go?", "answer": "7 May",
-         "evidence": ["D1:3"], "category": 2},
-        {"question": "adversarial one", "evidence": ["D2:1"], "category": 5,
-         "adversarial_answer": "x"},
-        {"question": "dangling evidence", "answer": "y",
-         "evidence": ["D9:9"], "category": 4},
+        {
+            "question": "When did Caroline go?",
+            "answer": "7 May",
+            "evidence": ["D1:3"],
+            "category": 2,
+        },
+        {
+            "question": "adversarial one",
+            "evidence": ["D2:1"],
+            "category": 5,
+            "adversarial_answer": "x",
+        },
+        {
+            "question": "dangling evidence",
+            "answer": "y",
+            "evidence": ["D9:9"],
+            "category": 4,
+        },
     ],
 }
 

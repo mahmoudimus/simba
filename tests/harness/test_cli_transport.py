@@ -8,9 +8,7 @@ import sys
 import pytest
 
 
-def _run_cli(
-    args: list[str], stdin: str, *, cwd: str | None = None
-) -> str:
+def _run_cli(args: list[str], stdin: str, *, cwd: str | None = None) -> str:
     proc = subprocess.run(
         [sys.executable, "-m", "simba", *args],
         input=stdin,
@@ -49,9 +47,7 @@ def test_dispatch_canonical_injects_process_cwd_when_absent(monkeypatch):
     import simba.harness.core
 
     # Force the inline path so dispatch() is the chokepoint we can capture.
-    monkeypatch.setattr(
-        cli, "_hook_via_daemon", lambda event, payload: None
-    )
+    monkeypatch.setattr(cli, "_hook_via_daemon", lambda event, payload: None)
 
     captured: dict = {}
 
@@ -72,9 +68,7 @@ def test_dispatch_canonical_preserves_explicit_cwd(monkeypatch):
     import simba.__main__ as cli
     import simba.harness.core
 
-    monkeypatch.setattr(
-        cli, "_hook_via_daemon", lambda event, payload: None
-    )
+    monkeypatch.setattr(cli, "_hook_via_daemon", lambda event, payload: None)
 
     captured: dict = {}
 
@@ -109,14 +103,10 @@ def test_native_pretooluse_noop_emits_empty_envelope(_inline_project):
     """An inert tool call renders the byte-exact empty PreToolUse envelope."""
     out = _run_cli(
         ["hook", "PreToolUse"],
-        json.dumps(
-            {"tool_name": "Read", "tool_input": {}, "cwd": _inline_project}
-        ),
+        json.dumps({"tool_name": "Read", "tool_input": {}, "cwd": _inline_project}),
         cwd=_inline_project,
     )
-    assert json.loads(out) == {
-        "hookSpecificOutput": {"hookEventName": "PreToolUse"}
-    }
+    assert json.loads(out) == {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
 
 
 def test_native_pretooluse_redirect_rewrite_shape(_inline_project):

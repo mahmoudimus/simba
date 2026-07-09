@@ -35,9 +35,7 @@ class InterpretationParseResult:
             "prompt_version": prompt_version,
             "raw_output": raw_output,
             "parse_status": self.parse_status,
-            "interpretations": [
-                item.to_dict() for item in self.interpretations
-            ],
+            "interpretations": [item.to_dict() for item in self.interpretations],
             "parse_errors": list(self.parse_errors),
         }
 
@@ -123,9 +121,7 @@ def parse_interpretation_object(
         if count > 1
     )
     if duplicate_ids:
-        errors.append(
-            "duplicate interpretation_id values: " + ", ".join(duplicate_ids)
-        )
+        errors.append("duplicate interpretation_id values: " + ", ".join(duplicate_ids))
 
     if errors:
         return InterpretationParseResult(

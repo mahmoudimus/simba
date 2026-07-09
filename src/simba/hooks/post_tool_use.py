@@ -48,9 +48,10 @@ _NORMALIZE_PATTERNS = [
     # Replace line:col numbers
     (re.compile(r":\d+:\d+"), ":LINE:COL"),
     # Replace UUIDs
-    (re.compile(
-        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-    ), "UUID"),
+    (
+        re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),
+        "UUID",
+    ),
 ]
 
 # Session-level dedup to avoid storing duplicate rules.
@@ -236,9 +237,7 @@ def _store_failure_rule(failure: dict, cwd: str) -> None:
 
     # Dedup: hash the normalized command + error
     normalized = _normalize_command(command)
-    error_hash = hashlib.md5(
-        f"{tool}:{normalized}:{error}".encode()
-    ).hexdigest()
+    error_hash = hashlib.md5(f"{tool}:{normalized}:{error}".encode()).hexdigest()
 
     if _check_rule_dedup(error_hash):
         return
@@ -303,14 +302,10 @@ def main(hook_input: dict) -> str:
     if cfg.auto_learn_from_failures and tool_response:
         with contextlib.suppress(Exception):
             probe_verbs = frozenset(
-                v.strip()
-                for v in cfg.learn_probe_commands.split(",")
-                if v.strip()
+                v.strip() for v in cfg.learn_probe_commands.split(",") if v.strip()
             )
             reader_verbs = frozenset(
-                v.strip()
-                for v in cfg.learn_reader_commands.split(",")
-                if v.strip()
+                v.strip() for v in cfg.learn_reader_commands.split(",") if v.strip()
             )
             failure = _detect_failure(
                 tool_name,

@@ -363,8 +363,8 @@ def _language_contract(language: str) -> str:
         )
     return (
         "Clingo contract: facts are provided as field(Id, Key, Value). Write an "
-        "ASP program that emits answer_space(\"lower\", L) and "
-        "answer_space(\"upper\", U), or answer_space(\"count\", N), and includes "
+        'ASP program that emits answer_space("lower", L) and '
+        'answer_space("upper", U), or answer_space("count", N), and includes '
         "#show answer_space/2."
     )
 

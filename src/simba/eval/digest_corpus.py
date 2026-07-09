@@ -31,9 +31,9 @@ _PERSONAL_DIGEST_PROMPT = (
     "durable, specific personal facts worth remembering long-term: the user's "
     "preferences, possessions, plans, events, relationships, and stable "
     "attributes. Resolve pronouns and relative dates to concrete references. "
-    "Return ONLY a JSON array; each element an object with keys \"type\", "
+    'Return ONLY a JSON array; each element an object with keys "type", '
     '"content", "context". "type" is one of PREFERENCE, FACT, DECISION, '
-    'PATTERN, GOTCHA (use PREFERENCE for likes/dislikes, PATTERN for recurring '
+    "PATTERN, GOTCHA (use PREFERENCE for likes/dislikes, PATTERN for recurring "
     'facts). "content" is a self-contained statement of at most 200 '
     'characters; "context" holds supporting detail (e.g. when it was said). '
     "Capture every distinct fact a future question might ask about; skip "

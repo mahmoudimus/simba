@@ -91,9 +91,7 @@ def add(
         )
 
 
-def remove(
-    program: str, *, project_path: str, cwd: pathlib.Path | None = None
-) -> int:
+def remove(program: str, *, project_path: str, cwd: pathlib.Path | None = None) -> int:
     """Remove a rule by program; returns the number deleted."""
     with simba.db.connect(cwd):
         return (
@@ -125,9 +123,7 @@ def list_rules(
     ]
 
 
-def load_rules(
-    cwd: pathlib.Path, *, project_path: str
-) -> list[RedirectRule]:
+def load_rules(cwd: pathlib.Path, *, project_path: str) -> list[RedirectRule]:
     """Merge TOML-file rules and DB-store rules for this project."""
     toml_rules = load_toml(cwd / TOML_RELPATH)
     store_rules = list_rules(project_path=project_path, cwd=cwd)

@@ -40,9 +40,7 @@ def parse(query: str) -> ParsedQuery:
         value = _clean_value(match.group("value"))
         if key == "type":
             route_filters["types"] = [
-                part.strip().upper()
-                for part in value.split(",")
-                if part.strip()
+                part.strip().upper() for part in value.split(",") if part.strip()
             ]
         elif key == "project":
             route_filters["projectPath"] = (
