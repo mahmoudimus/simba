@@ -309,7 +309,11 @@ def _fetch_tool_rule_ids(daemon_url: str) -> list[str]:
     try:
         resp = httpx.get(
             f"{daemon_url}/list",
-            params={"type": "TOOL_RULE", "limit": 10000},
+            # id+type only: this join never reads content/context/vector, and
+            # a whole-corpus /list with no projection was the live incident
+            # (2026-07-10) -- see the comment above `_LIST_DEFAULT_FIELDS` in
+            # routes.py.
+            params={"type": "TOOL_RULE", "limit": 10000, "fields": "id,type"},
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -507,7 +511,15 @@ def _run_reflection(cwd: pathlib.Path, daemon_url: str, dry_run: bool) -> dict:
 def _fetch_type_map(daemon_url: str) -> dict[str, str] | None:
     """``memory_id -> TYPE`` over the corpus via ``GET /list`` (the capacity-cap
     pattern: types live only in LanceDB). Fail-soft ``None`` → decay falls back
-    to the base half-life for every row."""
+    to the base half-life for every row.
+
+    ``fields=id,type`` (root cause, live incident 2026-07-10): this join never
+    reads anything but id/type, but an unprojected ``/list`` over the WHOLE
+    corpus (9,200+ memories) fetched every column -- including each row's
+    1024-dim ``vector`` -- so the Arrow-to-Python conversion of ~9.4M floats
+    on every heartbeat was the daemon's hot loop (see routes.py's
+    ``_LIST_DEFAULT_FIELDS`` comment for the full story).
+    """
     import simba.memory.background
 
     if simba.memory.background.is_shutting_down():
@@ -518,7 +530,11 @@ def _fetch_type_map(daemon_url: str) -> dict[str, str] | None:
     import httpx
 
     try:
-        resp = httpx.get(f"{daemon_url}/list", params={"limit": 100_000}, timeout=15.0)
+        resp = httpx.get(
+            f"{daemon_url}/list",
+            params={"limit": 100_000, "fields": "id,type"},
+            timeout=15.0,
+        )
         resp.raise_for_status()
         memories = resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):

@@ -1836,6 +1836,82 @@ async def stats(request: fastapi.Request) -> dict:
     }
 
 
+# ── GET /list column projection ──
+#
+# A live incident (2026-07-10) traced a 40+min ~100% CPU / 36GB RSS daemon
+# stall to the maintenance heartbeat's decay pass: its id->type join
+# (`_fetch_type_map`) hit this endpoint over the WHOLE corpus (9,200+
+# memories). `/list` fetched every column via `table.query().to_list()` --
+# including each row's 1024-dim `vector` -- so the join alone converted ~9.4M
+# Arrow floats to Python objects (the hot frames in the native profile).
+# Vectors are opt-in only (`include_vectors`); `fields` lets any caller narrow
+# the columns further. Both are pushed down to the Lance query itself
+# (`.select()`) so an excluded column is never materialized, not merely
+# dropped after the fact.
+_LIST_DEFAULT_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "content",
+    "context",
+    "confidence",
+    "createdAt",
+    "accessCount",
+    "projectPath",
+    "sessionSource",
+)
+_LIST_ALL_FIELDS: tuple[str, ...] = (*_LIST_DEFAULT_FIELDS, "vector")
+
+
+def _parse_list_fields(
+    fields: str | None, *, include_vectors: bool
+) -> tuple[str, ...] | None:
+    """Parse ``?fields=a,b,c`` into a validated, order-preserving tuple of known
+    top-level ``/list`` output fields.
+
+    ``None`` (param omitted, or nothing valid survived) defers to the caller's
+    full default set. Unknown names are dropped silently (fail-soft, matching
+    this module's error handling elsewhere); ``vector`` only survives when
+    ``include_vectors`` is set, so a stray ``fields=...,vector`` can never
+    smuggle the embedding back in without the explicit opt-in.
+    """
+    if not fields:
+        return None
+    allowed = set(_LIST_ALL_FIELDS if include_vectors else _LIST_DEFAULT_FIELDS)
+    out: list[str] = []
+    for raw in fields.split(","):
+        name = raw.strip()
+        if name and name in allowed and name not in out:
+            out.append(name)
+    return tuple(out) or None
+
+
+def _project_memory(
+    m: dict[str, typing.Any], fields: tuple[str, ...], *, strict: bool
+) -> dict[str, typing.Any]:
+    """Build one ``/list`` row restricted to ``fields``.
+
+    ``strict=False`` (no caller-supplied ``fields=``) mirrors the endpoint's
+    historical default shape: ``context``/``projectPath``/``sessionSource``
+    appear only when truthy, so a no-``fields`` response stays byte-identical
+    to before this projection param existed. ``strict=True`` (an explicit
+    ``fields=`` request) is a literal projection: every requested key is
+    always present, using the same defaults as the legacy shape.
+    """
+    out: dict[str, typing.Any] = {}
+    for f in fields:
+        if f == "confidence":
+            out[f] = m.get("confidence", 0)
+        elif f == "accessCount":
+            out[f] = m.get("accessCount", 0)
+        elif f in ("context", "projectPath", "sessionSource") and not strict:
+            value = m.get(f)
+            if value:
+                out[f] = value
+        else:
+            out[f] = m.get(f)
+    return out
+
+
 @router.get("/list")
 async def list_memories(
     request: fastapi.Request,
@@ -1843,10 +1919,30 @@ async def list_memories(
     projectPath: str | None = fastapi.Query(default=None),  # noqa: N803
     limit: int = fastapi.Query(default=20),
     offset: int = fastapi.Query(default=0),
+    include_vectors: bool = fastapi.Query(default=False),
+    fields: str | None = fastapi.Query(default=None),
 ) -> dict:
+    """List memories with server-side type/project filtering and pagination.
+
+    ``include_vectors`` (default ``False``) and ``fields`` (comma-separated
+    output-field allowlist, e.g. ``id,type``) both narrow what leaves LanceDB
+    -- see the module-level comment above ``_LIST_DEFAULT_FIELDS`` for why.
+    """
     table = request.app.state.table
 
-    all_memories = await table.query().to_list()
+    requested_fields = _parse_list_fields(fields, include_vectors=include_vectors)
+    output_fields = requested_fields or (
+        _LIST_ALL_FIELDS if include_vectors else _LIST_DEFAULT_FIELDS
+    )
+
+    # `type`/`projectPath` (post-fetch filters below) and `createdAt` (the sort
+    # key) are always fetched even when the caller's `fields` excludes them
+    # from the OUTPUT -- only `_project_memory` below respects `fields` for
+    # what actually gets returned.
+    fetch_columns = sorted(
+        set(output_fields) | {"id", "type", "projectPath", "createdAt"}
+    )
+    all_memories = await table.query().select(fetch_columns).to_list()
 
     if type:
         all_memories = [m for m in all_memories if m.get("type") == type]
@@ -1858,17 +1954,7 @@ async def list_memories(
     paginated = all_memories[offset : offset + limit]
 
     memories = [
-        {
-            "id": m["id"],
-            "type": m["type"],
-            "content": m["content"],
-            **({"context": m["context"]} if m.get("context") else {}),
-            "confidence": m.get("confidence", 0),
-            "createdAt": m.get("createdAt"),
-            "accessCount": m.get("accessCount", 0),
-            **({"projectPath": m["projectPath"]} if m.get("projectPath") else {}),
-            **({"sessionSource": m["sessionSource"]} if m.get("sessionSource") else {}),
-        }
+        _project_memory(m, output_fields, strict=requested_fields is not None)
         for m in paginated
     ]
 

@@ -186,6 +186,36 @@ def test_hygiene_stops_deleting_once_shutdown_flips_mid_loop(monkeypatch) -> Non
     assert result.expired_count == 1
 
 
+def test_hygiene_requests_minimal_field_projection(monkeypatch) -> None:
+    """Root cause of the 2026-07-10 CPU/RSS incident: the aging check below
+    never reads anything but id/type/createdAt, so the request must carry
+    that projection (and never ask for vectors) --- an unprojected /list was
+    pulling every 1024-dim embedding into Python for no reason."""
+    from simba.memory.config import MemoryConfig
+    from simba.memory.hygiene import run_hygiene_pass
+
+    captured: dict = {}
+
+    def fake_get(url, **kw):
+        captured["params"] = kw.get("params")
+        r = MagicMock()
+        r.raise_for_status = lambda: None
+        r.json.return_value = {"memories": [], "total": 0}
+        return r
+
+    with patch("httpx.get", side_effect=fake_get):
+        run_hygiene_pass(
+            daemon_url="http://localhost:8741",
+            cfg=MemoryConfig(tool_rule_max_age_days=30),
+        )
+
+    assert captured["params"] == {
+        "type": "TOOL_RULE",
+        "limit": 10000,
+        "fields": "id,type,createdAt",
+    }
+
+
 def test_hygiene_dry_run_counts_without_delete(monkeypatch) -> None:
     """Shadow mode (spec 33): count would-expire rules, never DELETE."""
     from simba.memory.config import MemoryConfig

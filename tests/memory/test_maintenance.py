@@ -742,12 +742,77 @@ def test_fetch_type_map_calls_http_when_not_shutting_down(monkeypatch) -> None:
 
     def _fake_get(url, **kw):
         calls["url"] = url
+        calls["params"] = kw.get("params")
         return _FakeResponse()
 
     monkeypatch.setattr(httpx, "get", _fake_get)
 
     assert maint._fetch_type_map("http://x") == {"mem_a": "PATTERN"}
     assert calls["url"] == "http://x/list"
+    assert calls["params"] == {"limit": 100_000, "fields": "id,type"}
+
+
+def test_fetch_type_map_requests_id_type_projection_only(monkeypatch) -> None:
+    """Root cause of the 2026-07-10 CPU/RSS incident: this join never reads
+    anything but id/type, so the request must carry ``fields=id,type`` (and
+    never ask for vectors) --- an unprojected /list over the whole corpus
+    (9,200+ memories) was pulling every 1024-dim embedding into Python."""
+    import httpx
+
+    import simba.memory.maintenance as maint
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"memories": []}
+
+    def _fake_get(url, *, params=None, **kw):
+        captured["params"] = params
+        return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    maint._fetch_type_map("http://x")
+
+    assert captured["params"]["fields"] == "id,type"
+    assert "vector" not in captured["params"]["fields"]
+    assert captured["params"].get("include_vectors") in (None, False)
+
+
+def test_fetch_tool_rule_ids_requests_id_type_projection_only(monkeypatch) -> None:
+    """Same projection story as ``_fetch_type_map`` for the graduation-
+    readiness tool-rule fetch (mirrors the hygiene pass's server-filtered
+    fetch, ``run_hygiene_pass``)."""
+    import httpx
+
+    import simba.memory.maintenance as maint
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"memories": []}
+
+    def _fake_get(url, *, params=None, **kw):
+        captured["params"] = params
+        return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    maint._fetch_tool_rule_ids("http://x")
+
+    assert captured["params"] == {
+        "type": "TOOL_RULE",
+        "limit": 10000,
+        "fields": "id,type",
+    }
 
 
 @pytest.mark.asyncio

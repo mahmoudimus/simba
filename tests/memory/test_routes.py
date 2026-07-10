@@ -776,6 +776,104 @@ class TestListEndpoint:
         assert data["limit"] == 2
         assert data["offset"] == 1
 
+    @pytest.mark.asyncio
+    async def test_list_excludes_vectors_by_default(self, async_client, lance_table):
+        """Root cause of the 2026-07-10 CPU/RSS incident: /list must never
+        materialize the 1024-dim `vector` column into the response unless the
+        caller explicitly opts in (`include_vectors=true`)."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "v1",
+                    "type": "GOTCHA",
+                    "content": "has a vector",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.1] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list")
+        data = resp.json()
+        assert data["total"] == 2  # init SYSTEM row + v1
+        assert len(data["memories"]) == 2
+        for m in data["memories"]:
+            assert "vector" not in m
+
+    @pytest.mark.asyncio
+    async def test_list_include_vectors_true_returns_vector(
+        self, async_client, lance_table
+    ):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "v1",
+                    "type": "GOTCHA",
+                    "content": "has a vector",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.5] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"include_vectors": "true"})
+        data = resp.json()
+        by_id = {m["id"]: m for m in data["memories"]}
+        assert by_id["v1"]["vector"] == [0.5] * 768
+
+    @pytest.mark.asyncio
+    async def test_list_fields_returns_exactly_requested_keys(
+        self, async_client, lance_table
+    ):
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "f1",
+                    "type": "GOTCHA",
+                    "content": "some content",
+                    "context": "some context",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-1",
+                    "projectPath": "/proj",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"fields": "id,type"})
+        data = resp.json()
+        assert len(data["memories"]) == data["total"]
+        for m in data["memories"]:
+            assert set(m.keys()) == {"id", "type"}
+
+    @pytest.mark.asyncio
+    async def test_list_fields_vector_requires_include_vectors(self, async_client):
+        """`fields=vector` alone (without `include_vectors=true`) must not
+        smuggle the embedding back into the response --- `include_vectors` is
+        the master switch, `fields` only narrows further."""
+        resp = await async_client.get("/list", params={"fields": "id,vector"})
+        data = resp.json()
+        for m in data["memories"]:
+            assert set(m.keys()) == {"id"}
+
 
 class TestDeleteEndpoint:
     @pytest.mark.asyncio

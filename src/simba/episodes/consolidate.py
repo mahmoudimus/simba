@@ -77,8 +77,16 @@ def _rlm_cfg():
 
 
 def _list_memories(daemon_url: str, *, limit: int = 100000) -> list[dict]:
+    # Session grouping + episode-prompt building only ever reads these fields
+    # (never `vector`); an unprojected /list over the whole corpus was the
+    # live incident behind routes.py's `_LIST_DEFAULT_FIELDS` comment.
+    fields = "id,type,content,context,projectPath,sessionSource"
     try:
-        resp = httpx.get(f"{daemon_url}/list", params={"limit": limit}, timeout=15.0)
+        resp = httpx.get(
+            f"{daemon_url}/list",
+            params={"limit": limit, "fields": fields},
+            timeout=15.0,
+        )
         resp.raise_for_status()
         return resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):
