@@ -227,6 +227,10 @@ def test_main_passes_shutdown_timeout_to_uvicorn(monkeypatch) -> None:
         simba.memory.config, "load_config", lambda **overrides: fixed_config
     )
     monkeypatch.setattr(sys, "argv", ["simba-memory-daemon"])
+    # main() now funnels a clean uvicorn.run() return through the hard-exit
+    # guarantee (server._run_server); stub the os._exit seam so this test
+    # can make its assertions instead of ending the test process.
+    monkeypatch.setattr(server, "_os_exit", lambda code: None)
 
     server.main()
 

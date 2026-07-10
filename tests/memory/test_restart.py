@@ -138,6 +138,10 @@ def test_main_captures_boot_argv_under_module_invocation(
     monkeypatch.setattr(
         sys, "argv", ["simba-memory-daemon", "--port", "18741", "--db-path", "/tmp/x"]
     )
+    # main() now funnels a clean uvicorn.run() return through the hard-exit
+    # guarantee (server._run_server); stub the os._exit seam so this test
+    # can make its assertions instead of ending the test process.
+    monkeypatch.setattr(server, "_os_exit", lambda code: None)
 
     server.main()
 
