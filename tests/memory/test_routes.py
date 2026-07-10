@@ -874,6 +874,57 @@ class TestListEndpoint:
         for m in data["memories"]:
             assert set(m.keys()) == {"id"}
 
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_without_fields_rejected(self, async_client):
+        """2026-07-10 incident rule, enforced at runtime: a caller
+        self-attributed as the daemon (X-Simba-Client: daemon) MUST pass
+        fields= --- an unprojected internal self-call is exactly the shape
+        that materialized 45GB of vectors."""
+        resp = await async_client.get("/list", headers={"X-Simba-Client": "daemon"})
+        assert resp.status_code == 400
+        assert "fields=" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_nested_origin_without_fields_rejected(
+        self, async_client
+    ):
+        """A dispatched-hook loopback nests as "<origin>.daemon" (see
+        harness/client.py's detect_client) --- still daemon-internal."""
+        resp = await async_client.get(
+            "/list", headers={"X-Simba-Client": "claude-code.daemon"}
+        )
+        assert resp.status_code == 400
+        assert "fields=" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_with_fields_allowed(self, async_client):
+        """The gate only requires fields= --- it doesn't forbid the daemon
+        from calling /list correctly."""
+        resp = await async_client.get(
+            "/list",
+            params={"fields": "id,type"},
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_external_client_without_fields_allowed(self, async_client):
+        """Non-daemon clients (claude-code, codex, pi, cli, unknown) are
+        unaffected by the internal-projection gate."""
+        for client_name in ("claude-code", "codex", "pi", "cli"):
+            resp = await async_client.get(
+                "/list", headers={"X-Simba-Client": client_name}
+            )
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_unknown_client_without_fields_allowed(self, async_client):
+        """No X-Simba-Client header at all -> "unknown" -> unaffected (this
+        is the existing behavior every other TestListEndpoint test relies
+        on, asserted explicitly here so a regression is caught directly)."""
+        resp = await async_client.get("/list")
+        assert resp.status_code == 200
+
 
 class TestDeleteEndpoint:
     @pytest.mark.asyncio

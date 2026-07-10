@@ -109,6 +109,7 @@ testpaths = ["tests"]
 addopts = "-ra -q -m 'not gguf'"
 markers = [
     "gguf: opt-in tests that download/load a real GGUF model (skipped by default; run with `-m gguf`)",
+    "real_daemon_spawn: tests that intentionally exercise _auto_start_daemon's real body (isolated via tmp_path + a mocked subprocess.Popen) -- exempt from the global auto-start-blocking fixture",
 ]
 
 [tool.coverage.run]
