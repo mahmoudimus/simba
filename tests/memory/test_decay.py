@@ -69,6 +69,42 @@ def test_decay_pass_revives_when_strength_recovers(
     assert row.dormant is False
 
 
+def test_capacity_cap_requests_minimal_field_projection(
+    tmp_path: pathlib.Path, monkeypatch
+) -> None:
+    """Root cause of the 2026-07-10 CPU/RSS incident: the capacity-cap join
+    never reads anything but id/type/projectPath, so the request must carry
+    that projection (and never ask for vectors) --- an unprojected /list over
+    the whole corpus was pulling every 1024-dim embedding into Python for a
+    join that only needed three scalar columns."""
+    import httpx
+
+    from simba.memory.decay import _apply_capacity_cap
+
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"memories": []}
+
+    def _fake_get(url, *, params=None, **kw):
+        captured["params"] = params
+        return _FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    cfg = _cfg(decay_capacity_per_type=5, port=8741)
+    _apply_capacity_cap(cfg, tmp_path, dry_run=True)
+
+    assert captured["params"] == {
+        "limit": 100000,
+        "fields": "id,type,projectPath",
+    }
+
+
 def test_decay_pass_skips_when_disabled(tmp_path: pathlib.Path) -> None:
     with simba.db.connect(tmp_path):
         usage.get_or_create("mem_x", now=_NOW - 60 * _DAY)

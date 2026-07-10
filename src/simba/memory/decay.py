@@ -182,7 +182,11 @@ def _apply_capacity_cap(
     try:
         resp = httpx.get(
             f"http://127.0.0.1:{port}/list",
-            params={"limit": 100000},
+            # id/type/projectPath only -- this join never reads
+            # content/context/vector (see routes.py's `_LIST_DEFAULT_FIELDS`
+            # comment: an unprojected whole-corpus /list was the live
+            # incident, 2026-07-10).
+            params={"limit": 100000, "fields": "id,type,projectPath"},
             timeout=10.0,
         )
         resp.raise_for_status()

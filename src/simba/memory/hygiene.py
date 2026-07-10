@@ -91,7 +91,14 @@ def run_hygiene_pass(
     try:
         resp = httpx.get(
             f"{daemon_url}/list",
-            params={"type": "TOOL_RULE", "limit": 10000},
+            # id/type/createdAt only -- the aging check below never reads
+            # content/context/vector (see routes.py's `_LIST_DEFAULT_FIELDS`
+            # comment for why an unprojected /list is expensive).
+            params={
+                "type": "TOOL_RULE",
+                "limit": 10000,
+                "fields": "id,type,createdAt",
+            },
             timeout=15.0,
         )
         resp.raise_for_status()

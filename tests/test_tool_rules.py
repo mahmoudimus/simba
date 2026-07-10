@@ -683,6 +683,9 @@ class TestMemoryClientCount:
         assert "/list" in captured["url"]
         assert captured["params"]["type"] == "TOOL_RULE"
         assert captured["params"]["projectPath"] == "/p1"
+        # Only `total` is ever read from the response --- the projection can
+        # be as narrow as it gets (spec: 2026-07-10 CPU/RSS incident).
+        assert captured["params"]["fields"] == "id"
 
     def test_count_none_on_error(self, monkeypatch):
         import httpx

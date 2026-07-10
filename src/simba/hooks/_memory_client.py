@@ -173,10 +173,14 @@ def count_memories(
     ``None`` on any failure so callers can fail-open (treat "unknown" as "exists")
     rather than wrongly suppress behavior. Used by the PreToolUse tool-rule gate
     to skip the per-call embed+recall for projects with no learned rules.
+
+    ``fields=id``: only ``total`` is ever read from the response, never the
+    listed rows themselves, so the projection is as narrow as it gets (and,
+    per ``/list``'s default, never pulls a ``vector``).
     """
     cfg = _get_cfg()
     url = f"{daemon_url()}/list"
-    params: dict = {"type": memory_type, "limit": 1}
+    params: dict = {"type": memory_type, "limit": 1, "fields": "id"}
     if project_path:
         params["projectPath"] = project_path
     try:

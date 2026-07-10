@@ -47,7 +47,17 @@ def _fetch_memories(
     if limit is None:
         limit = _sync_cfg().page_size
     try:
-        resp = client.get("/list", params={"limit": limit, "offset": offset})
+        # Fact extraction only ever reads these fields (never `vector`); an
+        # unprojected /list was the live incident behind routes.py's
+        # `_LIST_DEFAULT_FIELDS` comment.
+        resp = client.get(
+            "/list",
+            params={
+                "limit": limit,
+                "offset": offset,
+                "fields": "id,type,content,context,createdAt",
+            },
+        )
         resp.raise_for_status()
         data = resp.json()
     except (httpx.HTTPError, ValueError):
