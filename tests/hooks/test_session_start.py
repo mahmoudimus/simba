@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
+import subprocess
 import unittest.mock
+
+import pytest
 
 import simba.hooks.session_start
 
@@ -75,6 +79,82 @@ class TestSessionStartHook:
             result = json.loads(simba.hooks.session_start.main({}))
         ctx = result["hookSpecificOutput"]["additionalContext"]
         assert "Semantic Memory" in ctx
+
+    @pytest.mark.real_daemon_spawn
+    def test_auto_start_daemon_redirects_stdio_to_log_file(self, tmp_path):
+        """The spawned daemon's stdout/stderr must go to an append-mode
+        .simba/memory/daemon.log --- never DEVNULL (live 2026-07-10: both
+        the silent /restart failure and the 45GB /list blowup were buried
+        until sampled via lsof, because both streams were discarded)."""
+        captured: dict = {}
+
+        def _fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start.subprocess.Popen",
+                side_effect=_fake_popen,
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._hooks_cfg",
+                return_value=unittest.mock.MagicMock(
+                    poll_attempts=1, poll_interval=0.0
+                ),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+        ):
+            simba.hooks.session_start._auto_start_daemon(tmp_path)
+
+        log_path = tmp_path / ".simba" / "memory" / "daemon.log"
+        assert log_path.exists()
+
+        assert captured["stdout"] is not subprocess.DEVNULL
+        assert captured["stderr"] is not subprocess.DEVNULL
+        assert isinstance(captured["stdout"], io.IOBase)
+        assert isinstance(captured["stderr"], io.IOBase)
+        assert captured["stdout"].name == str(log_path)
+        assert captured["stderr"].name == str(log_path)
+
+    @pytest.mark.real_daemon_spawn
+    def test_auto_start_daemon_appends_without_truncating_existing_log(self, tmp_path):
+        """Append-only (CORE_INSTRUCTIONS.md): a pre-existing daemon.log ---
+        from an earlier daemon lifetime --- must never be wiped by the next
+        auto-start."""
+        log_path = tmp_path / ".simba" / "memory" / "daemon.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("prior daemon output\n")
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start.subprocess.Popen",
+                return_value=unittest.mock.MagicMock(),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._hooks_cfg",
+                return_value=unittest.mock.MagicMock(
+                    poll_attempts=1, poll_interval=0.0
+                ),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+        ):
+            simba.hooks.session_start._auto_start_daemon(tmp_path)
+
+        assert log_path.read_text().startswith("prior daemon output\n")
+
+    def test_auto_start_daemon_log_path_is_repo_root_aware(self, tmp_path):
+        """The log lives next to the sqlite sidecar's `.simba`
+        (`simba.db.get_db_path`'s resolution) --- not necessarily the raw
+        cwd passed in --- matching the existing path-resolution helper."""
+        resolved_db = tmp_path / "repo-root" / ".simba" / "simba.db"
+        with unittest.mock.patch("simba.db.get_db_path", return_value=resolved_db):
+            log_path = simba.hooks.session_start._daemon_log_path(tmp_path / "sub")
+        assert log_path == tmp_path / "repo-root" / ".simba" / "memory" / "daemon.log"
 
     def test_empty_input_does_not_crash(self):
         with unittest.mock.patch(

@@ -43,17 +43,47 @@ def _check_health() -> dict | None:
     return None
 
 
-def _auto_start_daemon() -> bool:
-    """Attempt to start the memory daemon and poll until healthy."""
+def _daemon_log_path(cwd: pathlib.Path | None) -> pathlib.Path:
+    """Resolve ``.simba/memory/daemon.log`` for the project.
+
+    Reuses ``simba.db.get_db_path``'s repo-root-aware resolution (its
+    ``.parent`` is ``.simba``) rather than inventing a second path
+    convention --- see ``_auto_start_daemon`` for why this matters.
+    """
+    return simba.db.get_db_path(cwd).parent / "memory" / "daemon.log"
+
+
+def _auto_start_daemon(cwd: pathlib.Path | None = None) -> bool:
+    """Attempt to start the memory daemon and poll until healthy.
+
+    stdout/stderr go to an append-mode ``.simba/memory/daemon.log`` ---
+    never ``DEVNULL``. A spawned daemon that hits a startup exception, or
+    later a failed ``POST /restart`` (see routes.py's
+    ``_run_restart_sequence``), must leave SOME trace: discarding both
+    streams is exactly how those failures went unnoticed live until sampled
+    via ``lsof``. Deliberately simple append, no rotation --- log growth is
+    bounded by daemon verbosity (one INFO line per request/heartbeat), not
+    by anything unbounded from outside.
+    """
+    log_path = _daemon_log_path(cwd)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "a")  # noqa: SIM115 -- closed in `finally` below
+    except OSError:
+        return False
     try:
         subprocess.Popen(
             ["uv", "run", "python", "-m", "simba.memory.server"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             start_new_session=True,
         )
     except (FileNotFoundError, OSError):
         return False
+    finally:
+        # The child's dup'd fd (from Popen/fork+exec) is independent of this
+        # handle --- closing it here doesn't touch the daemon's own copy.
+        log_file.close()
 
     cfg = _hooks_cfg()
     for _ in range(cfg.poll_attempts):
@@ -278,7 +308,7 @@ def run(hook_input: dict) -> CanonicalResult:
     # 1. Memory daemon health check + auto-start
     health = _check_health()
     if health is None:
-        started = _auto_start_daemon()
+        started = _auto_start_daemon(cwd)
         if started:
             health = _check_health()
 

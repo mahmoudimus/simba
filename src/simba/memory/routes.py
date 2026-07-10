@@ -1776,6 +1776,12 @@ async def health(request: fastapi.Request) -> dict:
         "ftsPath": str(fts_path or ""),
         "components": components,
         "lastError": last_error,
+        # POST /restart's drain/flush/execv sequence runs detached from the
+        # request lifecycle (see background.schedule_restart) --- any
+        # exception in it is otherwise invisible (the 202 is long gone by
+        # the time it could fail). Null on a daemon that has never
+        # attempted a restart, or whose last attempt succeeded.
+        "lastRestartError": getattr(request.app.state, "last_restart_error", None),
     }
 
 
@@ -1927,7 +1933,26 @@ async def list_memories(
     ``include_vectors`` (default ``False``) and ``fields`` (comma-separated
     output-field allowlist, e.g. ``id,type``) both narrow what leaves LanceDB
     -- see the module-level comment above ``_LIST_DEFAULT_FIELDS`` for why.
+
+    Runtime gate (2026-07-10 incident, docs/adr/2026-07-10-internal-api-
+    footguns.md): a caller self-attributed as the daemon (``X-Simba-Client:
+    daemon``, or a nested ``<origin>.daemon`` loopback -- see harness/
+    client.py's ``detect_client``) MUST pass ``fields=``. An unprojected
+    internal self-call is exactly the shape that materialized the whole
+    corpus -- including every row's 1024-dim vector -- for a 45GB peak
+    footprint. External/CLI/plain clients are unaffected; the static
+    counterpart of this rule is tests/test_internal_list_projection_lint.py.
     """
+    client = getattr(request.state, "client", "unknown") or "unknown"
+    is_daemon_internal = client == simba.harness.client.DAEMON or client.endswith(
+        f".{simba.harness.client.DAEMON}"
+    )
+    if is_daemon_internal and not fields:
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail="internal /list callers must pass fields= projection",
+        )
+
     table = request.app.state.table
 
     requested_fields = _parse_list_fields(fields, include_vectors=include_vectors)
@@ -2250,24 +2275,30 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
     }
 
 
-# Belt-and-suspenders margin between sending the 202 and tearing the process
-# down via os.execv: `await send(...)` returning doesn't guarantee a real
-# ASGI server (uvicorn) has finished handing the response bytes to the OS
-# socket buffer on every code path (e.g. backpressure), and execv wipes the
-# event loop --- including any not-yet-flushed transport write --- with no
-# chance to finish. A short, fixed sleep is cheap insurance; it is not a
+# Belt-and-suspenders margin between the 202 handler returning and tearing the
+# process down via os.execv: the detached restart task (see
+# simba.memory.background.schedule_restart) is NOT ordered by Starlette's
+# "send response, then run background work" contract anymore (that contract
+# is exactly what tied the old sequence to the request's cancellation scope
+# --- see background.py's module comment for the live 2026-07-10 incident),
+# so this sleep is now the ONLY thing giving the ASGI transport a moment to
+# actually flush the response bytes before drain/flush/execv proceeds. Not a
 # tunable (nothing a user would ever need to adjust), so it stays a plain
 # constant rather than a `simba config` knob.
-_RESTART_RESPONSE_DELAY_SECONDS = 0.05
+_RESTART_RESPONSE_DELAY_SECONDS = 0.2
 
 
 async def _run_restart_sequence(argv: list[str], app: fastapi.FastAPI) -> None:
     """Drain, stop, flush, then replace the process image (POST /restart).
 
-    Scheduled via FastAPI's ``BackgroundTasks`` so it is guaranteed (by
-    Starlette's ``Response.__call__`` contract: send the response, then run
-    background tasks) to start only after the 202 response has already been
-    handed to the ASGI transport.
+    Scheduled as a DETACHED asyncio task (``simba.memory.background.
+    schedule_restart``) rather than Starlette ``BackgroundTasks`` --- see
+    that function's docstring for the live 2026-07-10 incident this
+    replaces: with ``BaseHTTPMiddleware`` in the stack, a client disconnect
+    right after the 202 was transmitted cancelled this whole sequence
+    before ``os.execv`` ever ran, and the 202 kept coming back regardless
+    (uptime never reset). A detached task has no per-request scope for
+    anything to cancel.
 
     Order matters and is covered by tests: the shutdown flag is set before
     ``drain`` runs (so any background pass mid-flight bails on its next
@@ -2275,22 +2306,35 @@ async def _run_restart_sequence(argv: list[str], app: fastapi.FastAPI) -> None:
     completes before stdio is flushed, and stdio is flushed before the exec
     seam --- once ``reexec`` returns control to a new process image, nothing
     Python-level here runs again.
+
+    Any exception anywhere in this sequence is logged at CRITICAL (with a
+    full traceback) and recorded onto ``app.state.last_restart_error`` for
+    ``GET /health`` to surface. Previously an exception here vanished with
+    no trace at all: it ran after the 202 was already sent, so nothing
+    HTTP-visible could ever show it --- and live, the auto-spawned daemon's
+    stdout/stderr went to DEVNULL (see session_start.py), so even the
+    traceback on stderr was buried. Success leaves the field null.
     """
-    await asyncio.sleep(_RESTART_RESPONSE_DELAY_SECONDS)
-    simba.memory.background.mark_shutting_down()
-    config = app.state.config
-    await simba.memory.background.drain(config.shutdown_timeout)
-    scheduler = getattr(app.state, "maintenance_scheduler", None)
-    if scheduler is not None:
-        scheduler.stop()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    simba.memory.background.reexec(argv)
+    app.state.last_restart_error = None
+    try:
+        await asyncio.sleep(_RESTART_RESPONSE_DELAY_SECONDS)
+        simba.memory.background.mark_shutting_down()
+        config = app.state.config
+        await simba.memory.background.drain(config.shutdown_timeout)
+        scheduler = getattr(app.state, "maintenance_scheduler", None)
+        if scheduler is not None:
+            scheduler.stop()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        simba.memory.background.reexec(argv)
+    except Exception as exc:
+        logger.critical("[restart] failed: %s", exc, exc_info=True)
+        app.state.last_restart_error = f"{type(exc).__name__}: {exc}"
 
 
 @router.post("/restart", status_code=202, response_model=None)
 async def restart(
-    request: fastapi.Request, background_tasks: fastapi.BackgroundTasks
+    request: fastapi.Request,
 ) -> dict | starlette.responses.JSONResponse:
     """Self-restart the daemon in place via ``os.execv``.
 
@@ -2307,11 +2351,15 @@ async def restart(
     image rebinding it (uvicorn sets ``SO_REUSEADDR``).
 
     Responds 202 immediately with the pre-restart pid; the drain + exec
-    sequence itself runs afterward as a background task (see
-    ``_run_restart_sequence``). Only the exact argv ``main()`` captured at
-    boot is ever exec'd --- never a guessed command --- so an app with no
-    boot argv on record (503) or a non-POSIX platform (501) refuses instead
-    of guessing.
+    sequence itself runs afterward as a DETACHED task (see
+    ``simba.memory.background.schedule_restart`` and
+    ``_run_restart_sequence``) --- deliberately NOT Starlette
+    ``BackgroundTasks``, which ride the request/response ASGI cycle and can
+    be cancelled by a post-response client disconnect (the live 2026-07-10
+    incident: the 202 came back, but uptime kept climbing forever after).
+    Only the exact argv ``main()`` captured at boot is ever exec'd --- never
+    a guessed command --- so an app with no boot argv on record (503) or a
+    non-POSIX platform (501) refuses instead of guessing.
     """
     if os.name != "posix":
         return starlette.responses.JSONResponse(
@@ -2328,5 +2376,7 @@ async def restart(
             content={"error": "restart unavailable: no boot argv"},
         )
     pid = os.getpid()
-    background_tasks.add_task(_run_restart_sequence, list(argv), request.app)
+    simba.memory.background.schedule_restart(
+        _run_restart_sequence(list(argv), request.app)
+    )
     return {"restarting": True, "pid": pid}

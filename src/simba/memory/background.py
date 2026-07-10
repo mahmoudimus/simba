@@ -121,8 +121,62 @@ def reset_for_tests() -> None:
     ``simba.db``'s shared proxy); call this between tests so one test's
     shutdown simulation never bleeds into the next.
     """
+    global _RESTART_TASK
     _shutting_down.clear()
     TASKS.clear()
+    _RESTART_TASK = None
+
+
+# --- self-restart detached task slot (POST /restart) ------------------------
+#
+# Live 2026-07-10 breach: routes.py's restart sequence (drain -> stop
+# scheduler -> flush stdio -> os.execv) was scheduled via Starlette
+# ``BackgroundTasks``, tied to the request/response ASGI cycle. With
+# ``BaseHTTPMiddleware`` in the app's middleware stack (routes.py's
+# ``DiagnosticsMiddleware``), the ENTIRE downstream response --- background
+# tasks included --- runs as a child of the SAME anyio task group the
+# middleware scopes the request in (see
+# ``starlette.middleware.base.BaseHTTPMiddleware.__call__``: ``call_next``
+# spawns the inner app, background tasks and all, as a task INSIDE the
+# middleware's own ``async with anyio.create_task_group()``). A client
+# disconnect right after the 202 is transmitted --- the normal case for a
+# fire-and-forget restart caller --- makes the ASGI server cancel that
+# request's task; anyio propagates the cancellation to every child of the
+# group, killing the in-flight restart sequence before ``os.execv`` ever
+# runs. The 202 came back; uptime kept climbing forever after. Our
+# ASGI-transport tests never caught it because that transport never
+# disconnects.
+#
+# The fix: a plain module-level ``asyncio.create_task``, held in a
+# dedicated strong reference below, is not a child of any per-request scope
+# --- nothing tied to the request/response lifecycle (cancellation OR
+# disconnect) can reach it.
+_RESTART_TASK: asyncio.Task[typing.Any] | None = None
+
+
+def schedule_restart(
+    coro: typing.Coroutine[typing.Any, typing.Any, typing.Any],
+) -> asyncio.Task[typing.Any]:
+    """Create the detached restart-sequence task and hold a strong reference.
+
+    Deliberately NOT ``spawn()``/``TASKS``: ``drain()`` (called from INSIDE
+    the restart sequence itself, and at ordinary daemon shutdown) awaits
+    every entry in ``TASKS`` with a bounded grace/tail --- registering the
+    restart task there would make ``drain()`` wait on its own caller,
+    deadlocking every restart. The route handler calls this AFTER building
+    the 202 response payload and BEFORE returning it, so the task exists
+    (and is already scheduled on the event loop) independent of whatever
+    happens to the request/response ASGI cycle afterward.
+    """
+    global _RESTART_TASK
+    task = asyncio.create_task(coro)
+    _RESTART_TASK = task
+    return task
+
+
+def restart_task() -> asyncio.Task[typing.Any] | None:
+    """The most recently scheduled restart-sequence task, if any."""
+    return _RESTART_TASK
 
 
 # --- self-restart exec seam (POST /restart) --------------------------------

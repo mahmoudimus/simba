@@ -36,3 +36,4 @@ docs/*
 !docs/plans/
 !docs/eval-remote-gpu.md
 !docs/blog/
+!docs/adr/

@@ -77,6 +77,45 @@ def _block_real_model_loads(request, monkeypatch):
     monkeypatch.setattr(simba.memory.reranker, "_get_local_llm", _forbidden)
 
 
+@pytest.fixture(autouse=True)
+def _block_real_daemon_spawn(request, monkeypatch):
+    """Globally forbid ``session_start._auto_start_daemon`` from touching a
+    real subprocess or a real, non-isolated ``.simba/`` path.
+
+    Several SessionStart hook tests mock only ``_check_health`` (to force
+    the "daemon looks down" branch) without mocking ``_auto_start_daemon``
+    itself, so they fell through to its real body --- which, given no ``cwd``
+    (or one outside any repo), resolves ``.simba`` via ``simba.db.
+    get_db_path`` -> ``find_repo_root`` (looks for a ``.git`` DIRECTORY).
+    Under a git WORKTREE, that walks straight past the worktree's ``.git``
+    FILE and lands on the MAIN repo root --- so these tests were spawning a
+    REAL ``uv run python -m simba.memory.server`` (a full embedding-model
+    load, network calls to Hugging Face included, before failing to bind
+    port 8741 against the already-running real daemon) and touching the
+    live ``.simba/`` on every run. Harmless-ish with the old DEVNULL
+    redirect; loud once stdio moved to an append-mode log file, which is how
+    this was caught: a real ``.simba/memory/daemon.log`` appeared in the
+    outer repo.
+
+    Stubs the whole function rather than just ``subprocess.Popen`` --- the
+    log-file ``open()`` inside ``_auto_start_daemon`` runs BEFORE the Popen
+    call, so blocking only Popen would still touch the real path. Exempt
+    tests marked ``real_daemon_spawn`` (the ones in test_session_start.py
+    that specifically exercise ``_auto_start_daemon``'s own body): they pass
+    an isolated ``tmp_path`` as ``cwd`` AND mock ``subprocess.Popen``
+    themselves, so they're already safe (same exemption idiom as
+    ``_block_real_model_loads``'s ``gguf`` marker above).
+    """
+    if request.node.get_closest_marker("real_daemon_spawn"):
+        return
+    import simba.hooks.session_start as _session_start
+
+    def _stub(cwd=None):
+        return False
+
+    monkeypatch.setattr(_session_start, "_auto_start_daemon", _stub)
+
+
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a temporary project directory structure."""

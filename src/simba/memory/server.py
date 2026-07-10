@@ -240,6 +240,10 @@ def create_app(
     # outside that __main__ path (every test in this file included); the
     # route returns 503 rather than ever guessing a launch command.
     app.state.boot_argv = None
+    # Set by routes.py's `_run_restart_sequence` on failure, surfaced by
+    # GET /health as `lastRestartError`; null until (unless) a restart
+    # attempt fails.
+    app.state.last_restart_error = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
         reservoir_size=config.diagnostics_reservoir_size,
