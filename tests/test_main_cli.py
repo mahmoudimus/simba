@@ -1161,6 +1161,65 @@ def test_memory_maintain_rejects_unknown_option(capsys) -> None:
     assert "Usage" in capsys.readouterr().err
 
 
+def test_memory_restart_success(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 202
+
+        def json(self) -> dict:
+            return {"restarting": True, "pid": 4242}
+
+    def _fake_post(url, timeout=0.0, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    rc = cli._memory_restart([])
+
+    assert rc == 0
+    assert captured["url"] == "http://x/restart"
+    assert captured["headers"]["X-Simba-Client"]
+    out = capsys.readouterr().out
+    assert "4242" in out
+    assert "/health" in out
+
+
+def test_memory_restart_reports_daemon_error(monkeypatch, capsys) -> None:
+    import httpx
+
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    class _Resp:
+        status_code = 503
+        text = '{"error": "restart unavailable: no boot argv"}'
+
+        def json(self) -> dict:
+            return {"error": "restart unavailable: no boot argv"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _Resp())
+
+    rc = cli._memory_restart([])
+
+    assert rc == 1
+    assert "no boot argv" in capsys.readouterr().err
+
+
+def test_memory_restart_rejects_unknown_option(capsys) -> None:
+    rc = cli._memory_restart(["--bogus"])
+    assert rc == 1
+    assert "Usage" in capsys.readouterr().err
+
+
 def test_memory_normalize_scopes_dry_run(monkeypatch, capsys) -> None:
     import httpx
 

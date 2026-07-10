@@ -25,6 +25,7 @@ self-HTTP helpers (addressing (b)) a process-level flag to check via
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import typing
 
@@ -122,3 +123,33 @@ def reset_for_tests() -> None:
     """
     _shutting_down.clear()
     TASKS.clear()
+
+
+# --- self-restart exec seam (POST /restart) --------------------------------
+#
+# A thin indirection over ``os.execv``: routes.py's ``/restart`` handler
+# calls ``reexec`` after draining background tasks and flushing stdio, and
+# tests monkeypatch this module attribute to assert ordering without ever
+# exec'ing the real test process.
+_execv = os.execv
+
+
+def reexec(argv: list[str]) -> None:
+    """Replace the current process image with ``argv`` (POSIX self-restart).
+
+    ``argv[0]`` is conventionally the executable path --- always
+    ``sys.executable`` in practice, which is guaranteed absolute, so no PATH
+    search is needed (``os.execv``, not ``os.execvp``). The full list becomes
+    the new process's ``sys.argv``.
+
+    Every open file descriptor --- stdout/stderr included --- survives
+    ``execv`` on POSIX; only sockets opened non-inheritable (PEP 446) are
+    closed at exec, which is exactly the uvicorn listener, and the new image
+    rebinds it (uvicorn sets ``SO_REUSEADDR``). The PID is unchanged, so a
+    foreground terminal keeps streaming output from the new image under
+    intact shell job control. Threads and locks die with the replaced image
+    --- which is why the caller must already have drained background work
+    and flushed stdio: nothing Python-level survives this call to clean up
+    afterward.
+    """
+    _execv(argv[0], argv)

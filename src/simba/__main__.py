@@ -26,6 +26,7 @@ Usage:
     simba memory update    Update memory metadata (--project-path, --session-source)
     simba memory reindex   Rebuild the hybrid-recall BM25 keyword mirror
     simba memory maintain  Run one decay+hygiene pass (shadow unless --apply)
+    simba memory restart   Restart the daemon in place (os.execv self-exec)
     simba memory normalize-scopes
                            Fold worktree scopes onto repo roots (--run applies)
     simba search <cmd>     Project memory operations
@@ -1671,6 +1672,7 @@ Subcommands:
     consolidate  Roll a session's memories into one EPISODE (engine-gated)
     feedback Mark a recalled memory as good or bad (feeds decay ranking)
     maintain Run one decay+hygiene maintenance pass (shadow unless --apply)
+    restart  Restart the daemon in place (os.execv self-exec)
     normalize-scopes Fold worktree scopes onto repo roots (dry-run unless --run)
     promote  List usage-triggered promotion candidates (spec 33)
     import-curated Mirror curated markdown memories into the daemon
@@ -1786,6 +1788,8 @@ def _cmd_memory(args: list[str]) -> int:
         return _memory_feedback(rest)
     elif subcmd == "maintain":
         return _memory_maintain(rest)
+    elif subcmd == "restart":
+        return _memory_restart(rest)
     elif subcmd == "normalize-scopes":
         return _memory_normalize_scopes(rest)
     elif subcmd == "promote":
@@ -2217,6 +2221,51 @@ def _memory_maintain(args: list[str]) -> int:
             f"  hygiene: expired={hygiene.get('expired_count', 0)} "
             f"checked={hygiene.get('checked_count', 0)}"
         )
+    return 0
+
+
+def _memory_restart(args: list[str]) -> int:
+    """Restart the daemon in place via POST /restart (os.execv self-exec).
+
+    Usage: simba memory restart
+
+    The daemon responds immediately with the pre-restart pid, then replaces
+    its own process image with a fresh interpreter running the current
+    on-disk code --- same PID, same terminal, stdout/stderr piping intact.
+    Fails with a clear error (not a hang) when the daemon has no boot argv on
+    record (503, e.g. it wasn't started via `python -m simba.memory.server`
+    / `simba server`) or on a non-POSIX platform (501).
+    """
+    import httpx
+
+    import simba.harness.client
+    import simba.hooks._memory_client
+
+    if args:
+        print("Usage: simba memory restart", file=sys.stderr)
+        return 1
+
+    url = simba.hooks._memory_client.daemon_url()
+    try:
+        resp = httpx.post(
+            f"{url}/restart",
+            timeout=10.0,
+            headers=simba.harness.client.client_headers(),
+        )
+        body = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"Error: daemon request failed: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: invalid daemon response: {exc}", file=sys.stderr)
+        return 1
+
+    if resp.status_code != 202:
+        print(f"Error: {body.get('error', resp.text)}", file=sys.stderr)
+        return 1
+
+    print(f"restart requested (old pid={body.get('pid', '?')})")
+    print("watch GET /health (uptimeSeconds resets) to confirm the new image is up")
     return 0
 
 
