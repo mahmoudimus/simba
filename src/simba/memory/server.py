@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
+import socket
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -19,6 +21,7 @@ import contextlib
 import pathlib
 
 import fastapi
+import httpx
 import uvicorn
 
 import simba.memory.config
@@ -32,6 +35,12 @@ import simba.memory.rerank_cache
 import simba.memory.routes
 
 _DEFAULT_DB_DIR = ".simba/memory"
+# The daemon only ever binds loopback; shared by the bind probe and the real
+# uvicorn.run() call below so the two can never drift apart.
+_HOST = "127.0.0.1"
+# How long the bind probe waits for GET /health before treating a port
+# occupant as a non-answering squatter rather than a healthy daemon.
+_PROBE_HEALTH_TIMEOUT = 2.0
 
 
 def _raise_fd_limit(target: int) -> int | None:
@@ -440,6 +449,163 @@ async def shutdown_embeddings(app: fastapi.FastAPI) -> None:
         cache.close()
 
 
+# --- bind-first probe (portless-zombie defense) -----------------------------
+#
+# Live 2026-07-10: multiple daemon processes racing to bind :8741 (session
+# auto-start on every health-check failure, plus the user's own manual
+# starts) were each paying the FULL ~2.5GB model-load cost (bge-large embed +
+# llama-cpp, loaded from `lifespan()` above) BEFORE uvicorn ever attempted
+# the socket bind --- confirmed by reading uvicorn.server.Server.startup():
+# ``await self.lifespan.startup()`` is its first line; ``loop.create_server``
+# (the actual bind) runs only after that returns. Every loser of the race
+# therefore finished loading, THEN discovered the port was taken, and then
+# --- per the module comment on ``_run_server`` below --- frequently never
+# exited at all: a portless zombie burning CPU forever.
+#
+# This probe moves the port check to the earliest possible point in main(),
+# before create_app() or any model/DB work, so a loser bails in milliseconds.
+
+
+def _probe_health(host: str, port: int, *, timeout: float) -> bool:
+    """Best-effort GET /health within ``timeout`` seconds.
+
+    True on ANY HTTP response (status code is irrelevant --- something is
+    alive enough to answer HTTP at all, which is what distinguishes a benign
+    startup race from a stuck squatter). False on connection refusal, reset,
+    or timeout --- the live incident's signature: a process that LISTENS
+    (so bind() fails) but never SERVES.
+    """
+    try:
+        httpx.get(f"http://{host}:{port}/health", timeout=timeout)
+    except httpx.HTTPError:
+        return False
+    return True
+
+
+def _bind_probe_or_exit(host: str, port: int) -> None:
+    """Cheap exclusive bind probe. Exits the process if the port is taken.
+
+    A plain ``bind()`` --- deliberately WITHOUT ``SO_REUSEADDR`` --- is the
+    cheapest possible occupancy check: it raises ``OSError`` (EADDRINUSE)
+    if, and only if, something else is already bound to ``(host, port)``,
+    regardless of what socket options THAT occupant set. (``SO_REUSEADDR``
+    lets a new bind reclaim an address stuck in TIME_WAIT; it does not let
+    two sockets both actively occupy the same port.) The probe socket is
+    closed immediately either way, so uvicorn's own bind moments later (deep
+    inside ``_run_server``) remains the sole real, authoritative attempt.
+
+    That leaves a small TOCTOU window between this probe's close and
+    uvicorn's bind --- accepted: this probe's job is only to eliminate the
+    "load 2.5GB, then discover the port is taken" class; a genuine dead-heat
+    in that narrow window still ends in a bind failure inside uvicorn, which
+    ``_run_server``'s hard-exit guarantee turns into a clean process exit
+    rather than a zombie.
+
+    On EADDRINUSE, a quick GET /health tells a benign race (a healthy daemon
+    already owns the port --- exit 0, quietly) apart from a squatter (bound
+    but not serving --- exit 1, loudly). Both exits here are plain
+    ``sys.exit()``, not the ``os._exit`` guarantee below: at this point in
+    main() no model has loaded and no thread has started, so there is
+    nothing that could keep the interpreter alive after a normal SystemExit.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind((host, port))
+    except OSError:
+        probe.close()
+    else:
+        probe.close()
+        return
+
+    if _probe_health(host, port, timeout=_PROBE_HEALTH_TIMEOUT):
+        print(
+            f"simba-memory: port {port} already serving (healthy daemon "
+            "detected) -- exiting",
+            file=sys.stderr,
+        )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.exit(0)
+
+    print(
+        f"simba-memory: port {port} is held by a process that did not "
+        f"answer /health within {_PROBE_HEALTH_TIMEOUT:.0f}s (stuck/zombie "
+        "daemon?) -- exiting",
+        file=sys.stderr,
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(1)
+
+
+# --- hard-exit guarantee (portless-zombie defense, part 2) ------------------
+#
+# Live 2026-07-10: every observed zombie ignored SIGTERM (all four required
+# `kill -9`). uvicorn's ``capture_signals()`` installs a SIGTERM/SIGINT
+# handler for the ENTIRE ``Server.serve()`` call, but that handler only ever
+# flips a flag (``should_exit``/``force_exit``) that ``main_loop``'s tick
+# polls once per iteration --- and that tick never runs while startup is
+# stuck loading models (before a bind is even attempted) or while our own
+# ``lifespan`` shutdown is awaiting something unbounded (e.g. cancelling a
+# task parked in ``asyncio.to_thread`` on a live native llama.cpp call ---
+# cancelling the asyncio side does not stop the underlying OS thread). The
+# handler is "installed but its loop is dead": a signal arrives, gets
+# recorded, and nothing ever acts on it.
+#
+# Even when uvicorn DOES get as far as raising (its ``Server.startup``
+# catches a real bind ``OSError`` and calls ``sys.exit(1)``), a plain
+# ``SystemExit`` only *starts* interpreter shutdown --- CPython then waits
+# for every non-daemon thread it knows about to finish
+# (``threading._shutdown()``) before the process can actually end. The
+# default executor behind every ``asyncio.to_thread`` call (the embedding
+# queue, self-HTTP background passes, ...) uses non-daemon worker threads
+# by design, specifically so ``atexit`` can join them --- so one stuck
+# mid-call blocks that join forever, and the "exited" process never
+# actually goes away.
+#
+# ``os._exit()`` is the only way out: an immediate, unconditional process
+# exit at the OS level that skips atexit handlers and every non-daemon
+# thread join. A thin indirection (mirrors ``background.py``'s
+# ``_execv``/``reexec`` seam) so tests can assert the exit code without
+# ending the test process.
+_os_exit = os._exit
+
+
+def _run_server(app: fastapi.FastAPI, config: simba.memory.config.MemoryConfig) -> None:
+    """Run uvicorn and GUARANTEE the process ends when it stops.
+
+    Wraps the one call that can otherwise leave a portless zombie behind:
+    every way ``uvicorn.run`` can finish --- an ordinary clean return, its
+    own ``SystemExit`` (a true-tie bind failure racing past
+    ``_bind_probe_or_exit``), or any other exception --- funnels into
+    ``_os_exit``. See the module comment above for why a plain return/raise
+    is not a strong enough guarantee on its own. Normal cleanup (uvicorn's
+    graceful shutdown window, our ``lifespan`` shutdown handler) still runs
+    first; this is the guarantee of last resort once no cleanup will ever
+    finish, or once cleanup already has.
+    """
+    exit_code = 0
+    try:
+        uvicorn.run(
+            app,
+            host=_HOST,
+            port=config.port,
+            timeout_graceful_shutdown=config.shutdown_timeout,
+        )
+    except SystemExit as exc:
+        code = exc.code
+        if isinstance(code, int):
+            exit_code = code
+        elif code is not None:
+            exit_code = 1
+    except BaseException as exc:  # must exit regardless of cause (see docstring)
+        print(f"simba-memory: server exited abnormally: {exc}", file=sys.stderr)
+        exit_code = 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    _os_exit(exit_code)
+
+
 def main() -> None:
     """Start the memory daemon."""
     # Captured before argparse touches anything (argparse never mutates
@@ -507,14 +673,14 @@ def main() -> None:
         diagnostics_after=args.diagnostics_after,
         sync_interval=args.sync_interval,
     )
+
+    # Bind-first: before ANY model/DB work, refuse to load 2.5GB just to
+    # discover the port is taken (see _bind_probe_or_exit's docstring).
+    _bind_probe_or_exit(_HOST, config.port)
+
     app = create_app(config, use_lifespan=True)
     app.state.boot_argv = boot_argv
-    uvicorn.run(
-        app,
-        host="127.0.0.1",
-        port=config.port,
-        timeout_graceful_shutdown=config.shutdown_timeout,
-    )
+    _run_server(app, config)
 
 
 if __name__ == "__main__":
