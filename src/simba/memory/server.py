@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -232,6 +233,13 @@ def create_app(
     app.state.embed_query = None
     app.state.embed_cache = None
     app.state.llm_client = None
+    # Faithful re-exec argv for POST /restart, captured by main() at boot
+    # (module invocation `python -m simba.memory.server ...` is the canonical
+    # launch --- see main() below). None here means "no boot argv on
+    # record", which is exactly true for every app built via create_app()
+    # outside that __main__ path (every test in this file included); the
+    # route returns 503 rather than ever guessing a launch command.
+    app.state.boot_argv = None
     app.state.diagnostics = simba.memory.diagnostics.DiagnosticsTracker(
         report_interval=config.diagnostics_after,
         reservoir_size=config.diagnostics_reservoir_size,
@@ -430,6 +438,17 @@ async def shutdown_embeddings(app: fastapi.FastAPI) -> None:
 
 def main() -> None:
     """Start the memory daemon."""
+    # Captured before argparse touches anything (argparse never mutates
+    # sys.argv, but the boot argv must reflect exactly what this process was
+    # invoked with, in case that ever changes). `python -m
+    # simba.memory.server ...` is the canonical launch (the `if __name__ ==
+    # "__main__"` block below); `simba server ...` rewrites sys.argv to this
+    # same `["simba server", *args]` shape before calling this function (see
+    # `_cmd_server` in __main__.py), so re-invoking via `-m` reproduces
+    # identical argparse behavior regardless of which entrypoint actually
+    # started this process --- only sys.argv[1:] (the flags) ever matter to
+    # argparse, never argv[0]. POST /restart execs this back later.
+    boot_argv = [sys.executable, "-m", "simba.memory.server", *sys.argv[1:]]
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
@@ -485,6 +504,7 @@ def main() -> None:
         sync_interval=args.sync_interval,
     )
     app = create_app(config, use_lifespan=True)
+    app.state.boot_argv = boot_argv
     uvicorn.run(
         app,
         host="127.0.0.1",

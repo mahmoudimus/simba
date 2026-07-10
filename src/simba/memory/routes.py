@@ -9,7 +9,9 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import pathlib
+import sys
 import time
 import typing
 import uuid
@@ -2160,3 +2162,85 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
         "transform": result.transform,  # redirect rewrite (v2 tool gating)
         "escalated_block": result.escalated_block,  # pi-only strong TOOL_RULE block
     }
+
+
+# Belt-and-suspenders margin between sending the 202 and tearing the process
+# down via os.execv: `await send(...)` returning doesn't guarantee a real
+# ASGI server (uvicorn) has finished handing the response bytes to the OS
+# socket buffer on every code path (e.g. backpressure), and execv wipes the
+# event loop --- including any not-yet-flushed transport write --- with no
+# chance to finish. A short, fixed sleep is cheap insurance; it is not a
+# tunable (nothing a user would ever need to adjust), so it stays a plain
+# constant rather than a `simba config` knob.
+_RESTART_RESPONSE_DELAY_SECONDS = 0.05
+
+
+async def _run_restart_sequence(argv: list[str], app: fastapi.FastAPI) -> None:
+    """Drain, stop, flush, then replace the process image (POST /restart).
+
+    Scheduled via FastAPI's ``BackgroundTasks`` so it is guaranteed (by
+    Starlette's ``Response.__call__`` contract: send the response, then run
+    background tasks) to start only after the 202 response has already been
+    handed to the ASGI transport.
+
+    Order matters and is covered by tests: the shutdown flag is set before
+    ``drain`` runs (so any background pass mid-flight bails on its next
+    self-HTTP check instead of hanging once this process disappears), drain
+    completes before stdio is flushed, and stdio is flushed before the exec
+    seam --- once ``reexec`` returns control to a new process image, nothing
+    Python-level here runs again.
+    """
+    await asyncio.sleep(_RESTART_RESPONSE_DELAY_SECONDS)
+    simba.memory.background.mark_shutting_down()
+    config = app.state.config
+    await simba.memory.background.drain(config.shutdown_timeout)
+    scheduler = getattr(app.state, "maintenance_scheduler", None)
+    if scheduler is not None:
+        scheduler.stop()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    simba.memory.background.reexec(argv)
+
+
+@router.post("/restart", status_code=202, response_model=None)
+async def restart(
+    request: fastapi.Request, background_tasks: fastapi.BackgroundTasks
+) -> dict | starlette.responses.JSONResponse:
+    """Self-restart the daemon in place via ``os.execv``.
+
+    The user runs the daemon foreground in a terminal; this replaces the
+    running process with a fresh image of the (possibly newer) on-disk code
+    --- same PID, same terminal, stdout/stderr piping preserved --- rather
+    than requiring an external process manager. fds 1/2 (and every other
+    descriptor) survive ``execv`` on POSIX, so the foreground terminal keeps
+    streaming output with no pipe to re-plumb; the PID is unchanged, so shell
+    job control is unaffected; threads/locks die with the old image, which
+    sidesteps the graceful-shutdown-stall class entirely (this path never
+    waits on anything past ``drain()``); and the uvicorn listener socket,
+    non-inheritable per PEP 446, closes automatically at exec, with the new
+    image rebinding it (uvicorn sets ``SO_REUSEADDR``).
+
+    Responds 202 immediately with the pre-restart pid; the drain + exec
+    sequence itself runs afterward as a background task (see
+    ``_run_restart_sequence``). Only the exact argv ``main()`` captured at
+    boot is ever exec'd --- never a guessed command --- so an app with no
+    boot argv on record (503) or a non-POSIX platform (501) refuses instead
+    of guessing.
+    """
+    if os.name != "posix":
+        return starlette.responses.JSONResponse(
+            status_code=501,
+            content={
+                "error": "restart requires POSIX os.execv (unsupported on this "
+                "platform)"
+            },
+        )
+    argv = getattr(request.app.state, "boot_argv", None)
+    if not argv:
+        return starlette.responses.JSONResponse(
+            status_code=503,
+            content={"error": "restart unavailable: no boot argv"},
+        )
+    pid = os.getpid()
+    background_tasks.add_task(_run_restart_sequence, list(argv), request.app)
+    return {"restarting": True, "pid": pid}
