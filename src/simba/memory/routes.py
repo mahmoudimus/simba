@@ -36,6 +36,7 @@ import simba.memory.provenance
 import simba.memory.query_filters
 import simba.memory.recall_cache
 import simba.memory.recall_plan
+import simba.memory.rss_watchdog
 import simba.memory.scoring
 import simba.memory.supersession
 import simba.memory.vector_db
@@ -963,6 +964,28 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
 
 @router.post("/recall")
 async def recall_memories(body: RecallRequest, request: fastapi.Request) -> dict:
+    """Admission-controlled entry point (see ``_recall_memories_impl``).
+
+    ``memory.max_concurrent_recalls`` (0 = unlimited, default) gates the
+    WHOLE handler with an ``asyncio.Semaphore`` built once in
+    ``create_app``. The LLAMA lock already serializes native embed/rerank
+    compute end to end (see ``simba.memory._llama``), but the surrounding
+    pyarrow/RRF/rerank-loop orchestration below is not covered by that lock
+    and can stack unboundedly across concurrent requests during a recall
+    storm --- each holding its own candidate_pool-sized working set. None
+    (the default) preserves the prior byte-identical, ungated behavior.
+    Internal callers (e.g. ``/preflight``'s ``_recall`` closure) go through
+    this same gate, which is intended: any real recall should count against
+    the cap regardless of caller.
+    """
+    semaphore = getattr(request.app.state, "recall_semaphore", None)
+    if semaphore is None:
+        return await _recall_memories_impl(body, request)
+    async with semaphore:
+        return await _recall_memories_impl(body, request)
+
+
+async def _recall_memories_impl(body: RecallRequest, request: fastapi.Request) -> dict:
 
     table = request.app.state.table
     config = request.app.state.config
@@ -1761,6 +1784,20 @@ async def health(request: fastapi.Request) -> dict:
     degraded = not all(bool(c.get("ready", True)) for c in components.values())
     last_error = diag.last_error if diag is not None else None
 
+    # RSS watchdog surfacing (config-gated, independent of whether the
+    # background poll task happens to be running in THIS process --- e.g.
+    # under create_app(use_lifespan=False), the common test path, the task
+    # never starts even though the config says "enabled"). Null/absent
+    # otherwise so the response shape stays stable for pre-watchdog tests.
+    rss_mb: float | None = None
+    rss_peak_mb: float | None = None
+    if (
+        float(getattr(config, "rss_soft_limit_mb", 0) or 0) > 0
+        or float(getattr(config, "rss_hard_limit_mb", 0) or 0) > 0
+    ):
+        rss_mb = await asyncio.to_thread(simba.memory.rss_watchdog.current_rss_mb)
+        rss_peak_mb = simba.memory.rss_watchdog.peak_rss_mb()
+
     return {
         "status": "ok" if ready and not degraded else "degraded",
         "ready": ready,
@@ -1782,6 +1819,10 @@ async def health(request: fastapi.Request) -> dict:
         # the time it could fail). Null on a daemon that has never
         # attempted a restart, or whose last attempt succeeded.
         "lastRestartError": getattr(request.app.state, "last_restart_error", None),
+        # Current / peak resident size (rss_watchdog.py) --- null unless
+        # memory.rss_soft_limit_mb or memory.rss_hard_limit_mb is set.
+        "rssMb": rss_mb,
+        "rssPeakMb": rss_peak_mb,
     }
 
 

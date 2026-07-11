@@ -122,3 +122,25 @@ class TestHierarchicalRecallDefaults:
         # can be measured independently, but it defaults ON (no effect while
         # hierarchical_recall is OFF).
         assert config.MemoryConfig().hierarchical_recall_include_global is True
+
+
+class TestRssWatchdogDefaults:
+    """RSS watchdog + recall admission control: UNMEASURED levers, both OFF by
+    repo policy, so a fresh MemoryConfig() is byte-identical to pre-watchdog
+    behavior (no polling task starts, no /recall gating)."""
+
+    def test_soft_and_hard_limits_default_disabled(self) -> None:
+        cfg = config.MemoryConfig()
+        assert cfg.rss_soft_limit_mb == 0
+        assert cfg.rss_hard_limit_mb == 0
+
+    def test_check_interval_default(self) -> None:
+        assert config.MemoryConfig().rss_check_interval_seconds == 30.0
+
+    def test_restart_min_uptime_default(self) -> None:
+        assert config.MemoryConfig().rss_restart_min_uptime_seconds == 300.0
+
+    def test_max_concurrent_recalls_default_unlimited(self) -> None:
+        # 0 = unlimited: no asyncio.Semaphore is constructed, /recall is
+        # byte-identical to pre-admission-control behavior.
+        assert config.MemoryConfig().max_concurrent_recalls == 0
