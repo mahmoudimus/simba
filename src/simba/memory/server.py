@@ -89,8 +89,14 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
     await init_embeddings(app)
     sync_task = await _start_sync_scheduler(app)
     maintenance_task = await _start_maintenance_scheduler(app)
+    rss_watchdog_task = await _start_rss_watchdog(app)
     yield
-    await _shutdown_daemon(app, sync_task=sync_task, maintenance_task=maintenance_task)
+    await _shutdown_daemon(
+        app,
+        sync_task=sync_task,
+        maintenance_task=maintenance_task,
+        rss_watchdog_task=rss_watchdog_task,
+    )
 
 
 async def _shutdown_daemon(
@@ -98,6 +104,7 @@ async def _shutdown_daemon(
     *,
     sync_task: asyncio.Task | None,  # type: ignore[type-arg]
     maintenance_task: asyncio.Task | None,  # type: ignore[type-arg]
+    rss_watchdog_task: asyncio.Task | None = None,  # type: ignore[type-arg]
 ) -> None:
     """Stop schedulers, drain tracked background tasks, then force-cancel.
 
@@ -150,6 +157,18 @@ async def _shutdown_daemon(
             maintenance_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await maintenance_task
+    if rss_watchdog_task is not None:
+        watchdog = getattr(app.state, "rss_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(rss_watchdog_task), timeout=sync_timeout
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            rss_watchdog_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rss_watchdog_task
     await simba.memory.background.drain(config.shutdown_timeout)
     await shutdown_embeddings(app)
 
@@ -215,6 +234,56 @@ async def _start_maintenance_scheduler(
     return task
 
 
+async def _start_rss_watchdog(
+    app: fastapi.FastAPI,
+) -> asyncio.Task | None:  # type: ignore[type-arg]
+    """Start the RSS watchdog if either limit is configured (default-off).
+
+    macOS has no enforceable RSS rlimit (RLIMIT_RSS is a no-op; RLIMIT_AS
+    would abort LanceDB's mmap-based table reads), so this is a
+    self-watchdog: poll RSS on an interval, relieve allocator pressure past
+    the soft limit, self-restart --- reusing the existing PR #89/#91
+    os.execv exec seam (``routes._run_restart_sequence``) --- past the hard
+    limit once the process is old enough to rule out a startup transient.
+    See ``rss_watchdog.py``. Held OUTSIDE ``simba.memory.background.TASKS``
+    (mirrors sync_task/maintenance_task above): it must survive
+    ``background.drain()``, and is stopped explicitly in
+    ``_shutdown_daemon`` instead.
+    """
+    config: simba.memory.config.MemoryConfig = app.state.config
+    soft = float(getattr(config, "rss_soft_limit_mb", 0) or 0)
+    hard = float(getattr(config, "rss_hard_limit_mb", 0) or 0)
+    if soft <= 0 and hard <= 0:
+        app.state.rss_watchdog = None
+        return None
+
+    from simba.memory.rss_watchdog import RssWatchdog
+
+    async def _restart(argv: list[str]) -> None:
+        await simba.memory.routes._run_restart_sequence(argv, app)
+
+    watchdog = RssWatchdog(
+        soft_limit_mb=soft,
+        hard_limit_mb=hard,
+        interval_seconds=float(getattr(config, "rss_check_interval_seconds", 30.0)),
+        min_uptime_seconds=float(
+            getattr(config, "rss_restart_min_uptime_seconds", 300.0)
+        ),
+        start_time=float(getattr(app.state, "start_time", time.time())),
+        boot_argv=getattr(app.state, "boot_argv", None),
+        restart=_restart,
+    )
+    app.state.rss_watchdog = watchdog
+    task = asyncio.create_task(watchdog.run_forever())
+    logging.getLogger("simba.memory").info(
+        "[rss-watchdog] started (soft=%s hard=%s interval=%.0fs)",
+        soft or "off",
+        hard or "off",
+        watchdog.interval_seconds,
+    )
+    return task
+
+
 def create_app(
     config: simba.memory.config.MemoryConfig | None = None,
     use_lifespan: bool = False,
@@ -274,6 +343,16 @@ def create_app(
             ttl_seconds=config.recall_cache_ttl_seconds,
         )
         if config.recall_cache_ttl_seconds > 0
+        else None
+    )
+    # Recall admission control: bounds concurrent /recall handlers in flight
+    # (None when disabled via max_concurrent_recalls=0 --- unlimited, the
+    # default, byte-identical to pre-admission-control behavior). See
+    # routes.py's recall_memories for why this is needed even though the
+    # LLAMA lock already serializes native embed/rerank compute.
+    app.state.recall_semaphore = (
+        asyncio.Semaphore(config.max_concurrent_recalls)
+        if config.max_concurrent_recalls > 0
         else None
     )
 

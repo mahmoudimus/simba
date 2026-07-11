@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
+import httpx
 import pytest
 
 import simba.db
 import simba.memory.anticipated as anticipated
+import simba.memory.config
+import simba.memory.fts
 import simba.memory.provenance as provenance
+import simba.memory.server
 import simba.memory.usage as usage
 
 
@@ -463,6 +468,129 @@ class TestRecallEndpoint:
         assert "ruby memory" not in contents
 
 
+class TestRecallAdmissionControl:
+    """``memory.max_concurrent_recalls`` (0 = unlimited, default): an
+    asyncio.Semaphore gating the whole /recall handler. The LLAMA lock
+    already serializes native embed/rerank compute end to end, but the
+    surrounding pyarrow/RRF/rerank-loop orchestration does not go through
+    that lock and can stack unboundedly across concurrent requests ---
+    this knob bounds that."""
+
+    async def _build_app(self, tmp_path, lance_table, *, max_concurrent_recalls: int):
+        cfg = simba.memory.config.MemoryConfig(
+            max_content_length=200,
+            duplicate_threshold=0.92,
+            max_concurrent_recalls=max_concurrent_recalls,
+            # Isolate admission control from the (unrelated) HyDE 2nd-arm
+            # feature: with it on, embed_query fires twice per recall
+            # (primary + hyde_text), which for a single distinctive query
+            # word resolves to the SAME text and confounds the enter/exit
+            # ordering these tests assert on.
+            expansion_enabled=False,
+        )
+        app = simba.memory.server.create_app(cfg)
+        app.state.table = lance_table
+        app.state.db_path = None
+        app.state.cwd = tmp_path
+        fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
+        simba.memory.fts.init(fts_path, tokenize=cfg.fts_tokenize)
+        app.state.fts_path = str(fts_path)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_default_config_builds_no_semaphore(self, tmp_path, lance_table):
+        app = await self._build_app(tmp_path, lance_table, max_concurrent_recalls=0)
+        assert app.state.recall_semaphore is None
+
+    @pytest.mark.asyncio
+    async def test_enabled_config_builds_a_semaphore(self, tmp_path, lance_table):
+        app = await self._build_app(tmp_path, lance_table, max_concurrent_recalls=2)
+        assert isinstance(app.state.recall_semaphore, asyncio.Semaphore)
+
+    @pytest.mark.asyncio
+    async def test_serializes_concurrent_recalls_when_limit_is_one(
+        self, tmp_path, lance_table
+    ):
+        app = await self._build_app(tmp_path, lance_table, max_concurrent_recalls=1)
+
+        order: list[str] = []
+        release_first = asyncio.Event()
+
+        async def _embed_query(text: str) -> list[float]:
+            order.append(f"enter:{text}")
+            if text == "first":
+                await release_first.wait()
+            order.append(f"exit:{text}")
+            return [0.1] * 768
+
+        app.state.embed = _embed_query
+        app.state.embed_query = _embed_query
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            first_task = asyncio.create_task(
+                ac.post("/recall", json={"query": "first"})
+            )
+            await asyncio.sleep(0.05)  # let `first` acquire + block inside embed
+            second_task = asyncio.create_task(
+                ac.post("/recall", json={"query": "second"})
+            )
+            await asyncio.sleep(0.05)  # `second` must be blocked on the semaphore
+            assert order == ["enter:first"]
+
+            release_first.set()
+            resp1 = await first_task
+            resp2 = await second_task
+
+        assert order == ["enter:first", "exit:first", "enter:second", "exit:second"]
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_default_unlimited_does_not_serialize(self, tmp_path, lance_table):
+        """Byte-identical control: with the default (0 = unlimited), two
+        concurrent recalls are NOT forced into strict enter/exit/enter/exit
+        ordering --- the second can enter before the first exits."""
+        app = await self._build_app(tmp_path, lance_table, max_concurrent_recalls=0)
+
+        order: list[str] = []
+        release_first = asyncio.Event()
+        second_entered = asyncio.Event()
+
+        async def _embed_query(text: str) -> list[float]:
+            order.append(f"enter:{text}")
+            if text == "first":
+                await release_first.wait()
+            else:
+                second_entered.set()
+            order.append(f"exit:{text}")
+            return [0.1] * 768
+
+        app.state.embed = _embed_query
+        app.state.embed_query = _embed_query
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            first_task = asyncio.create_task(
+                ac.post("/recall", json={"query": "first"})
+            )
+            await asyncio.sleep(0.05)
+            second_task = asyncio.create_task(
+                ac.post("/recall", json={"query": "second"})
+            )
+            # Unlike the gated test above, `second` is free to enter now.
+            await asyncio.wait_for(second_entered.wait(), timeout=2.0)
+            assert order[0] == "enter:first"
+            assert "enter:second" in order
+
+            release_first.set()
+            resp1 = await first_task
+            resp2 = await second_task
+
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+
+
 class TestHealthEndpoint:
     @pytest.mark.asyncio
     async def test_health_ok(self, async_client):
@@ -481,6 +609,43 @@ class TestHealthEndpoint:
         assert data["components"]["fts"]["ready"] is True
         assert data["components"]["embedder"]["ready"] is True
         assert "x-simba-request-id" in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_health_rss_null_when_watchdog_disabled(self, async_client):
+        """Default config (rss_soft_limit_mb=rss_hard_limit_mb=0): the response
+        shape stays stable for existing tests (rssMb/rssPeakMb present but
+        null), and no watchdog task needs to be running to compute this ---
+        the gate is config, not task presence."""
+        resp = await async_client.get("/health")
+        data = resp.json()
+        assert data["rssMb"] is None
+        assert data["rssPeakMb"] is None
+
+    @pytest.mark.asyncio
+    async def test_health_rss_present_when_soft_limit_enabled(self):
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(rss_soft_limit_mb=100_000.0)
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/health")
+        data = resp.json()
+        assert isinstance(data["rssMb"], (int, float))
+        assert data["rssMb"] > 0
+        assert isinstance(data["rssPeakMb"], (int, float))
+        assert data["rssPeakMb"] > 0
+
+    @pytest.mark.asyncio
+    async def test_health_rss_present_when_hard_limit_enabled(self):
+        """Either knob alone (not just soft) gates the surfaced fields on."""
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(rss_hard_limit_mb=100_000.0)
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/health")
+        data = resp.json()
+        assert data["rssMb"] is not None
 
 
 class TestMetricsEndpoint:

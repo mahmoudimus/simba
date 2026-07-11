@@ -122,6 +122,44 @@ class TestShutdownDaemon:
         assert not task.cancelled()
 
     @pytest.mark.asyncio
+    async def test_stops_rss_watchdog_cleanly(self) -> None:
+        """The RSS watchdog task (handoff: memory watchdog + transient-alloc
+        bounds) must be stopped the same way sync/maintenance are ---
+        ``rss_watchdog_task`` is an optional trailing kwarg so every
+        pre-existing 2-kwarg call site above keeps working unchanged."""
+        app = _make_app(shutdown_timeout=1.0)
+        fake = _FakeScheduler(obeys_stop=True)
+        app.state.rss_watchdog = fake
+        task = asyncio.create_task(fake.run_forever())
+        await asyncio.sleep(0.01)
+
+        await server._shutdown_daemon(
+            app, sync_task=None, maintenance_task=None, rss_watchdog_task=task
+        )
+        assert fake.stop_called is True
+        assert task.done()
+        assert not task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_force_cancels_rss_watchdog_task_when_it_ignores_stop(self) -> None:
+        app = _make_app(shutdown_timeout=0.2)  # sync_timeout floors at 1s
+        fake = _FakeScheduler(obeys_stop=False)
+        app.state.rss_watchdog = fake
+        task = asyncio.create_task(fake.run_forever())
+        await asyncio.sleep(0.01)
+
+        t0 = time.monotonic()
+        await server._shutdown_daemon(
+            app, sync_task=None, maintenance_task=None, rss_watchdog_task=task
+        )
+        elapsed = time.monotonic() - t0
+
+        assert fake.stop_called is True
+        assert task.done()
+        assert task.cancelled()
+        assert elapsed < 5.0  # bounded, not hung
+
+    @pytest.mark.asyncio
     async def test_force_cancels_maintenance_task_when_scheduler_ignores_stop(
         self,
     ) -> None:
