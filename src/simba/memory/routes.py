@@ -27,6 +27,7 @@ import simba.harness.client
 import simba.harness.core
 import simba.memory.anticipated
 import simba.memory.background
+import simba.memory.config
 import simba.memory.conflict
 import simba.memory.conflict_store
 import simba.memory.dimensions
@@ -667,12 +668,34 @@ async def store_memory(body: StoreRequest, request: fastapi.Request) -> dict:
             detail=f"invalid type, must be one of: {', '.join(VALID_TYPES)}",
         )
 
-    if len(body.content) > config.max_content_length:
-        max_len = config.max_content_length
+    # Per-project cap: `config.max_content_length` is a single value frozen
+    # at daemon startup, but resolve_max_content_length(root) already
+    # layers a project's own `.simba/config.toml` over it (the same
+    # resolver the extraction/digest/episode/reflection prompt guidance
+    # uses) -- so enforcement and prompt guidance must resolve the SAME
+    # way, not the daemon's frozen boot-time value. An empty/blank
+    # project_path (most callers omit projectPath entirely for a
+    # global-scope memory) MUST resolve as root=None, never Path("") --
+    # Path("") == Path(".") would silently scope the cap to the DAEMON's
+    # own cwd instead of "no project override".
+    project_root = (
+        pathlib.Path(body.project_path) if body.project_path.strip() else None
+    )
+    max_len = simba.memory.config.resolve_max_content_length(project_root)
+    if len(body.content) > max_len:
         got_len = len(body.content)
+        # Callers hit this over HTTP (no interactive stderr), so this stays
+        # a single terse line -- the CLI's `_memory_store` pre-checks the
+        # same (per-project) cap and prints the full two-path guidance
+        # before ever reaching this endpoint. Still names the knob + exact
+        # command so any non-CLI caller inspecting `detail` gets the fix.
         raise fastapi.HTTPException(
             status_code=400,
-            detail=f"content too long (max {max_len} chars, got {got_len})",
+            detail=(
+                f"content too long (max {max_len} chars, got {got_len}); "
+                "raise via: simba config set memory.max_content_length "
+                f"{got_len} (project-local; --global raises it everywhere)"
+            ),
         )
 
     # Per-session inflow throttle (spec 33 Phase 2). Over-capture is real
