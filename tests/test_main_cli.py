@@ -911,7 +911,7 @@ def test_memory_store_allows_content_above_200_when_under_config_limit(
 
     import simba.hooks._memory_client
 
-    monkeypatch.setattr(cli, "_memory_max_content_length", lambda: 1000)
+    monkeypatch.setattr(cli, "_memory_max_content_length", lambda *_: 1000)
     monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
 
     class _Resp:
@@ -977,7 +977,7 @@ def test_memory_store_rejects_content_above_config_limit(
     monkeypatch,
     capsys,
 ) -> None:
-    monkeypatch.setattr(cli, "_memory_max_content_length", lambda: 250)
+    monkeypatch.setattr(cli, "_memory_max_content_length", lambda *_: 250)
     long_content = "x" * 251
     rc = cli._memory_store(
         [
@@ -989,7 +989,87 @@ def test_memory_store_rejects_content_above_config_limit(
     )
     assert rc == 1
     err = capsys.readouterr().err
+    # Numeric facts: the configured cap (250, not the dataclass default of
+    # 200) and the actual content length (251) both come from the mocked
+    # _memory_max_content_length() / len(content) -- proving the message
+    # is never hardcoded to 200.
     assert "exceeds 250 chars" in err
+    assert "(251)" in err
+    assert "200" not in err
+    # Path A (recommended): trim --content and move detail into --context.
+    assert "--context" in err
+    assert "recommended" in err
+    # Path B: the exact copy-pasteable command to raise the cap, pre-filled
+    # with the actual content length so the same content would be admitted.
+    assert "simba config set memory.max_content_length 251" in err
+    # Caveat: raising the cap is global and also loosens the terseness
+    # asked of auto-extraction/digest/episode/reflection prompts elsewhere.
+    assert "global" in err
+
+
+def test_memory_store_uses_project_scoped_cap_override(
+    monkeypatch,
+    capsys,
+    tmp_path,
+) -> None:
+    """--project-path with a local .simba/config.toml override raises the
+    cap for THAT store -- proving the CLI resolves the cap per-project via
+    the real resolver, not a single frozen/global value. A sibling project
+    directory with no override still hits the dataclass default (200) at
+    the same content length, proving the override doesn't leak globally."""
+    import httpx
+
+    import simba.config
+    import simba.hooks._memory_client
+
+    monkeypatch.setattr(simba.config, "_global_path", lambda: tmp_path / "global.toml")
+    project_dir = tmp_path / "proj"
+    (project_dir / ".simba").mkdir(parents=True)
+    (project_dir / ".simba" / "config.toml").write_text(
+        "[memory]\nmax_content_length = 500\n"
+    )
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+
+    monkeypatch.setattr(simba.hooks._memory_client, "daemon_url", lambda: "http://x")
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"status": "stored", "id": "mem_abc"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+
+    content = "x" * 300  # over the 200 default, under the project's 500
+    rc = cli._memory_store(
+        [
+            "--type",
+            "GOTCHA",
+            "--content",
+            content,
+            "--project-path",
+            str(project_dir),
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()  # drain stdout from the successful store above
+
+    rc_other = cli._memory_store(
+        [
+            "--type",
+            "GOTCHA",
+            "--content",
+            content,
+            "--project-path",
+            str(other_dir),
+        ]
+    )
+    assert rc_other == 1
+    err = capsys.readouterr().err
+    assert "exceeds 200 chars" in err
+    assert "simba config set memory.max_content_length 300" in err
 
 
 # ---------- memory prune ----------

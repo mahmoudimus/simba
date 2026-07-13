@@ -9,6 +9,7 @@ import time
 import httpx
 import pytest
 
+import simba.config
 import simba.db
 import simba.memory.anticipated as anticipated
 import simba.memory.config
@@ -114,7 +115,137 @@ class TestStoreEndpoint:
             json={"type": "GOTCHA", "content": "x" * 300},
         )
         assert resp.status_code == 400
-        assert "too long" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert "too long" in detail
+        # Consistent with the CLI error: names the exact command to raise
+        # the cap, pre-filled with the actual content length (300).
+        assert "simba config set memory.max_content_length 300" in detail
+
+    @pytest.mark.asyncio
+    async def test_long_content_detail_tracks_configured_limit(
+        self, monkeypatch, tmp_path
+    ):
+        """The 400 detail must derive its cap from that project's layered
+        config (a local .simba/config.toml override), NOT the daemon's
+        frozen boot-time MemoryConfig and NOT a hardcoded 200 -- mirrors
+        the CLI-side proof in test_main_cli.py. Isolate the global config
+        layer so this is deterministic regardless of the developer's own
+        ~/.config/simba/config.toml."""
+        monkeypatch.setattr(
+            simba.config, "_global_path", lambda: tmp_path / "global.toml"
+        )
+        project_dir = tmp_path / "proj"
+        (project_dir / ".simba").mkdir(parents=True)
+        (project_dir / ".simba" / "config.toml").write_text(
+            "[memory]\nmax_content_length = 60\n"
+        )
+        # Frozen app-level config deliberately says 200 -- if enforcement
+        # were still reading THIS instead of the per-project resolver, the
+        # assertions below on "60" would fail.
+        cfg = simba.memory.config.MemoryConfig(max_content_length=200)
+        app = simba.memory.server.create_app(cfg)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/store",
+                json={
+                    "type": "GOTCHA",
+                    "content": "x" * 84,
+                    "projectPath": str(project_dir),
+                },
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "max 60 chars" in detail
+        assert "200" not in detail
+        assert "simba config set memory.max_content_length 84" in detail
+
+    @pytest.mark.asyncio
+    async def test_empty_project_path_resolves_root_as_none_not_cwd(
+        self, monkeypatch, tmp_path
+    ):
+        """CRITICAL FOOTGUN: an empty/blank projectPath (most callers omit
+        it entirely for a global-scope memory) must resolve the cap via
+        root=None, never Path("") -- Path("") == Path(".") would silently
+        scope the cap to wherever the DAEMON process happens to have its
+        cwd. Isolate both config layers (global file + repo-root search)
+        so this proves the real resolver fails open to the dataclass
+        default (200) -- not the app's frozen MemoryConfig (999,
+        deliberately different so a stale/wrong lookup would be visible),
+        and not a crash or an unlimited cap."""
+        monkeypatch.setattr(
+            simba.config, "_global_path", lambda: tmp_path / "global.toml"
+        )
+        empty_root = tmp_path / "no_local_override_here"
+        empty_root.mkdir()
+        monkeypatch.setattr(simba.db, "find_repo_root", lambda cwd: empty_root)
+
+        cfg = simba.memory.config.MemoryConfig(max_content_length=999)
+        app = simba.memory.server.create_app(cfg)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.post(
+                "/store", json={"type": "GOTCHA", "content": "x" * 300}
+            )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "max 200 chars" in detail
+        assert "999" not in detail
+
+    @pytest.mark.asyncio
+    async def test_per_project_cap_override_is_isolated_to_that_project(
+        self, monkeypatch, tmp_path, lance_table, mock_embed
+    ):
+        """A project-local .simba/config.toml override on
+        memory.max_content_length must raise the cap ONLY for stores
+        scoped to that project -- a different project at the same content
+        length still hits the base (unoverridden) cap."""
+        monkeypatch.setattr(
+            simba.config, "_global_path", lambda: tmp_path / "global.toml"
+        )
+        project_a = tmp_path / "project_a"
+        (project_a / ".simba").mkdir(parents=True)
+        (project_a / ".simba" / "config.toml").write_text(
+            "[memory]\nmax_content_length = 500\n"
+        )
+        project_b = tmp_path / "project_b"
+        project_b.mkdir()
+
+        cfg = simba.memory.config.MemoryConfig(max_content_length=200)
+        app = simba.memory.server.create_app(cfg)
+        app.state.table = lance_table
+        app.state.embed = mock_embed
+        app.state.embed_query = mock_embed
+        app.state.db_path = None
+        app.state.cwd = tmp_path
+        fts_path = tmp_path / simba.memory.fts.FTS_FILENAME
+        simba.memory.fts.init(fts_path, tokenize=cfg.fts_tokenize)
+        app.state.fts_path = str(fts_path)
+        transport = httpx.ASGITransport(app=app)
+
+        content = "x" * 300  # over the base 200 cap, under project_a's 500
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp_a = await ac.post(
+                "/store",
+                json={
+                    "type": "GOTCHA",
+                    "content": content,
+                    "projectPath": str(project_a),
+                },
+            )
+            resp_b = await ac.post(
+                "/store",
+                json={
+                    "type": "GOTCHA",
+                    "content": content,
+                    "projectPath": str(project_b),
+                },
+            )
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 400
+        assert (
+            "simba config set memory.max_content_length 300" in resp_b.json()["detail"]
+        )
 
     @pytest.mark.asyncio
     async def test_stores_with_context(self, async_client, lance_table):

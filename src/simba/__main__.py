@@ -1744,15 +1744,18 @@ _VALID_MEMORY_TYPES = {
 }
 
 
-def _memory_max_content_length() -> int:
-    """Return configured memory content length cap (default 200).
+def _memory_max_content_length(root: pathlib.Path | None = None) -> int:
+    """Return the configured memory content length cap (default 200).
 
     Thin wrapper over the single source of truth in ``simba.memory.config`` so
-    the CLI store path and the daemon agree on the cap.
+    the CLI store path and the daemon agree on the cap. *root* resolves the
+    cap for that project's layered config (local ``.simba/config.toml``
+    overrides global); ``None`` resolves the cap with no project root pinned
+    (falls back through global config to the dataclass default).
     """
     import simba.memory.config
 
-    return simba.memory.config.resolve_max_content_length()
+    return simba.memory.config.resolve_max_content_length(root)
 
 
 def _cmd_memory(args: list[str]) -> int:
@@ -1957,10 +1960,38 @@ def _memory_store(args: list[str]) -> int:
     if not content:
         print("Error: --content is required", file=sys.stderr)
         return 1
-    max_len = _memory_max_content_length()
+    # Per-project cap (spec: layered config) -- an empty/blank project_path
+    # must resolve as None, NOT Path("") (== Path(".") == cwd of whatever
+    # happens to be running this); project_path is normalized above and
+    # defaults to cwd itself when --project-path is omitted, so this is
+    # almost always a concrete root, but stay defensive here too.
+    project_root = pathlib.Path(project_path) if project_path.strip() else None
+    max_len = _memory_max_content_length(project_root)
     if len(content) > max_len:
+        got_len = len(content)
         print(
-            f"Error: --content exceeds {max_len} chars ({len(content)})",
+            f"Error: --content exceeds {max_len} chars ({got_len})",
+            file=sys.stderr,
+        )
+        # Path A (recommended): content stays atomic; context is unbounded,
+        # so pushing detail there never needs a config change.
+        print(
+            f"Keep --content <= {max_len} chars and move detail into "
+            "--context (recommended)",
+            file=sys.stderr,
+        )
+        # Path B: raise the cap outright, pre-filled with the actual length
+        # so this same content would be admitted. Bare `config set` is
+        # project-local (scoped to the cwd it's run from); --global instead
+        # raises it for every project AND loosens the "keep content under N
+        # chars" guidance given to every extraction/digest/episode/
+        # reflection prompt corpus-wide, since resolve_max_content_length()
+        # is the same single source of truth those prompts hydrate from.
+        print(
+            "Or raise the cap: simba config set memory.max_content_length "
+            f"{got_len} (run from this project to scope it there; add "
+            "--global to raise it everywhere, which also loosens "
+            "auto-extraction terseness corpus-wide)",
             file=sys.stderr,
         )
         return 1
