@@ -34,6 +34,7 @@ final portable fallback.
 from __future__ import annotations
 
 import asyncio
+import collections
 import ctypes
 import ctypes.util
 import gc
@@ -231,6 +232,15 @@ class RssWatchdog:
     parameters, not module-level lookups) so unit tests can drive this
     class synchronously via ``check_once()`` without a real process or a
     real ``os.execv``.
+
+    ``history_maxlen`` (default 0 --- disabled) bounds a ring buffer of
+    ``(t, rssMb)`` samples appended on every successful ``check_once()``,
+    independent of the soft/hard limits (a disabled-limits watchdog started
+    only for ``memory.rss_history_samples`` still samples). Surfaced via
+    ``history()`` as ``GET /health``'s ``rssHistory`` for forensics --- the
+    2026-07-17 incident's timeline was otherwise guesswork. ``0`` reproduces
+    ``collections.deque(maxlen=0)``'s natural "keep nothing" behavior, so no
+    special-casing is needed for the disabled case.
     """
 
     def __init__(
@@ -244,6 +254,7 @@ class RssWatchdog:
         boot_argv: typing.Sequence[str] | None,
         restart: typing.Callable[[list[str]], typing.Awaitable[None]],
         rss_reader: typing.Callable[[], float | None] = current_rss_mb,
+        history_maxlen: int = 0,
     ) -> None:
         self.soft_limit_mb = soft_limit_mb
         self.hard_limit_mb = hard_limit_mb
@@ -256,6 +267,9 @@ class RssWatchdog:
         self._stop_event = asyncio.Event()
         self._soft_tripped = False
         self.last_rss_mb: float | None = None
+        self._history: collections.deque[tuple[float, float]] = collections.deque(
+            maxlen=max(history_maxlen, 0)
+        )
 
     async def _wait(self, seconds: float) -> bool:
         """Wait up to ``seconds``; True when ``stop()`` fired during the wait."""
@@ -273,6 +287,7 @@ class RssWatchdog:
         if rss is None:
             return
         self.last_rss_mb = rss
+        self._history.append((time.time(), rss))
 
         if self.soft_limit_mb > 0:
             if rss > self.soft_limit_mb:
@@ -353,3 +368,9 @@ class RssWatchdog:
     def stop(self) -> None:
         """Signal the loop to stop (interrupts the interval wait)."""
         self._stop_event.set()
+
+    def history(self) -> list[dict[str, float]]:
+        """The RSS sample ring buffer, oldest first: ``{"t": <unix seconds
+        int>, "rssMb": <float, 1 decimal>}``. Empty when history is disabled
+        (``history_maxlen=0``) or no successful sample has been taken yet."""
+        return [{"t": int(ts), "rssMb": round(rss, 1)} for ts, rss in self._history]

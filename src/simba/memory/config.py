@@ -142,6 +142,14 @@ class MemoryConfig:
     rss_hard_limit_mb: int = 0
     rss_check_interval_seconds: float = 30.0
     rss_restart_min_uptime_seconds: float = 300.0
+    # RSS history ring buffer (2026-07-17 follow-up): every watchdog
+    # check_once() appends (t, rssMb) to a bounded deque, surfaced via
+    # GET /health's `rssHistory` for forensics without a metrics backend. At
+    # the default 30s check interval, 240 samples is ~2h of history. 0
+    # disables the ring (nothing recorded). Independent of the soft/hard
+    # limits below: when this is > 0 the watchdog LOOP starts (so sampling
+    # runs) even with both limits off/0 --- see `_start_rss_watchdog`.
+    rss_history_samples: int = 240
     # How tightly to bound LanceDB version growth (the single knob folding two
     # behaviors). A real store hit 37GB / 25,183 versions for 31MiB of live data.
     #   > 0 (default 24h): BOUNDED — suppress the redundant per-recall
@@ -597,6 +605,17 @@ class MemoryConfig:
     # the floor that catches that failure mode before `maintenance_apply`
     # (which starts using `last_used`-derived signals) flips on.
     maintenance_graduation_min_used_ratio: float = 0.6
+    # Bind-probe grace window (2026-07-17 incident follow-up): when
+    # `_bind_probe_or_exit` (server.py) finds the port already bound, it used
+    # to make ONE GET /health attempt before declaring the holder a
+    # stuck/zombie daemon and exiting non-zero --- every bind-race loser died
+    # instantly, even against a daemon that was merely BOOTING (model load
+    # takes 10-60s). This is how long a loser polls the holder's /health
+    # (every ~2s) before giving up: an answer within the window means
+    # "healthy duplicate" (exit 0, not an error); no answer by the deadline
+    # keeps the original zombie diagnosis (exit non-zero). 0 reproduces the
+    # old single-check behavior exactly.
+    bind_probe_grace_seconds: float = 45.0
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

@@ -106,6 +106,41 @@ def _free_port() -> int:
     return port
 
 
+def _patch_bind_probe_grace(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """``main()`` derives its grace window from
+    ``config.bind_probe_grace_seconds`` (no CLI flag for it) --- pin it here
+    for tests that go through ``main()`` but aren't exercising the grace
+    window itself (they test the single-check/zombie semantics), so they
+    stay fast regardless of the real default (45s)."""
+    import dataclasses
+
+    import simba.memory.config as memory_config
+
+    real_load_config = memory_config.load_config
+
+    def _load_config(**kwargs: object) -> memory_config.MemoryConfig:
+        cfg = real_load_config(**kwargs)
+        return dataclasses.replace(cfg, bind_probe_grace_seconds=seconds)
+
+    monkeypatch.setattr(memory_config, "load_config", _load_config)
+
+
+class _FakeClock:
+    """A ``clock``/``sleep`` pair that models time advancing only through
+    ``sleep()`` calls --- no real waiting, fully deterministic."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+        self.sleep_calls: list[float] = []
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleep_calls.append(seconds)
+        self.now += seconds
+
+
 # ---------------------------------------------------------------------------
 # _bind_probe_or_exit
 # ---------------------------------------------------------------------------
@@ -144,6 +179,10 @@ def test_probe_exits_nonzero_on_squatter_before_any_loading(
         # Keep the test fast: the real default (2s) is a UX/production
         # concern, not something this test needs to wait out.
         monkeypatch.setattr(server, "_PROBE_HEALTH_TIMEOUT", 0.2)
+        # This test is about the OLD single-check zombie semantics, not the
+        # grace-window polling below -- pin grace to 0 so it doesn't wait out
+        # the real 45s default (see TestBindProbeGraceWindow for that).
+        _patch_bind_probe_grace(monkeypatch, 0.0)
 
         create_app_calls: list[object] = []
 
@@ -196,6 +235,205 @@ def test_probe_passes_through_on_free_port_and_startup_proceeds(
     # A clean uvicorn.run() return still funnels through the hard-exit
     # guarantee (see test_hard_exit_seam_invoked_* below for the raise path).
     assert exit_calls == [0]
+
+
+# ---------------------------------------------------------------------------
+# _bind_probe_or_exit --- booting-vs-zombie grace window (2026-07-17)
+# ---------------------------------------------------------------------------
+#
+# A BOOTING daemon (model load takes 10-60s) used to be indistinguishable
+# from a genuine zombie: ONE /health attempt, no answer, exit non-zero ---
+# every bind-race loser died instantly. These tests drive the real
+# ``_bind_probe_or_exit`` directly (not through ``main()``) with the
+# injected ``probe_health``/``sleep``/``clock`` seams, so "waiting up to
+# 45s" never involves a real wait.
+
+
+class TestBindProbeGraceWindow:
+    def test_grace_zero_healthy_matches_old_single_check(self) -> None:
+        """grace=0 must reproduce the OLD behavior exactly: one probe_health
+        call, immediate exit 0, no sleep."""
+        listener = _StubListener(respond="silent")
+        try:
+            calls: list[int] = []
+
+            def _health(host: str, port: int, *, timeout: float) -> bool:
+                calls.append(1)
+                return True
+
+            sleep_calls: list[float] = []
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=0.0,
+                    probe_health=_health,
+                    sleep=lambda s: sleep_calls.append(s),
+                    clock=lambda: 0.0,
+                )
+            assert exc_info.value.code == 0
+            assert len(calls) == 1
+            assert sleep_calls == []
+        finally:
+            listener.close()
+
+    def test_grace_zero_zombie_matches_old_single_check(self) -> None:
+        listener = _StubListener(respond="silent")
+        try:
+            calls: list[int] = []
+
+            def _health(host: str, port: int, *, timeout: float) -> bool:
+                calls.append(1)
+                return False
+
+            sleep_calls: list[float] = []
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=0.0,
+                    probe_health=_health,
+                    sleep=lambda s: sleep_calls.append(s),
+                    clock=lambda: 0.0,
+                )
+            assert exc_info.value.code != 0
+            assert len(calls) == 1
+            assert sleep_calls == []
+        finally:
+            listener.close()
+
+    def test_healthy_duplicate_after_polling_third_time(self) -> None:
+        """A holder that answers /health on the THIRD poll (simulating a
+        daemon that finishes booting mid-grace-window) exits 0 -- a healthy
+        duplicate is not an error."""
+        listener = _StubListener(respond="silent")
+        try:
+            results = iter([False, False, True])
+
+            def _health(host: str, port: int, *, timeout: float) -> bool:
+                return next(results)
+
+            fake = _FakeClock()
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=10.0,
+                    probe_health=_health,
+                    sleep=fake.sleep,
+                    clock=fake.clock,
+                )
+            assert exc_info.value.code == 0
+            # Slept between polls 1->2 and 2->3, never after the successful
+            # 3rd poll.
+            assert fake.sleep_calls == [2.0, 2.0]
+        finally:
+            listener.close()
+
+    def test_zombie_after_grace_window_expires(self) -> None:
+        listener = _StubListener(respond="silent")
+        try:
+            fake = _FakeClock()
+
+            def _health(host: str, port: int, *, timeout: float) -> bool:
+                return False
+
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=5.0,
+                    probe_health=_health,
+                    sleep=fake.sleep,
+                    clock=fake.clock,
+                )
+            assert exc_info.value.code != 0
+            assert fake.now >= 5.0
+        finally:
+            listener.close()
+
+    def test_waiting_log_line_printed_once_up_front(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        listener = _StubListener(respond="silent")
+        try:
+            with pytest.raises(SystemExit):
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=5.0,
+                    probe_health=lambda host, port, *, timeout: True,
+                    sleep=lambda s: None,
+                    clock=lambda: 0.0,
+                )
+            captured = capsys.readouterr()
+            assert captured.err.count("waiting up to") == 1
+            assert "finish booting" in captured.err
+        finally:
+            listener.close()
+
+    def test_healthy_duplicate_log_line(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        listener = _StubListener(respond="silent")
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=5.0,
+                    probe_health=lambda host, port, *, timeout: True,
+                    sleep=lambda s: None,
+                    clock=lambda: 0.0,
+                )
+            assert exc_info.value.code == 0
+            captured = capsys.readouterr()
+            assert "healthy duplicate" in captured.err
+        finally:
+            listener.close()
+
+    def test_zombie_log_line_after_grace_expires(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        listener = _StubListener(respond="silent")
+        try:
+            fake = _FakeClock()
+            with pytest.raises(SystemExit) as exc_info:
+                server._bind_probe_or_exit(
+                    "127.0.0.1",
+                    listener.port,
+                    grace_seconds=3.0,
+                    probe_health=lambda host, port, *, timeout: False,
+                    sleep=fake.sleep,
+                    clock=fake.clock,
+                )
+            assert exc_info.value.code != 0
+            captured = capsys.readouterr()
+            assert "stuck/zombie" in captured.err
+        finally:
+            listener.close()
+
+    def test_main_wires_grace_seconds_from_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main()`` must pass ``config.bind_probe_grace_seconds`` through
+        to ``_bind_probe_or_exit`` -- proves the config field is actually
+        wired, not just present on the dataclass. `_bind_probe_or_exit`
+        itself is fully stubbed (never runs real bind/poll logic), so this
+        needs no occupied port and no real waiting."""
+        port = _free_port()
+        _patch_bind_probe_grace(monkeypatch, 12.5)
+        captured_kwargs: dict[str, object] = {}
+
+        def _stub(host: str, port: int, **kwargs: object) -> None:
+            captured_kwargs.update(kwargs)
+            raise SystemExit(0)
+
+        monkeypatch.setattr(server, "_bind_probe_or_exit", _stub)
+        monkeypatch.setattr(sys, "argv", ["simba-memory-daemon", "--port", str(port)])
+        with pytest.raises(SystemExit):
+            server.main()
+        assert captured_kwargs.get("grace_seconds") == 12.5
 
 
 # ---------------------------------------------------------------------------

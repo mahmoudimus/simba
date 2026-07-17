@@ -15,6 +15,7 @@ import simba.memory.anticipated as anticipated
 import simba.memory.config
 import simba.memory.fts
 import simba.memory.provenance as provenance
+import simba.memory.routes as routes
 import simba.memory.server
 import simba.memory.usage as usage
 
@@ -778,6 +779,73 @@ class TestHealthEndpoint:
         data = resp.json()
         assert data["rssMb"] is not None
 
+    @pytest.mark.asyncio
+    async def test_health_rss_history_empty_when_watchdog_absent(self, async_client):
+        """`create_app()` without `lifespan` (every route test in this file)
+        never starts the watchdog task, so `app.state.rss_watchdog` is
+        absent -- `rssHistory` must be `[]`, never null/missing (a stable
+        shape for callers that always index it)."""
+        resp = await async_client.get("/health")
+        data = resp.json()
+        assert data["rssHistory"] == []
+
+    @pytest.mark.asyncio
+    async def test_health_rss_history_reflects_watchdog_ring(self, tmp_path):
+        """When a watchdog instance IS attached (the real lifespan path),
+        `/health` must surface its `history()` verbatim."""
+        import simba.memory.rss_watchdog as rss_watchdog
+
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(rss_history_samples=10)
+        )
+        watchdog = rss_watchdog.RssWatchdog(
+            soft_limit_mb=0,
+            hard_limit_mb=0,
+            interval_seconds=3600.0,
+            min_uptime_seconds=300.0,
+            start_time=time.time(),
+            boot_argv=None,
+            restart=lambda argv: asyncio.sleep(0),
+            rss_reader=lambda: 321.9,
+            history_maxlen=10,
+        )
+        await watchdog.check_once()
+        app.state.rss_watchdog = watchdog
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/health")
+        data = resp.json()
+        assert data["rssHistory"] == watchdog.history()
+        assert data["rssHistory"][0]["rssMb"] == 321.9
+
+    @pytest.mark.asyncio
+    async def test_health_rss_history_capped_at_ring_size(self, tmp_path):
+        import simba.memory.rss_watchdog as rss_watchdog
+
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(rss_history_samples=2)
+        )
+        values = iter([1.0, 2.0, 3.0])
+        watchdog = rss_watchdog.RssWatchdog(
+            soft_limit_mb=0,
+            hard_limit_mb=0,
+            interval_seconds=3600.0,
+            min_uptime_seconds=300.0,
+            start_time=time.time(),
+            boot_argv=None,
+            restart=lambda argv: asyncio.sleep(0),
+            rss_reader=lambda: next(values),
+            history_maxlen=2,
+        )
+        for _ in range(3):
+            await watchdog.check_once()
+        app.state.rss_watchdog = watchdog
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/health")
+        data = resp.json()
+        assert [h["rssMb"] for h in data["rssHistory"]] == [2.0, 3.0]
+
 
 class TestMetricsEndpoint:
     @pytest.mark.asyncio
@@ -898,6 +966,189 @@ class TestStatsEndpoint:
         assert data["byType"]["SYSTEM"] == 1
         # avg confidence: (1.0 + 0.9 + 0.8 + 0.7) / 4 = 0.85
         assert data["avgConfidence"] == pytest.approx(0.85, rel=0.01)
+
+
+class TestListFilterWhereHelper:
+    """`_list_filter_where` -- builds the combined SQL predicate `/list`
+    pushes into LanceDB's `.where()` for its exact-match filters (type,
+    projectPath, sessionSource). `since=` is deliberately never included
+    here (see `list_memories`'s docstring: mixed-precision ISO text needs
+    parsed-datetime comparison, not SQL string comparison)."""
+
+    def test_no_filters_returns_none(self) -> None:
+        assert (
+            routes._list_filter_where(type=None, project_path=None, session_source=None)
+            is None
+        )
+
+    def test_type_only(self) -> None:
+        assert (
+            routes._list_filter_where(
+                type="GOTCHA", project_path=None, session_source=None
+            )
+            == "type = 'GOTCHA'"
+        )
+
+    def test_project_path_only(self) -> None:
+        assert (
+            routes._list_filter_where(
+                type=None, project_path="/p1", session_source=None
+            )
+            == "projectPath = '/p1'"
+        )
+
+    def test_session_source_only(self) -> None:
+        assert (
+            routes._list_filter_where(
+                type=None, project_path=None, session_source="sess-a"
+            )
+            == "sessionSource = 'sess-a'"
+        )
+
+    def test_combines_all_three_with_and(self) -> None:
+        where = routes._list_filter_where(
+            type="GOTCHA", project_path="/p1", session_source="sess-a"
+        )
+        assert where == (
+            "type = 'GOTCHA' AND projectPath = '/p1' AND sessionSource = 'sess-a'"
+        )
+
+    def test_escapes_single_quote_in_value(self) -> None:
+        where = routes._list_filter_where(
+            type=None, project_path="/o'brien", session_source=None
+        )
+        assert where == "projectPath = '/o''brien'"
+
+    def test_empty_string_filters_are_treated_as_absent(self) -> None:
+        # FastAPI Query params default to None when omitted; an empty string
+        # (?type=) must not produce a vacuous "type = ''" predicate.
+        assert (
+            routes._list_filter_where(type="", project_path="", session_source="")
+            is None
+        )
+
+
+class TestListWherePushdown:
+    """White-box: proves `/list` actually pushes its filters into LanceDB's
+    `.where()` rather than fetching the whole table and post-filtering in
+    Python (the 2026-07-17 incident shape). A fake table/query-builder pair
+    records the predicate string handed to `.where()` -- real LanceDB's
+    query builder overwrites on repeated `.where()` calls (see
+    lancedb.query.AsyncQueryBase.where), so this also guards against a
+    regression that calls `.where()` more than once per filter."""
+
+    class _SpyQuery:
+        def __init__(self, rows: list[dict]) -> None:
+            self._rows = rows
+            self.where_calls: list[str] = []
+            self.select_calls: list[list[str]] = []
+
+        def select(self, columns):
+            self.select_calls.append(list(columns))
+            return self
+
+        def where(self, predicate: str):
+            self.where_calls.append(predicate)
+            return self
+
+        async def to_list(self):
+            return list(self._rows)
+
+    class _SpyTable:
+        def __init__(self, rows: list[dict]) -> None:
+            self._rows = rows
+            self.last_query: TestListWherePushdown._SpyQuery | None = None
+
+        def query(self):
+            q = TestListWherePushdown._SpyQuery(self._rows)
+            self.last_query = q
+            return q
+
+    @pytest.mark.asyncio
+    async def test_combined_filters_reach_a_single_where_call(
+        self, memory_config, tmp_path, mock_embed
+    ) -> None:
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        table = self._SpyTable(
+            [
+                {
+                    "id": "x1",
+                    "type": "GOTCHA",
+                    "projectPath": "/p1",
+                    "sessionSource": "sess-a",
+                    "createdAt": now,
+                }
+            ]
+        )
+        app = simba.memory.server.create_app(memory_config)
+        app.state.table = table
+        app.state.embed = mock_embed
+        app.state.embed_query = mock_embed
+        app.state.cwd = tmp_path
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get(
+                "/list",
+                params={
+                    "type": "GOTCHA",
+                    "projectPath": "/p1",
+                    "sessionSource": "sess-a",
+                },
+            )
+        assert resp.status_code == 200
+        assert table.last_query is not None
+        # Exactly one `.where()` call -- LanceDB's own `.where()` OVERWRITES
+        # on repeated calls, so all three filters must be combined into one
+        # predicate rather than chained.
+        assert len(table.last_query.where_calls) == 1
+        predicate = table.last_query.where_calls[0]
+        assert "type = 'GOTCHA'" in predicate
+        assert "projectPath = '/p1'" in predicate
+        assert "sessionSource = 'sess-a'" in predicate
+
+    @pytest.mark.asyncio
+    async def test_no_filters_never_calls_where(
+        self, memory_config, tmp_path, mock_embed
+    ) -> None:
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        table = self._SpyTable(
+            [{"id": "x1", "type": "GOTCHA", "projectPath": "", "createdAt": now}]
+        )
+        app = simba.memory.server.create_app(memory_config)
+        app.state.table = table
+        app.state.embed = mock_embed
+        app.state.embed_query = mock_embed
+        app.state.cwd = tmp_path
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get("/list")
+        assert resp.status_code == 200
+        assert table.last_query is not None
+        assert table.last_query.where_calls == []
+
+    @pytest.mark.asyncio
+    async def test_since_is_never_pushed_into_where(
+        self, memory_config, tmp_path, mock_embed
+    ) -> None:
+        """`since=` must stay a Python post-filter (mixed-precision ISO text
+        makes SQL string comparison wrong) -- it must never appear in the
+        `.where()` predicate even when combined with a pushed-down filter."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        table = self._SpyTable(
+            [{"id": "x1", "type": "GOTCHA", "projectPath": "", "createdAt": now}]
+        )
+        app = simba.memory.server.create_app(memory_config)
+        app.state.table = table
+        app.state.embed = mock_embed
+        app.state.embed_query = mock_embed
+        app.state.cwd = tmp_path
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+            resp = await ac.get(
+                "/list", params={"type": "GOTCHA", "since": "2020-01-01T00:00:00Z"}
+            )
+        assert resp.status_code == 200
+        assert table.last_query.where_calls == ["type = 'GOTCHA'"]
 
 
 class TestListEndpoint:
@@ -1217,6 +1468,115 @@ class TestListEndpoint:
             "/list", params={"sessionSource": "no-such-session"}
         )
         assert empty.json()["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_type_and_session_source_filters_compose(
+        self, async_client, lance_table
+    ):
+        """`type=` + `sessionSource=` together must AND, not overwrite one
+        another -- both are pushed into the same LanceDB `.where()` predicate
+        (see `_list_filter_where` in routes.py)."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "type-match-only",
+                    "type": "GOTCHA",
+                    "content": "right type, wrong session",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-other",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "session-match-only",
+                    "type": "PATTERN",
+                    "content": "right session, wrong type",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-target",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "both-match",
+                    "type": "GOTCHA",
+                    "content": "matches both filters",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-target",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get(
+            "/list", params={"type": "GOTCHA", "sessionSource": "sess-target"}
+        )
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["memories"][0]["id"] == "both-match"
+
+    @pytest.mark.asyncio
+    async def test_list_project_path_filter_with_single_quote_value(
+        self, async_client, lance_table
+    ):
+        """A projectPath containing a single quote must not break the pushed-
+        down SQL predicate (SQL-injection-shaped input) -- proves the
+        `_lance_literal` escape helper is actually wired into the `.where()`
+        clause, not just unit-tested in isolation."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        tricky_path = "/Users/o'brien/repo"
+        await lance_table.add(
+            [
+                {
+                    "id": "quoted-path",
+                    "type": "GOTCHA",
+                    "content": "lives at a quote-bearing path",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": tricky_path,
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "other-path",
+                    "type": "GOTCHA",
+                    "content": "lives elsewhere",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "/other",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"projectPath": tricky_path})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["memories"][0]["id"] == "quoted-path"
 
     @pytest.mark.asyncio
     async def test_list_since_excludes_older(self, async_client, lance_table):
