@@ -276,3 +276,19 @@ class HooksConfig:
     # in daemon logs) and one for promotion candidates awaiting review. Two
     # sub-second local GETs at session start. Additive context → DEFAULT-OFF.
     session_start_lifecycle_nudges: bool = False
+
+    # PreCompact transcript export — size cap (2026-07-17 incident): the
+    # daemon runs PreCompact IN-PROCESS (POST /hook/pre_compact), and its
+    # export used to `read_text()` the whole transcript. Claude Code
+    # transcripts run 10-25MB+, several sessions compact concurrently and
+    # repeatedly, and `read_text()` decodes the whole file into one string
+    # WHILE HOLDING THE GIL, then `.strip()` copies it again, then
+    # `.split("\n")` explodes it into tens of thousands of line strings —
+    # several transient full-file copies per firing, several firings in
+    # flight at once. RSS ballooned to 13GB peak within 30-60s of every boot,
+    # the RSS watchdog restarted the daemon, sessions re-fired their hooks,
+    # repeat (a ~5-minute crash loop). The export now streams line-by-line
+    # (peak memory bounded by one line, not the file) and transcripts over
+    # this cap skip the export entirely (WARNING logged; hook still returns
+    # its normal result — fail-soft). 0 disables the cap.
+    pre_compact_max_transcript_mb: float = 256.0
