@@ -9,6 +9,7 @@ import pytest
 import simba.db
 import simba.episodes.config as ecfg_mod
 import simba.episodes.consolidate as ec
+import simba.episodes.watermark as ewm
 import simba.rlm.engine
 
 
@@ -38,7 +39,7 @@ def _cfg(**kw):
     )
 
 
-def _mem(mid, sid, mtype="GOTCHA", project="/proj", content="did x"):
+def _mem(mid, sid, mtype="GOTCHA", project="/proj", content="did x", created_at=None):
     return {
         "id": mid,
         "type": mtype,
@@ -46,6 +47,7 @@ def _mem(mid, sid, mtype="GOTCHA", project="/proj", content="did x"):
         "projectPath": project,
         "content": content,
         "context": "",
+        "createdAt": created_at or "2026-01-01T00:00:00Z",
     }
 
 
@@ -111,7 +113,18 @@ class TestConsolidateSession:
 
 class TestConsolidateEligible:
     def _patch_list(self, monkeypatch, memories):
-        monkeypatch.setattr(ec, "_list_memories", lambda *a, **k: memories)
+        """Back-compat shim: wire both `_discover` (the projected discovery
+        scan) and `_fetch_session` (the full, session-scoped fetch) off the
+        same flat memory list -- `_fetch_session` groups it server-side-
+        style by `sessionSource`, mirroring what a real `sessionSource=`
+        filter on `/list` would return. Sufficient for tests that don't
+        exercise incremental-discovery semantics directly (see
+        TestIncrementalDiscovery for those)."""
+        groups = ec._group_by_session(memories)
+        monkeypatch.setattr(ec, "_discover", lambda *a, **k: memories)
+        monkeypatch.setattr(
+            ec, "_fetch_session", lambda daemon_url, sid: groups.get(sid, [])
+        )
 
     def test_scopes_to_project(self, monkeypatch) -> None:
         engine = FakeEngine()
@@ -149,6 +162,147 @@ class TestConsolidateEligible:
             daemon_url="http://test",
         )
         assert set(result["dispatched"]) == {"s1", "s2"}
+
+
+class TestIncrementalDiscovery:
+    """Spec: 2026-07-17 RSS-storm fix -- `consolidate_eligible` discovers via
+    a projected (no content/context) scan, optionally bounded by a
+    per-project watermark, then fetches full session content only for
+    sessions that survive the eligibility pre-check."""
+
+    def _wire(self, monkeypatch, discovered, sessions):
+        calls: dict[str, list] = {"discover_since": [], "fetch": []}
+
+        def _discover(daemon_url, *, since=None):
+            calls["discover_since"].append(since)
+            return discovered
+
+        def _fetch_session(daemon_url, sid):
+            calls["fetch"].append(sid)
+            return sessions.get(sid, [])
+
+        monkeypatch.setattr(ec, "_discover", _discover)
+        monkeypatch.setattr(ec, "_fetch_session", _fetch_session)
+        return calls
+
+    def test_watermark_advances_on_clean_sweep(self, monkeypatch) -> None:
+        engine = FakeEngine()
+        discovered = [
+            _mem("m1", "s1", created_at="2026-01-01T00:00:00Z"),
+            _mem("m2", "s1", created_at="2026-01-02T00:00:00Z"),
+        ]
+        sessions = {"s1": discovered}
+        self._wire(monkeypatch, discovered, sessions)
+
+        result = ec.consolidate_eligible(
+            "/proj", ecfg=_cfg(), engine=engine, daemon_url="http://test"
+        )
+
+        assert result["dispatched"] == ["s1"]
+        assert ewm.get("/proj") == "2026-01-02T00:00:00Z"
+
+    def test_watermark_does_not_advance_on_error(self, monkeypatch) -> None:
+        class BrokenEngine:
+            def run(self, *a, **k):
+                raise RuntimeError("boom")
+
+        # First sweep: succeeds, watermark advances to V1.
+        engine = FakeEngine()
+        first = [
+            _mem("m1", "s1", created_at="2026-01-01T00:00:00Z"),
+            _mem("m2", "s1", created_at="2026-01-02T00:00:00Z"),
+        ]
+        self._wire(monkeypatch, first, {"s1": first})
+        ec.consolidate_eligible(
+            "/proj", ecfg=_cfg(), engine=engine, daemon_url="http://test"
+        )
+        v1 = ewm.get("/proj")
+        assert v1 == "2026-01-02T00:00:00Z"
+
+        # Second sweep: a NEW, later-timestamped session dispatch errors --
+        # watermark must NOT advance past V1, so the span is retried.
+        second = [
+            _mem("m3", "s2", created_at="2026-03-01T00:00:00Z"),
+            _mem("m4", "s2", created_at="2026-03-02T00:00:00Z"),
+        ]
+        self._wire(monkeypatch, second, {"s2": second})
+        result = ec.consolidate_eligible(
+            "/proj", ecfg=_cfg(), engine=BrokenEngine(), daemon_url="http://test"
+        )
+        assert result["dispatched"] == []
+        assert ewm.get("/proj") == v1
+
+    def test_incremental_discovery_disabled_ignores_watermark(
+        self, monkeypatch
+    ) -> None:
+        ewm.advance("/proj", "2026-01-01T00:00:00Z")
+        engine = FakeEngine()
+        discovered = [
+            _mem("m1", "s1", created_at="2026-02-01T00:00:00Z"),
+            _mem("m2", "s1", created_at="2026-02-02T00:00:00Z"),
+        ]
+        calls = self._wire(monkeypatch, discovered, {"s1": discovered})
+
+        ec.consolidate_eligible(
+            "/proj",
+            ecfg=_cfg(incremental_discovery=False),
+            engine=engine,
+            daemon_url="http://test",
+        )
+
+        assert calls["discover_since"] == [None]
+        assert ewm.get("/proj") == "2026-01-01T00:00:00Z"  # untouched
+
+    def test_rediscovered_session_with_pre_and_post_watermark_memory_fetched_in_full(
+        self, monkeypatch
+    ) -> None:
+        """The core correctness guarantee: a session already has 1 member
+        before the watermark (too few, min_memories=2) and gains exactly 1
+        NEW member after it. The incremental discovery scan (since=) only
+        returns the new row -- but the session must still be `_fetch_session`-
+        ed in FULL (recovering the pre-watermark member too) and become
+        eligible, not wrongly skipped as "too few" off the partial batch."""
+        ewm.advance("/proj", "2026-01-01T00:00:00Z")
+        engine = FakeEngine()
+        # Discovery (since=watermark) sees only the NEW post-watermark row.
+        discovered = [_mem("m2", "s1", created_at="2026-01-02T00:00:00Z")]
+        # The full session actually has 2 members (pre- + post-watermark).
+        full_session = [
+            _mem("m1", "s1", created_at="2025-06-01T00:00:00Z"),
+            _mem("m2", "s1", created_at="2026-01-02T00:00:00Z"),
+        ]
+        calls = self._wire(monkeypatch, discovered, {"s1": full_session})
+
+        result = ec.consolidate_eligible(
+            "/proj", ecfg=_cfg(min_memories=2), engine=engine, daemon_url="http://test"
+        )
+
+        assert calls["discover_since"] == ["2026-01-01T00:00:00Z"]
+        assert calls["fetch"] == ["s1"]
+        assert result["dispatched"] == ["s1"]
+        assert len(engine.runs) == 1
+        prompt, _cwd = engine.runs[0]
+        assert "m1" in prompt or "did x" in prompt  # pre-watermark member baked in
+        assert ewm.get("/proj") == "2026-01-02T00:00:00Z"
+
+    def test_all_projects_uses_all_projects_watermark_key(self, monkeypatch) -> None:
+        engine = FakeEngine()
+        discovered = [
+            _mem("m1", "s1", project="/proj", created_at="2026-01-01T00:00:00Z"),
+            _mem("m2", "s1", project="/proj", created_at="2026-01-02T00:00:00Z"),
+        ]
+        self._wire(monkeypatch, discovered, {"s1": discovered})
+
+        ec.consolidate_eligible(
+            "/proj",
+            all_projects=True,
+            ecfg=_cfg(),
+            engine=engine,
+            daemon_url="http://test",
+        )
+
+        assert ewm.get("/proj", all_projects=True) == "2026-01-02T00:00:00Z"
+        assert ewm.get("/proj") is None  # the per-project key is untouched
 
 
 class _RlmCfg:

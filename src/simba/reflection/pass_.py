@@ -4,6 +4,17 @@ Engine-gated, fire-and-forget: fetch memories from the daemon, gate on
 ``min_source_memories`` / ``interval_cycles``, dedup against existing
 reflections (baked into the prompt), and dispatch the configured RLM engine
 with a *reflection* prompt. Never blocks, never raises.
+
+Discovery/fetch split (2026-07-17 RSS-storm fix): this module used to pull
+the whole corpus WITH content+context (``limit=100000``) just to count
+eligible memories for the ``min_source_memories`` gate -- a live incident
+traced the daemon's RSS watchdog hard-tripping to exactly this shape.
+``_discover`` now does a projected (no content/context) scan -- server-side
+bounded to ``cwd`` when ``project_scoped`` -- so the too-few gate never pays
+for content; only once a pass is proven eligible does ``_fetch_source`` pay
+for the full fetch (also project-bounded, and capped at ``limit=1000`` for a
+global, unscoped pass, well above ``max_source_memories``'s default cap --
+see routes.py's ``/list`` context-bound gate).
 """
 
 from __future__ import annotations
@@ -49,17 +60,36 @@ def _rlm_cfg():
     return simba.config.load("rlm")
 
 
-def _list_memories(daemon_url: str, *, limit: int = 100000) -> list[dict]:
-    # Reflection synthesis only ever reads these fields (never `vector`); an
-    # unprojected /list over the whole corpus was the live incident behind
-    # routes.py's `_LIST_DEFAULT_FIELDS` comment.
-    fields = "id,type,content,context,projectPath"
+def _discover(daemon_url: str, *, project_path: str | None = None) -> list[dict]:
+    """Projected scan (no content/context) -- used only to count eligible
+    source memories for the ``min_source_memories`` gate before paying for
+    any content fetch. ``project_path`` (server-side ``projectPath=``) scopes
+    a project-scoped pass to just that project instead of the whole corpus.
+    """
+    fields = "id,type,projectPath"
+    params: dict[str, typing.Any] = {"limit": 100000, "fields": fields}
+    if project_path:
+        params["projectPath"] = project_path
     try:
-        resp = httpx.get(
-            f"{daemon_url}/list",
-            params={"limit": limit, "fields": fields},
-            timeout=15.0,
-        )
+        resp = httpx.get(f"{daemon_url}/list", params=params, timeout=15.0)
+        resp.raise_for_status()
+        return resp.json().get("memories", [])
+    except (httpx.HTTPError, ValueError):
+        return []
+
+
+def _fetch_source(daemon_url: str, *, project_path: str | None = None) -> list[dict]:
+    """Full-fields (content+context) fetch -- only called once discovery has
+    proven the pass eligible. ``limit=1000`` bounds a global
+    (``project_scoped=False``) pass, which has no other server-side row
+    bound, well above ``max_source_memories``'s default cap of 100.
+    """
+    fields = "id,type,content,context,projectPath"
+    params: dict[str, typing.Any] = {"limit": 1000, "fields": fields}
+    if project_path:
+        params["projectPath"] = project_path
+    try:
+        resp = httpx.get(f"{daemon_url}/list", params=params, timeout=15.0)
         resp.raise_for_status()
         return resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):
@@ -85,17 +115,18 @@ def reflect_pass(
     if daemon_url is None:
         daemon_url = simba.hooks._memory_client.daemon_url()
 
-    all_memories = _list_memories(daemon_url)
+    scope = cwd if rcfg.project_scoped else None
+
+    discovered = _discover(daemon_url, project_path=scope)
+    source_count = len([m for m in discovered if m.get("type") not in _SKIP_TYPES])
+    if source_count < rcfg.min_source_memories:
+        return ReflectResult(status="too_few", memories_considered=source_count)
+
+    # Discovery alone proved eligibility -- now pay for the full
+    # content+context fetch (still server-side project-bounded via `scope`).
+    all_memories = _fetch_source(daemon_url, project_path=scope)
     source = [m for m in all_memories if m.get("type") not in _SKIP_TYPES]
-    if rcfg.project_scoped:
-        source = [m for m in source if (m.get("projectPath") or "") == cwd]
-
-    if len(source) < rcfg.min_source_memories:
-        return ReflectResult(status="too_few", memories_considered=len(source))
-
     existing = [m for m in all_memories if m.get("type") == "REFLECTION"]
-    if rcfg.project_scoped:
-        existing = [m for m in existing if (m.get("projectPath") or "") == cwd]
 
     if engine is None:
         engine = simba.rlm.engine.get_engine(_rlm_cfg())

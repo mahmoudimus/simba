@@ -9,6 +9,18 @@ PreCompact ordering: because eligibility requires a session's raw memories to
 already exist (``>= min_memories`` and no ``EPISODE`` yet), a just-ended session
 whose digest hasn't stored memories yet is simply not eligible — it is picked up
 on a later pass. No special-casing needed.
+
+Two-stage discovery/fetch (2026-07-17 RSS-storm fix): a live incident traced
+the daemon's RSS watchdog hard-tripping to this module's ``GET /list?
+limit=100000`` pulling the ENTIRE corpus WITH content+context just to (a)
+group memories into sessions and (b) grab one session's members. ``_discover``
+now does a projected (no content/context) corpus scan -- optionally bounded
+by ``since=`` (the incremental watermark, ``simba.episodes.watermark``) -- to
+find which sessions exist and pre-check cheap eligibility signals; only a
+session that survives that pre-check pays for ``_fetch_session``'s full,
+server-side ``sessionSource=``-scoped fetch. See ``consolidate_eligible``'s
+docstring for why the too-few pre-check is skipped (not applied) on an
+incremental (``since``-bounded) scan.
 """
 
 from __future__ import annotations
@@ -22,6 +34,7 @@ import httpx
 import simba.config
 import simba.episodes.config
 import simba.episodes.jobs
+import simba.episodes.watermark
 import simba.hooks._memory_client
 import simba.memory.config
 import simba.rlm.engine
@@ -76,17 +89,42 @@ def _rlm_cfg():
     return simba.config.load("rlm")
 
 
-def _list_memories(daemon_url: str, *, limit: int = 100000) -> list[dict]:
-    # Session grouping + episode-prompt building only ever reads these fields
-    # (never `vector`); an unprojected /list over the whole corpus was the
-    # live incident behind routes.py's `_LIST_DEFAULT_FIELDS` comment.
-    fields = "id,type,content,context,projectPath,sessionSource"
+def _discover(
+    daemon_url: str, *, since: str | None = None, limit: int = 100000
+) -> list[dict]:
+    """Projected, corpus-wide scan for session discovery/grouping.
+
+    NEVER fetches ``content``/``context`` -- only what's needed to group
+    memories into sessions and pre-check cheap eligibility signals (member
+    count via type filtering, ``_has_episode`` via ``type == EPISODE``).
+    ``since`` (server-side, ``/list?since=``) bounds the scan to memories
+    created after the last completed sweep's watermark; a session that
+    gained a new memory since then reappears here and gets a full recheck
+    via ``_fetch_session`` (see ``consolidate_eligible``).
+    """
+    fields = "id,type,sessionSource,projectPath,createdAt"
+    params: dict[str, typing.Any] = {"limit": limit, "fields": fields}
+    if since:
+        params["since"] = since
     try:
-        resp = httpx.get(
-            f"{daemon_url}/list",
-            params={"limit": limit, "fields": fields},
-            timeout=15.0,
-        )
+        resp = httpx.get(f"{daemon_url}/list", params=params, timeout=15.0)
+        resp.raise_for_status()
+        return resp.json().get("memories", [])
+    except (httpx.HTTPError, ValueError):
+        return []
+
+
+def _fetch_session(daemon_url: str, sid: str, *, limit: int = 100000) -> list[dict]:
+    """Full-fields fetch, server-side scoped to ONE session (``sessionSource=``).
+
+    Called once ``sid`` has already proven eligible on the projected
+    discovery rows (or unconditionally when ``consolidate_session`` is asked
+    to resolve its own group).
+    """
+    fields = "id,type,content,context,projectPath,sessionSource"
+    params = {"limit": limit, "fields": fields, "sessionSource": sid}
+    try:
+        resp = httpx.get(f"{daemon_url}/list", params=params, timeout=15.0)
         resp.raise_for_status()
         return resp.json().get("memories", [])
     except (httpx.HTTPError, ValueError):
@@ -166,7 +204,7 @@ def consolidate_session(
     if daemon_url is None:
         daemon_url = simba.hooks._memory_client.daemon_url()
     if group is None:
-        group = _group_by_session(_list_memories(daemon_url)).get(sid, [])
+        group = _fetch_session(daemon_url, sid)
 
     if _has_episode(group):
         return "exists"
@@ -199,6 +237,31 @@ def consolidate_session(
     return "dispatched"
 
 
+def _max_created_at(rows: list[dict], *, prior: str | None) -> str | None:
+    """The chronologically-latest ``createdAt`` among ``rows`` and ``prior``.
+
+    Parses both sides (``simba.memory.scoring.parse_epoch``) rather than
+    comparing strings -- the same mixed-precision trap ``/list``'s ``since=``
+    guards against (see routes.py's ``/list`` docstring). Returns ``prior``
+    unchanged when no row has a later timestamp (including an empty scan).
+    """
+    import simba.memory.scoring
+
+    best_str = prior
+    best_epoch = simba.memory.scoring.parse_epoch(prior) if prior else None
+    for m in rows:
+        ts = m.get("createdAt")
+        if not ts:
+            continue
+        epoch = simba.memory.scoring.parse_epoch(ts)
+        if epoch is None:
+            continue
+        if best_epoch is None or epoch > best_epoch:
+            best_epoch = epoch
+            best_str = ts
+    return best_str
+
+
 def consolidate_eligible(
     cwd: str,
     *,
@@ -212,6 +275,27 @@ def consolidate_eligible(
     Scoped to sessions whose memories are tagged with this project (so a
     PreCompact in project X never consolidates project Y's sessions) unless
     ``all_projects`` is set (each session dispatches to its own project).
+
+    Two-stage discovery/fetch (see module docstring): a projected corpus
+    scan groups memories into sessions and pre-checks ``_has_episode`` (a
+    positive-presence check -- always safe to skip on) before paying for a
+    per-session ``_fetch_session``. The member-count ("too few") pre-check is
+    applied only on an UNBOUNDED scan (``since is None``): under incremental
+    discovery, the projected batch only contains memories created *since*
+    the watermark, so its count can only ever UNDER-count a session's true
+    total -- trusting it as a negative signal would permanently strand a
+    session that was too-few before the watermark and just became eligible.
+    Every session that reappears in an incremental scan therefore gets the
+    full recheck via ``_fetch_session`` regardless of its partial count; the
+    authoritative too-few/exists decision happens inside
+    ``consolidate_session`` once the full group is in hand.
+
+    Incremental watermark (``ecfg.incremental_discovery``, per-project via
+    ``simba.episodes.watermark``): the discovery scan is bounded by
+    ``since=<watermark>`` when set. After the sweep, the watermark advances
+    to the max ``createdAt`` observed in the discovery scan -- but ONLY if no
+    ``consolidate_session`` call returned ``"error"``; an error leaves the
+    watermark unchanged so the next sweep retries the same span.
     """
     ecfg = ecfg or _episodes_cfg()
     if not ecfg.enabled:
@@ -223,19 +307,33 @@ def consolidate_eligible(
     if daemon_url is None:
         daemon_url = simba.hooks._memory_client.daemon_url()
 
-    groups = _group_by_session(_list_memories(daemon_url))
+    since = None
+    if ecfg.incremental_discovery:
+        since = simba.episodes.watermark.get(str(cwd), all_projects=all_projects)
+
+    discovered = _discover(daemon_url, since=since)
+    groups = _group_by_session(discovered)
     target = None if all_projects else str(cwd)
     dispatched: list[str] = []
     skipped = 0
+    had_error = False
     for sid, group in groups.items():
         members = _members(group)
         proj = members[0].get("projectPath") if members else None
         if target is not None and (proj or "") != target:
             continue
+        if _has_episode(group):
+            skipped += 1
+            continue
+        if since is None and len(members) < ecfg.min_memories:
+            skipped += 1
+            continue
+
+        full_group = _fetch_session(daemon_url, sid)
         status = consolidate_session(
             sid,
             cwd=cwd,
-            group=group,
+            group=full_group,
             ecfg=ecfg,
             engine=engine,
             daemon_url=daemon_url,
@@ -244,4 +342,13 @@ def consolidate_eligible(
             dispatched.append(sid)
         else:
             skipped += 1
+        if status == "error":
+            had_error = True
+
+    if ecfg.incremental_discovery and not had_error:
+        max_created = _max_created_at(discovered, prior=since)
+        if max_created is not None and max_created != since:
+            simba.episodes.watermark.advance(
+                str(cwd), max_created, all_projects=all_projects
+            )
     return {"dispatched": dispatched, "skipped": skipped}

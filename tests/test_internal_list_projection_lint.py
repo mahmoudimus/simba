@@ -105,14 +105,27 @@ class _ListCallScanner(ast.NodeVisitor):
     call site at all.
     """
 
+    # Row-bounding query params -- see routes.py's `/list` runtime gate
+    # (2026-07-17 addendum): a context-bearing internal call must pass one
+    # of these (or a literal `limit<=1000`) alongside `fields=`.
+    _BOUND_KEYS = ("sessionSource", "projectPath", "since")
+
     def __init__(self) -> None:
         self.violations: list[int] = []
+        # Context-bearing call sites missing a row-bounding constraint (see
+        # `_BOUND_KEYS` above) -- the 2026-07-17 addendum to the rule above.
+        self.unbounded_context: list[int] = []
         self._strings: dict[str, str] = {}
         self._dicts: dict[str, set[str]] = {}
+        # Same-function `name = {...}` dict LITERAL nodes (not just their key
+        # sets) -- needed to resolve an individual entry's VALUE (e.g. the
+        # actual `fields=` string, or a literal `limit=` int), not merely
+        # whether a key is present.
+        self._dict_nodes: dict[str, ast.Dict] = {}
 
     def _visit_scoped(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        saved = (self._strings, self._dicts)
-        self._strings, self._dicts = {}, {}
+        saved = (self._strings, self._dicts, self._dict_nodes)
+        self._strings, self._dicts, self._dict_nodes = {}, {}, {}
         # Body + parameter defaults only --- NOT decorator_list: a route
         # decorator like `@router.get("/list")` matches `.get(...)` too, but
         # it registers the endpoint, it never calls it.
@@ -121,7 +134,7 @@ class _ListCallScanner(ast.NodeVisitor):
                 self.visit(default)
         for stmt in node.body:
             self.visit(stmt)
-        self._strings, self._dicts = saved
+        self._strings, self._dicts, self._dict_nodes = saved
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_scoped(node)
@@ -138,6 +151,8 @@ class _ListCallScanner(ast.NodeVisitor):
             self._strings[target.id] = text
         if keys is not None:
             self._dicts[target.id] = keys
+        if isinstance(value, ast.Dict):
+            self._dict_nodes[target.id] = value
 
     def visit_Assign(self, node: ast.Assign) -> None:
         for target in node.targets:
@@ -157,6 +172,26 @@ class _ListCallScanner(ast.NodeVisitor):
             return self._strings.get(node.id)
         return None
 
+    def _resolved_dict(self, node: ast.expr) -> ast.Dict | None:
+        """The dict LITERAL ``node`` resolves to (inline, or via a
+        same-function ``name = {...}`` assignment). ``None`` otherwise."""
+        if isinstance(node, ast.Dict):
+            return node
+        if isinstance(node, ast.Name):
+            return self._dict_nodes.get(node.id)
+        return None
+
+    def _dict_entry(self, node: ast.expr, key: str) -> ast.expr | None:
+        """The VALUE node for ``key`` in the dict literal ``node`` resolves
+        to, or ``None`` if unresolvable / the key is absent."""
+        d = self._resolved_dict(node)
+        if d is None:
+            return None
+        for k, v in zip(d.keys, d.values, strict=False):
+            if isinstance(k, ast.Constant) and k.value == key:
+                return v
+        return None
+
     def _has_fields(self, call: ast.Call) -> bool:
         for kw in call.keywords:
             if kw.arg == "fields":
@@ -169,13 +204,69 @@ class _ListCallScanner(ast.NodeVisitor):
                     return True
         return False
 
+    def _fields_value_text(self, call: ast.Call) -> str | None:
+        """The literal string ``fields=`` resolves to for this call (direct
+        kwarg, or a ``params={"fields": ...}`` entry) --- ``None`` if it
+        can't be resolved statically (same-function only, no interprocedural
+        resolution; see the module docstring)."""
+        for kw in call.keywords:
+            if kw.arg == "fields":
+                return self._resolved_text(kw.value)
+            if kw.arg == "params":
+                entry = self._dict_entry(kw.value, "fields")
+                if entry is not None:
+                    return self._resolved_text(entry)
+        return None
+
+    def _literal_int(self, node: ast.expr) -> int | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        return None
+
+    def _has_row_bound(self, call: ast.Call) -> bool:
+        """Whether this call passes a row-bounding constraint: a direct
+        ``sessionSource=``/``projectPath=``/``since=`` kwarg (or the same
+        key in a ``params=`` dict literal), or a literal ``limit<=1000``
+        (direct kwarg or ``params=`` entry). An unresolvable ``limit``
+        (e.g. a variable) is conservatively NOT treated as a bound unless
+        one of the other keys is also present."""
+        for kw in call.keywords:
+            if kw.arg in self._BOUND_KEYS:
+                return True
+            if kw.arg == "limit":
+                lit = self._literal_int(kw.value)
+                if lit is not None and lit <= 1000:
+                    return True
+            if kw.arg == "params":
+                keys = _dict_keys(kw.value)
+                if keys is None and isinstance(kw.value, ast.Name):
+                    keys = self._dicts.get(kw.value.id)
+                if keys and keys & set(self._BOUND_KEYS):
+                    return True
+                limit_entry = self._dict_entry(kw.value, "limit")
+                if limit_entry is not None:
+                    lit = self._literal_int(limit_entry)
+                    if lit is not None and lit <= 1000:
+                        return True
+        return False
+
     def visit_Call(self, node: ast.Call) -> None:
         self.generic_visit(node)
         if not (_is_http_get_call(node) and node.args):
             return
         text = self._resolved_text(node.args[0])
-        if text is not None and "/list" in text and not self._has_fields(node):
+        if text is None or "/list" not in text:
+            return
+        if not self._has_fields(node):
             self.violations.append(node.lineno)
+            return  # already a rule-1 violation; can't judge context below
+
+        fields_text = self._fields_value_text(node)
+        if fields_text is None:
+            return  # unresolvable --- fail open (see module docstring)
+        tokens = {t.strip() for t in fields_text.split(",")}
+        if "context" in tokens and not self._has_row_bound(node):
+            self.unbounded_context.append(node.lineno)
 
 
 def _scan(path: pathlib.Path) -> _ListCallScanner | None:
@@ -214,6 +305,214 @@ def test_internal_list_calls_project_fields() -> None:
         "if the full row is genuinely required:\n"
         + "\n".join(f"  {file}:{line}" for file, line in sorted(violations))
     )
+
+
+def _scan_source(tmp_path: pathlib.Path, source: str) -> _ListCallScanner:
+    path = tmp_path / "mod.py"
+    path.write_text(source, encoding="utf-8")
+    scanner = _scan(path)
+    assert scanner is not None
+    return scanner
+
+
+class TestContextBoundGate:
+    """2026-07-17 RSS-storm addendum: projection alone (the rule above)
+    didn't stop the corpus-wide-context incident -- an internal call site
+    whose fields= includes `context` must ALSO pass a row-bounding
+    constraint (sessionSource=, projectPath=, since=, or a literal
+    limit<=1000). Mirrors the runtime gate in routes.py's `/list` handler."""
+
+    def test_context_without_bound_is_flagged(self, tmp_path: pathlib.Path) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 5000, "fields": fields}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == [6]
+
+    def test_context_with_session_source_is_allowed(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url, sid):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 5000, "fields": fields, "sessionSource": sid}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_context_with_project_path_is_allowed(self, tmp_path: pathlib.Path) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url, proj):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 5000, "fields": fields, "projectPath": proj}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_context_with_since_is_allowed(self, tmp_path: pathlib.Path) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url, since):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 5000, "fields": fields, "since": since}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_context_with_limit_under_1000_is_allowed(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 1000, "fields": fields}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_context_with_limit_over_1000_is_flagged(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url):\n"
+            '    fields = "id,type,content,context"\n'
+            '    params = {"limit": 1001, "fields": fields}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == [6]
+
+    def test_no_context_is_never_flagged(self, tmp_path: pathlib.Path) -> None:
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url):\n"
+            '    fields = "id,type,projectPath"\n'
+            '    params = {"limit": 100000, "fields": fields}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_unresolvable_fields_value_is_not_flagged(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Fail-open, matching this module's philosophy for the presence-
+        only rule above: if the `fields=` value can't be resolved statically
+        (e.g. a bare function parameter forwarded from elsewhere), the new
+        rule doesn't flag it -- a genuinely dangerous unresolvable call site
+        still needs a human to notice and refactor it into a resolvable
+        shape (as every real call site in this codebase already is)."""
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url, fields):\n"
+            '    params = {"limit": 5000, "fields": fields}\n'
+            '    httpx.get(f"{daemon_url}/list", params=params)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == []
+
+    def test_fields_kwarg_direct_without_bound_is_flagged(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """`fields=` passed directly (not via `params=`) is also covered."""
+        src = (
+            "import httpx\n"
+            "\n"
+            "def f(daemon_url):\n"
+            '    fields = "id,type,content,context"\n'
+            '    httpx.get(f"{daemon_url}/list", limit=5000, fields=fields)\n'
+        )
+        scanner = _scan_source(tmp_path, src)
+        assert scanner.unbounded_context == [5]
+
+
+# (path relative to the repo root, the `.get(...)` call's line number) for a
+# reviewed internal context-bearing call site whose row bound isn't a static
+# literal the scanner can verify. Add an entry here ONLY alongside a comment
+# justifying it -- every other context-bearing internal call site MUST pass
+# a resolvable sessionSource=/projectPath=/since=/limit<=1000.
+CONTEXT_BOUND_ALLOWLIST: set[tuple[str, int]] = {
+    # `_fetch_memories` (fact extraction sync pass): paginated with
+    # `offset=`/`limit=cfg.page_size` (default 50) -- genuinely bounded per
+    # call, but `page_size` is a configured value read off an object
+    # attribute, not a literal, so it isn't statically provable <=1000.
+    # Pre-existing call site (PR #90), out of scope for the 2026-07-17
+    # consolidate.py/reflection/pass_.py fix this gate accompanies.
+    ("src/simba/sync/extractor.py", 53),
+}
+
+
+def _find_context_violations() -> list[tuple[str, int]]:
+    violations: list[tuple[str, int]] = []
+    for path in sorted(SRC_ROOT.rglob("*.py")):
+        scanner = _scan(path)
+        if scanner is None or not scanner.unbounded_context:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for lineno in scanner.unbounded_context:
+            if (rel, lineno) in CONTEXT_BOUND_ALLOWLIST:
+                continue
+            violations.append((rel, lineno))
+    return violations
+
+
+def test_internal_list_context_calls_are_row_bounded() -> None:
+    violations = _find_context_violations()
+    assert not violations, (
+        "internal /list callers requesting fields=...,context must also "
+        "pass a row-bounding constraint -- sessionSource=, projectPath=, "
+        "since=, or a literal limit<=1000 -- an unbounded context-bearing "
+        "scan is the 2026-07-17 RSS-storm shape (see "
+        "docs/adr/2026-07-10-internal-api-footguns.md). Offending call "
+        "sites (file:line) -- add a bound, or an explicit, commented "
+        "CONTEXT_BOUND_ALLOWLIST entry in this test if truly unbounded:\n"
+        + "\n".join(f"  {file}:{line}" for file, line in sorted(violations))
+    )
+
+
+def test_context_bound_allowlist_entries_are_still_get_calls() -> None:
+    """Guards CONTEXT_BOUND_ALLOWLIST the same way test_allowlist_entries_
+    are_still_get_calls guards ALLOWLIST above: a stale entry (call site
+    moved, fixed to pass a bound, or deleted) must be pruned, not silently
+    ignored."""
+    all_get_call_lines: dict[str, set[int]] = {}
+    for path in sorted(SRC_ROOT.rglob("*.py")):
+        scanner = _scan(path)
+        if scanner is None:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        lines: set[int] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and _is_http_get_call(node) and node.args:
+                lines.add(node.lineno)
+        all_get_call_lines[rel] = lines
+
+    stale = sorted(
+        key
+        for key in CONTEXT_BOUND_ALLOWLIST
+        if key[1] not in all_get_call_lines.get(key[0], set())
+    )
+    assert not stale, f"stale CONTEXT_BOUND_ALLOWLIST entries: {stale}"
 
 
 def test_allowlist_entries_are_still_get_calls() -> None:

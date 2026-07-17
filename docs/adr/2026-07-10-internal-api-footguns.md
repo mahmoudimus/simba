@@ -90,3 +90,45 @@ from outside.
 sidecar uses) and passes it as both `stdout` and `stderr` to `Popen`,
 instead of `subprocess.DEVNULL`. Covered by
 `tests/hooks/test_session_start.py`.
+
+## Addendum (2026-07-17) — projection alone doesn't bound a scan
+
+**Incident:** the daemon's RSS watchdog hard-tripped at ~5GB during a
+PreCompact storm. Root contributor: `src/simba/episodes/consolidate.py` and
+`src/simba/reflection/pass_.py` each self-called `GET /list?limit=100000`
+with `fields=` narrowed to what they read (satisfying Rule 1 above) but
+still requesting `content`/`context` over the **entire** ~10k-memory corpus,
+just to (a) discover which sessions needed work and (b) fetch one session's
+members. Rule 1's column projection stops a `vector`-shaped blowup; it does
+nothing to stop a row-count-shaped one — narrowing *which columns* come back
+per row doesn't bound *how many rows* carry them.
+
+**Rule 1 addendum:** a daemon-internal `GET /list` call whose `fields=`
+includes `context` (the expensive, potentially large column short of
+`vector` itself) must ALSO pass a row-bounding constraint: `sessionSource=`,
+`projectPath=`, `since=`, or `limit<=1000`. Un-bounded corpus-wide reads are
+now split into a cheap projected **discovery** scan (`id,type,
+sessionSource,projectPath,createdAt` — no content/context) used to group
+memories into sessions and pre-check eligibility, followed by a **targeted**
+fetch (full fields, server-side `sessionSource=` or `projectPath=` scoped)
+only for the rows actually needed. `episodes.consolidate` additionally
+maintains a per-project incremental-discovery watermark (`simba.episodes.
+watermark`, sidecar DB) so a repeat sweep's discovery scan is bounded by
+`since=<watermark>` instead of re-scanning the whole corpus every time.
+
+**Enforcement:**
+- Runtime gate: `/list`'s handler 400s a daemon-internal request whose
+  `fields=` includes `context` and carries none of `sessionSource=`,
+  `projectPath=`, `since=`, or `limit<=1000`. External/CLI/plain clients are
+  unaffected, same as Rule 1.
+- Static gate: `tests/test_internal_list_projection_lint.py` additionally
+  flags any internal call site whose (statically resolvable) `fields=`
+  includes `context` without a resolvable row bound
+  (`CONTEXT_BOUND_ALLOWLIST` is the reviewed-exception carve-out, mirroring
+  Rule 1's `ALLOWLIST`).
+- New server-side `/list` filters: `sessionSource=` (exact match, same
+  mechanism as `type=`/`projectPath=`) and `since=` (ISO-8601 UTC,
+  `createdAt >= since`, compared as parsed datetimes — never as raw
+  strings, since `createdAt` values are mixed-precision and a later
+  fractional-second timestamp can sort lexicographically *before* an
+  earlier whole-second one).
