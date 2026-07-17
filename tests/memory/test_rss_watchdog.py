@@ -36,6 +36,7 @@ def _make_watchdog(
     rss_values: list[float | None],
     restart_calls: list[list[str]] | None = None,
     restart_error: Exception | None = None,
+    history_maxlen: int = 0,
 ) -> tuple[rss_watchdog.RssWatchdog, list[list[str]]]:
     """Build a watchdog whose reader replays ``rss_values`` and whose
     restart trigger records its argv into a list the test can assert on."""
@@ -59,6 +60,7 @@ def _make_watchdog(
         boot_argv=boot_argv,
         restart=_restart,
         rss_reader=_reader,
+        history_maxlen=history_maxlen,
     )
     return watchdog, calls
 
@@ -100,6 +102,82 @@ class TestPeakRssMb:
         value = rss_watchdog.peak_rss_mb()
         assert value is not None
         assert value > 0
+
+
+class TestHistory:
+    """The RSS history ring buffer (2026-07-17 follow-up): every
+    ``check_once()`` appends ``(t, rssMb)`` to a bounded deque, surfaced via
+    ``history()`` as ``GET /health``'s ``rssHistory``. Independent of the
+    soft/hard limits -- a disabled-limits watchdog still samples."""
+
+    @pytest.mark.asyncio
+    async def test_history_empty_by_default(self) -> None:
+        # history_maxlen defaults to 0 (disabled) --- mirrors the config
+        # field's own 0-disables-it semantics.
+        watchdog, _ = _make_watchdog(rss_values=[50.0])
+        await watchdog.check_once()
+        assert watchdog.history() == []
+
+    @pytest.mark.asyncio
+    async def test_check_once_appends_a_sample(self) -> None:
+        watchdog, _ = _make_watchdog(rss_values=[123.456], history_maxlen=10)
+        await watchdog.check_once()
+        history = watchdog.history()
+        assert len(history) == 1
+        assert history[0]["rssMb"] == 123.5  # rounded to 1 decimal
+        assert isinstance(history[0]["t"], int)
+        assert history[0]["t"] > 0
+
+    @pytest.mark.asyncio
+    async def test_history_accumulates_oldest_first(self) -> None:
+        watchdog, _ = _make_watchdog(rss_values=[10.0, 20.0, 30.0], history_maxlen=10)
+        await watchdog.check_once()
+        await watchdog.check_once()
+        await watchdog.check_once()
+        history = watchdog.history()
+        assert [h["rssMb"] for h in history] == [10.0, 20.0, 30.0]
+
+    @pytest.mark.asyncio
+    async def test_history_ring_evicts_oldest_past_maxlen(self) -> None:
+        watchdog, _ = _make_watchdog(rss_values=[1.0, 2.0, 3.0, 4.0], history_maxlen=2)
+        for _ in range(4):
+            await watchdog.check_once()
+        history = watchdog.history()
+        assert [h["rssMb"] for h in history] == [3.0, 4.0]
+
+    @pytest.mark.asyncio
+    async def test_reader_returning_none_does_not_append(self) -> None:
+        watchdog, _ = _make_watchdog(rss_values=[10.0, None, 20.0], history_maxlen=10)
+        await watchdog.check_once()
+        await watchdog.check_once()  # None: skipped
+        await watchdog.check_once()
+        history = watchdog.history()
+        assert [h["rssMb"] for h in history] == [10.0, 20.0]
+
+    @pytest.mark.asyncio
+    async def test_history_fills_even_with_both_limits_disabled(
+        self, monkeypatch
+    ) -> None:
+        """Piece 2's core requirement: limits 0 (off) must not suppress
+        sampling -- only the relief/restart side-effects are gated on the
+        limits, never the history append."""
+        relief_calls = []
+        monkeypatch.setattr(
+            rss_watchdog, "_release_free_memory_to_os", lambda: relief_calls.append(1)
+        )
+        watchdog, restart_calls = _make_watchdog(
+            soft_limit_mb=0,
+            hard_limit_mb=0,
+            boot_argv=["python", "-m", "simba.memory.server"],
+            rss_values=[999_999.0],
+            history_maxlen=10,
+        )
+        await watchdog.check_once()
+        assert relief_calls == []
+        assert restart_calls == []
+        history = watchdog.history()
+        assert len(history) == 1
+        assert history[0]["rssMb"] == 999999.0
 
 
 class TestBelowSoftDoesNothing:
@@ -363,17 +441,79 @@ class TestServerWiring:
     heartbeat starter."""
 
     @pytest.mark.asyncio
-    async def test_gated_off_when_both_limits_zero(self, tmp_path) -> None:
+    async def test_fully_gated_off_when_limits_and_history_all_zero(
+        self, tmp_path
+    ) -> None:
+        """The true fully-disabled case (2026-07-17 follow-up): both limits
+        AND history sampling off -- no watchdog at all, byte-identical to
+        pre-history behavior."""
         import simba.memory.config
         import simba.memory.server
 
         app = simba.memory.server.create_app(
-            simba.memory.config.MemoryConfig(rss_soft_limit_mb=0, rss_hard_limit_mb=0)
+            simba.memory.config.MemoryConfig(
+                rss_soft_limit_mb=0, rss_hard_limit_mb=0, rss_history_samples=0
+            )
         )
         app.state.cwd = tmp_path
         task = await simba.memory.server._start_rss_watchdog(app)
         assert task is None
         assert getattr(app.state, "rss_watchdog", None) is None
+
+    @pytest.mark.asyncio
+    async def test_starts_for_history_sampling_only_when_limits_zero(
+        self, tmp_path
+    ) -> None:
+        """Piece 2's core wiring requirement: `rss_history_samples > 0` alone
+        (both enforcement limits off) must still start the watchdog loop --
+        limits stay no-ops (verified in TestHistory), but sampling runs."""
+        import simba.memory.config
+        import simba.memory.server
+
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(
+                rss_soft_limit_mb=0,
+                rss_hard_limit_mb=0,
+                rss_history_samples=5,
+                rss_check_interval_seconds=3600.0,
+            )
+        )
+        app.state.cwd = tmp_path
+        task = await simba.memory.server._start_rss_watchdog(app)
+        try:
+            assert task is not None
+            watchdog = app.state.rss_watchdog
+            assert watchdog is not None
+            assert watchdog.history() == []
+            await watchdog.check_once()
+            assert len(watchdog.history()) == 1
+        finally:
+            app.state.rss_watchdog.stop()
+            await asyncio.wait_for(task, timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_history_maxlen_wired_from_config(self, tmp_path) -> None:
+        import simba.memory.config
+        import simba.memory.server
+
+        app = simba.memory.server.create_app(
+            simba.memory.config.MemoryConfig(
+                rss_soft_limit_mb=1.0,
+                rss_check_interval_seconds=3600.0,
+                rss_history_samples=2,
+            )
+        )
+        app.state.cwd = tmp_path
+        task = await simba.memory.server._start_rss_watchdog(app)
+        watchdog = app.state.rss_watchdog
+        try:
+            for _ in range(4):
+                await watchdog.check_once()
+            # Ring caps at the configured sample count, oldest evicted first.
+            assert len(watchdog.history()) == 2
+        finally:
+            watchdog.stop()
+            await asyncio.wait_for(task, timeout=2.0)
 
     @pytest.mark.asyncio
     async def test_starts_when_soft_limit_set(self, tmp_path) -> None:

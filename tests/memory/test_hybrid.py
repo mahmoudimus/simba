@@ -853,3 +853,34 @@ class TestHydeWiring:
         )
         # keyword fallback until the bg task warms the cache
         assert plan.hyde_text == plan.expansion_terms
+
+
+class TestLanceLiteral:
+    """`_lance_literal` --- the SQL-string-literal escape helper shared by
+    every ``.where()`` predicate built from caller-supplied strings (hybrid's
+    own sessionSource/id lookups, and routes.py's /list filter pushdown).
+    Single-quote doubling is mandatory: these values are never safe to
+    f-string directly into a LanceDB ``.where()`` SQL predicate."""
+
+    def test_plain_value_is_wrapped_in_single_quotes(self) -> None:
+        assert hybrid._lance_literal("sess-a") == "'sess-a'"
+
+    def test_single_quote_is_escaped_by_doubling(self) -> None:
+        # A raw f-string interpolation of O'Brien's session id would break out
+        # of the SQL string literal; doubling the quote is the standard SQL
+        # escape and keeps it a single string token.
+        assert hybrid._lance_literal("O'Brien") == "'O''Brien'"
+
+    def test_multiple_single_quotes_all_escaped(self) -> None:
+        assert hybrid._lance_literal("a'b'c") == "'a''b''c'"
+
+    def test_double_quote_value_needs_no_escaping(self) -> None:
+        # The literal is delimited by single quotes, so an embedded double
+        # quote is not a metacharacter here -- it must survive unescaped.
+        assert hybrid._lance_literal('say "hi"') == "'say \"hi\"'"
+
+    def test_value_with_both_quote_styles(self) -> None:
+        assert hybrid._lance_literal('it\'s a "test"') == "'it''s a \"test\"'"
+
+    def test_empty_string(self) -> None:
+        assert hybrid._lance_literal("") == "''"

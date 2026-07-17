@@ -144,3 +144,12 @@ class TestRssWatchdogDefaults:
         # 0 = unlimited: no asyncio.Semaphore is constructed, /recall is
         # byte-identical to pre-admission-control behavior.
         assert config.MemoryConfig().max_concurrent_recalls == 0
+
+    def test_rss_history_samples_default(self) -> None:
+        # At the default 30s check interval, 240 samples is ~2h of history.
+        assert config.MemoryConfig().rss_history_samples == 240
+
+
+class TestBindProbeGraceDefault:
+    def test_bind_probe_grace_seconds_default(self) -> None:
+        assert config.MemoryConfig().bind_probe_grace_seconds == 45.0

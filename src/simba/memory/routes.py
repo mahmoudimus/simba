@@ -1821,6 +1821,14 @@ async def health(request: fastapi.Request) -> dict:
         rss_mb = await asyncio.to_thread(simba.memory.rss_watchdog.current_rss_mb)
         rss_peak_mb = simba.memory.rss_watchdog.peak_rss_mb()
 
+    # RSS history ring buffer (2026-07-17 follow-up): unlike rssMb/rssPeakMb
+    # above (config-gated, computed fresh every call), the history only
+    # exists on a running watchdog INSTANCE -- so this reads
+    # `app.state.rss_watchdog` directly. `[]` when the watchdog is absent
+    # (no lifespan in this process) or history sampling is disabled.
+    watchdog = getattr(request.app.state, "rss_watchdog", None)
+    rss_history = watchdog.history() if watchdog is not None else []
+
     return {
         "status": "ok" if ready and not degraded else "degraded",
         "ready": ready,
@@ -1846,6 +1854,9 @@ async def health(request: fastapi.Request) -> dict:
         # memory.rss_soft_limit_mb or memory.rss_hard_limit_mb is set.
         "rssMb": rss_mb,
         "rssPeakMb": rss_peak_mb,
+        # RSS history ring buffer (rss_watchdog.py's RssWatchdog.history()) ---
+        # `[]` when the watchdog is absent or memory.rss_history_samples=0.
+        "rssHistory": rss_history,
     }
 
 
@@ -1982,6 +1993,43 @@ def _project_memory(
     return out
 
 
+def _list_filter_where(
+    *,
+    type: str | None,
+    project_path: str | None,
+    session_source: str | None,
+) -> str | None:
+    """Combine ``/list``'s exact-match filters into one LanceDB ``.where()``
+    SQL predicate (``None`` when no filter is set).
+
+    Pushed down instead of Python post-filtering: even a one-session
+    ``/list?sessionSource=...`` fetch was materializing the projected columns
+    for the WHOLE corpus server-side before this (2026-07-17). ``since=`` is
+    deliberately never included here -- see ``list_memories``'s docstring:
+    ``createdAt`` is mixed-precision ISO text, so it needs a parsed-datetime
+    comparison (the existing Python post-filter), not SQL string comparison.
+
+    Every value is caller-supplied and routed through
+    ``simba.memory.hybrid._lance_literal`` (single-quote doubling) --- never
+    raw f-string interpolation --- so a value containing a quote character
+    can't break out of the SQL string literal. LanceDB's own ``.where()``
+    OVERWRITES on repeated calls (it is not additive), so all set filters are
+    joined into a single ``AND``-ed predicate for one ``.where()`` call.
+    """
+    clauses: list[str] = []
+    if type:
+        clauses.append(f"type = {simba.memory.hybrid._lance_literal(type)}")
+    if project_path:
+        clauses.append(
+            f"projectPath = {simba.memory.hybrid._lance_literal(project_path)}"
+        )
+    if session_source:
+        clauses.append(
+            f"sessionSource = {simba.memory.hybrid._lance_literal(session_source)}"
+        )
+    return " AND ".join(clauses) if clauses else None
+
+
 @router.get("/list")
 async def list_memories(
     request: fastapi.Request,
@@ -2065,24 +2113,25 @@ async def list_memories(
 
     table = request.app.state.table
 
-    # `type`/`projectPath`/`sessionSource` (post-fetch filters below) and
-    # `createdAt` (the sort key + `since=` filter) are always fetched even
-    # when the caller's `fields` excludes them from the OUTPUT -- only
-    # `_project_memory` below respects `fields` for what actually gets
-    # returned.
+    # `type`/`projectPath`/`sessionSource` are pushed into LanceDB's
+    # `.where()` below (see `_list_filter_where`) rather than fetched and
+    # post-filtered in Python -- a bounded fetch (e.g. one sessionSource)
+    # must never materialize the projected columns for the whole corpus
+    # server-side. `createdAt` (the sort key + `since=` filter) is still
+    # always fetched even when the caller's `fields` excludes it from the
+    # OUTPUT -- only `_project_memory` below respects `fields` for what
+    # actually gets returned.
     fetch_columns = sorted(
         set(output_fields) | {"id", "type", "projectPath", "sessionSource", "createdAt"}
     )
-    all_memories = await table.query().select(fetch_columns).to_list()
+    query = table.query().select(fetch_columns)
+    where_clause = _list_filter_where(
+        type=type, project_path=projectPath, session_source=sessionSource
+    )
+    if where_clause:
+        query = query.where(where_clause)
+    all_memories = await query.to_list()
 
-    if type:
-        all_memories = [m for m in all_memories if m.get("type") == type]
-    if projectPath:
-        all_memories = [m for m in all_memories if m.get("projectPath") == projectPath]
-    if sessionSource:
-        all_memories = [
-            m for m in all_memories if m.get("sessionSource") == sessionSource
-        ]
     if since_epoch is not None:
         all_memories = [
             m

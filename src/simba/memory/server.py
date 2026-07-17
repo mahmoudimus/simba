@@ -12,6 +12,7 @@ import os
 import socket
 import sys
 import time
+import typing
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -38,9 +39,12 @@ _DEFAULT_DB_DIR = ".simba/memory"
 # The daemon only ever binds loopback; shared by the bind probe and the real
 # uvicorn.run() call below so the two can never drift apart.
 _HOST = "127.0.0.1"
-# How long the bind probe waits for GET /health before treating a port
-# occupant as a non-answering squatter rather than a healthy daemon.
+# How long a single GET /health attempt waits before treating that ONE
+# attempt as unanswered.
 _PROBE_HEALTH_TIMEOUT = 2.0
+# How often the bind-probe grace window (see _bind_probe_or_exit) re-polls
+# GET /health while waiting for a bind-race holder to finish booting.
+_BIND_PROBE_POLL_INTERVAL_SECONDS = 2.0
 
 
 def _raise_fd_limit(target: int) -> int | None:
@@ -237,7 +241,8 @@ async def _start_maintenance_scheduler(
 async def _start_rss_watchdog(
     app: fastapi.FastAPI,
 ) -> asyncio.Task | None:  # type: ignore[type-arg]
-    """Start the RSS watchdog if either limit is configured (default-off).
+    """Start the RSS watchdog if either limit OR history sampling is
+    configured (default-off).
 
     macOS has no enforceable RSS rlimit (RLIMIT_RSS is a no-op; RLIMIT_AS
     would abort LanceDB's mmap-based table reads), so this is a
@@ -249,11 +254,19 @@ async def _start_rss_watchdog(
     (mirrors sync_task/maintenance_task above): it must survive
     ``background.drain()``, and is stopped explicitly in
     ``_shutdown_daemon`` instead.
+
+    2026-07-17 follow-up: the loop now also starts whenever
+    ``rss_history_samples > 0``, even with both limits 0/off --- a
+    disabled-limits daemon still wants ``GET /health``'s ``rssHistory``
+    forensic timeline. The limits themselves stay no-ops in that case
+    (``check_once``'s soft/hard branches are separately gated on
+    ``> 0``); only sampling runs.
     """
     config: simba.memory.config.MemoryConfig = app.state.config
     soft = float(getattr(config, "rss_soft_limit_mb", 0) or 0)
     hard = float(getattr(config, "rss_hard_limit_mb", 0) or 0)
-    if soft <= 0 and hard <= 0:
+    history_samples = int(getattr(config, "rss_history_samples", 0) or 0)
+    if soft <= 0 and hard <= 0 and history_samples <= 0:
         app.state.rss_watchdog = None
         return None
 
@@ -272,14 +285,16 @@ async def _start_rss_watchdog(
         start_time=float(getattr(app.state, "start_time", time.time())),
         boot_argv=getattr(app.state, "boot_argv", None),
         restart=_restart,
+        history_maxlen=max(history_samples, 0),
     )
     app.state.rss_watchdog = watchdog
     task = asyncio.create_task(watchdog.run_forever())
     logging.getLogger("simba.memory").info(
-        "[rss-watchdog] started (soft=%s hard=%s interval=%.0fs)",
+        "[rss-watchdog] started (soft=%s hard=%s interval=%.0fs history=%s)",
         soft or "off",
         hard or "off",
         watchdog.interval_seconds,
+        history_samples or "off",
     )
     return task
 
@@ -561,7 +576,15 @@ def _probe_health(host: str, port: int, *, timeout: float) -> bool:
     return True
 
 
-def _bind_probe_or_exit(host: str, port: int) -> None:
+def _bind_probe_or_exit(
+    host: str,
+    port: int,
+    *,
+    grace_seconds: float = 0.0,
+    probe_health: typing.Callable[..., bool] = _probe_health,
+    sleep: typing.Callable[[float], None] = time.sleep,
+    clock: typing.Callable[[], float] = time.monotonic,
+) -> None:
     """Cheap exclusive bind probe. Exits the process if the port is taken.
 
     A plain ``bind()`` --- deliberately WITHOUT ``SO_REUSEADDR`` --- is the
@@ -580,12 +603,26 @@ def _bind_probe_or_exit(host: str, port: int) -> None:
     ``_run_server``'s hard-exit guarantee turns into a clean process exit
     rather than a zombie.
 
-    On EADDRINUSE, a quick GET /health tells a benign race (a healthy daemon
-    already owns the port --- exit 0, quietly) apart from a squatter (bound
-    but not serving --- exit 1, loudly). Both exits here are plain
-    ``sys.exit()``, not the ``os._exit`` guarantee below: at this point in
-    main() no model has loaded and no thread has started, so there is
-    nothing that could keep the interpreter alive after a normal SystemExit.
+    On EADDRINUSE: a booting daemon (model load takes 10-60s) is otherwise
+    indistinguishable from a genuine zombie on a single /health probe ---
+    2026-07-17, that mislabeling cascaded to zero daemons (every bind-race
+    loser died instantly against a holder that was simply still starting
+    up). ``grace_seconds`` (from ``config.bind_probe_grace_seconds``) is how
+    long this polls the holder's GET /health --- every
+    ``_BIND_PROBE_POLL_INTERVAL_SECONDS`` --- before giving up:
+      * an answer within the window is a benign race (a daemon, booting or
+        already up, owns the port) --- exit 0, quietly.
+      * no answer by the deadline is the original zombie diagnosis --- exit
+        1, loudly.
+    ``grace_seconds=0`` reproduces the OLD single-check behavior exactly
+    (one probe, no polling). ``probe_health``/``sleep``/``clock`` are
+    injectable seams (mirrors ``RssWatchdog``'s constructor pattern) so
+    tests can drive the grace window without a real wait or real HTTP.
+
+    Both exits here are plain ``sys.exit()``, not the ``os._exit``
+    guarantee below: at this point in main() no model has loaded and no
+    thread has started, so there is nothing that could keep the
+    interpreter alive after a normal SystemExit.
     """
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -596,7 +633,30 @@ def _bind_probe_or_exit(host: str, port: int) -> None:
         probe.close()
         return
 
-    if _probe_health(host, port, timeout=_PROBE_HEALTH_TIMEOUT):
+    if grace_seconds > 0:
+        print(
+            f"simba-memory: port {port} held; holder not answering /health "
+            f"yet -- waiting up to {grace_seconds:.0f}s for it to finish "
+            "booting",
+            file=sys.stderr,
+        )
+        sys.stderr.flush()
+        deadline = clock() + grace_seconds
+        while True:
+            if probe_health(host, port, timeout=_PROBE_HEALTH_TIMEOUT):
+                print(
+                    f"simba-memory: another daemon is now serving on "
+                    f":{port} -- exiting (healthy duplicate)",
+                    file=sys.stderr,
+                )
+                sys.stdout.flush()
+                sys.stderr.flush()
+                sys.exit(0)
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            sleep(min(_BIND_PROBE_POLL_INTERVAL_SECONDS, remaining))
+    elif probe_health(host, port, timeout=_PROBE_HEALTH_TIMEOUT):
         print(
             f"simba-memory: port {port} already serving (healthy daemon "
             "detected) -- exiting",
@@ -685,6 +745,50 @@ def _run_server(app: fastapi.FastAPI, config: simba.memory.config.MemoryConfig) 
     _os_exit(exit_code)
 
 
+# --- daemon log timestamps (2026-07-17 forensics follow-up) -----------------
+#
+# Watchdog/bind-probe/store/recall lines in daemon.log carried no timestamp
+# --- ``logging.basicConfig``'s prior ``format="%(message)s"`` never included
+# one, and every daemon module logs through ``logging.getLogger("simba.
+# memory")``, which has no handler of its own and propagates to root. This
+# reconstructing-the-incident-timeline gap made 2026-07-17 forensics
+# guesswork. Out of scope: uvicorn's own access-log format (it configures
+# its own "uvicorn"/"uvicorn.access"/"uvicorn.error" loggers directly, via
+# ``uvicorn.run``'s ``log_config``, independent of this).
+_LOG_FORMAT = "%(asctime)s %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
+
+def _configure_logging(target: logging.Logger | None = None) -> logging.Logger:
+    """Install (or update) an ISO-8601-local-timestamped ``Formatter`` so
+    every line logged through ``simba.memory`` (and anything else that
+    propagates to root) carries a ``2026-07-17T13:43:40 [rss-watchdog] ...``
+    -shaped prefix.
+
+    ``target`` defaults to the root logger --- the same target
+    ``logging.basicConfig`` used to configure, and the logger every
+    ``simba.memory``-prefixed module logger propagates to without a handler
+    of its own, so this one call covers the whole daemon.
+
+    Idempotent, never double-configures: if ``target`` already has a
+    handler (a prior call, or one attached by something else first), only
+    its ``Formatter`` is replaced --- a second handler is never stacked
+    (which would double-print every subsequent line). A handler is created
+    only when none exists yet.
+    """
+    target = target if target is not None else logging.getLogger()
+    formatter = logging.Formatter(fmt=_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+    if target.handlers:
+        for handler in target.handlers:
+            handler.setFormatter(formatter)
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        target.addHandler(handler)
+    target.setLevel(logging.INFO)
+    return target
+
+
 def main() -> None:
     """Start the memory daemon."""
     # Captured before argparse touches anything (argparse never mutates
@@ -698,10 +802,7 @@ def main() -> None:
     # started this process --- only sys.argv[1:] (the flags) ever matter to
     # argparse, never argv[0]. POST /restart execs this back later.
     boot_argv = [sys.executable, "-m", "simba.memory.server", *sys.argv[1:]]
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-    )
+    _configure_logging()
     parser = argparse.ArgumentParser(description="Simba memory daemon")
     parser.add_argument(
         "--port", type=int, default=None, help="Port to listen on (default: 8741)"
@@ -755,7 +856,9 @@ def main() -> None:
 
     # Bind-first: before ANY model/DB work, refuse to load 2.5GB just to
     # discover the port is taken (see _bind_probe_or_exit's docstring).
-    _bind_probe_or_exit(_HOST, config.port)
+    _bind_probe_or_exit(
+        _HOST, config.port, grace_seconds=config.bind_probe_grace_seconds
+    )
 
     app = create_app(config, use_lifespan=True)
     app.state.boot_argv = boot_argv
