@@ -1987,25 +1987,41 @@ async def list_memories(
     request: fastapi.Request,
     type: str | None = fastapi.Query(default=None),
     projectPath: str | None = fastapi.Query(default=None),  # noqa: N803
+    sessionSource: str | None = fastapi.Query(default=None),  # noqa: N803
+    since: str | None = fastapi.Query(default=None),
     limit: int = fastapi.Query(default=20),
     offset: int = fastapi.Query(default=0),
     include_vectors: bool = fastapi.Query(default=False),
     fields: str | None = fastapi.Query(default=None),
 ) -> dict:
-    """List memories with server-side type/project filtering and pagination.
+    """List memories with server-side type/project/session/time filtering and
+    pagination.
 
     ``include_vectors`` (default ``False``) and ``fields`` (comma-separated
     output-field allowlist, e.g. ``id,type``) both narrow what leaves LanceDB
     -- see the module-level comment above ``_LIST_DEFAULT_FIELDS`` for why.
+    ``sessionSource`` is an exact-match filter (same mechanism as ``type``/
+    ``projectPath``). ``since`` is an ISO-8601 UTC timestamp; only rows with
+    ``createdAt >= since`` are returned -- compared as parsed datetimes (via
+    ``simba.memory.scoring.parse_epoch``), never as raw strings, because
+    ``createdAt`` values in the corpus are mixed-precision (``...59.959Z`` vs
+    ``...59Z``) and lexicographic comparison gets that pair backwards. An
+    unparseable ``since`` is a 400.
 
-    Runtime gate (2026-07-10 incident, docs/adr/2026-07-10-internal-api-
-    footguns.md): a caller self-attributed as the daemon (``X-Simba-Client:
-    daemon``, or a nested ``<origin>.daemon`` loopback -- see harness/
-    client.py's ``detect_client``) MUST pass ``fields=``. An unprojected
-    internal self-call is exactly the shape that materialized the whole
-    corpus -- including every row's 1024-dim vector -- for a 45GB peak
-    footprint. External/CLI/plain clients are unaffected; the static
-    counterpart of this rule is tests/test_internal_list_projection_lint.py.
+    Runtime gates (2026-07-10 + 2026-07-17 incidents, docs/adr/2026-07-10-
+    internal-api-footguns.md): a caller self-attributed as the daemon
+    (``X-Simba-Client: daemon``, or a nested ``<origin>.daemon`` loopback --
+    see harness/client.py's ``detect_client``) MUST pass ``fields=``. An
+    unprojected internal self-call is exactly the shape that materialized the
+    whole corpus -- including every row's 1024-dim vector -- for a 45GB peak
+    footprint (rule 1). Projection alone didn't stop the follow-up incident:
+    a daemon-internal caller whose ``fields=`` includes ``context`` MUST ALSO
+    pass a row-bounding constraint (``sessionSource=``, ``projectPath=``,
+    ``since=``, or ``limit<=1000``) -- an unbounded context-bearing scan is
+    the corpus-wide-content shape that tripped the RSS watchdog (rule 2,
+    2026-07-17 addendum). External/CLI/plain clients are unaffected by
+    either gate; the static counterpart is
+    tests/test_internal_list_projection_lint.py.
     """
     client = getattr(request.state, "client", "unknown") or "unknown"
     is_daemon_internal = client == simba.harness.client.DAEMON or client.endswith(
@@ -2017,19 +2033,45 @@ async def list_memories(
             detail="internal /list callers must pass fields= projection",
         )
 
-    table = request.app.state.table
-
     requested_fields = _parse_list_fields(fields, include_vectors=include_vectors)
     output_fields = requested_fields or (
         _LIST_ALL_FIELDS if include_vectors else _LIST_DEFAULT_FIELDS
     )
 
-    # `type`/`projectPath` (post-fetch filters below) and `createdAt` (the sort
-    # key) are always fetched even when the caller's `fields` excludes them
-    # from the OUTPUT -- only `_project_memory` below respects `fields` for
-    # what actually gets returned.
+    if is_daemon_internal and "context" in output_fields:
+        bounded = (
+            bool(sessionSource) or bool(projectPath) or bool(since) or limit <= 1000
+        )
+        if not bounded:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=(
+                    "internal /list callers requesting fields=...,context "
+                    "must also pass a row-bounding constraint -- "
+                    "sessionSource=, projectPath=, since=, or limit<=1000 "
+                    "-- an unbounded context-bearing scan is the "
+                    "2026-07-17 RSS-storm shape (see "
+                    "docs/adr/2026-07-10-internal-api-footguns.md)"
+                ),
+            )
+
+    since_epoch: float | None = None
+    if since:
+        since_epoch = simba.memory.scoring.parse_epoch(since)
+        if since_epoch is None:
+            raise fastapi.HTTPException(
+                status_code=400, detail=f"invalid since= timestamp: {since!r}"
+            )
+
+    table = request.app.state.table
+
+    # `type`/`projectPath`/`sessionSource` (post-fetch filters below) and
+    # `createdAt` (the sort key + `since=` filter) are always fetched even
+    # when the caller's `fields` excludes them from the OUTPUT -- only
+    # `_project_memory` below respects `fields` for what actually gets
+    # returned.
     fetch_columns = sorted(
-        set(output_fields) | {"id", "type", "projectPath", "createdAt"}
+        set(output_fields) | {"id", "type", "projectPath", "sessionSource", "createdAt"}
     )
     all_memories = await table.query().select(fetch_columns).to_list()
 
@@ -2037,6 +2079,17 @@ async def list_memories(
         all_memories = [m for m in all_memories if m.get("type") == type]
     if projectPath:
         all_memories = [m for m in all_memories if m.get("projectPath") == projectPath]
+    if sessionSource:
+        all_memories = [
+            m for m in all_memories if m.get("sessionSource") == sessionSource
+        ]
+    if since_epoch is not None:
+        all_memories = [
+            m
+            for m in all_memories
+            if (simba.memory.scoring.parse_epoch(m.get("createdAt", "")) or -1.0)
+            >= since_epoch
+        ]
 
     all_memories.sort(key=lambda m: m.get("createdAt", ""), reverse=True)
     total = len(all_memories)

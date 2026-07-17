@@ -32,6 +32,14 @@ class EpisodesConfig:
     # Override to repurpose episodes for a personal-assistant memory (summarize
     # a day / topic instead of a coding session). Fields: {sid}, {cwd}, {members}.
     episode_prompt: str = ""
+    # Bound `consolidate_eligible`'s discovery scan to memories created since
+    # the last completed sweep's watermark (simba.episodes.watermark),
+    # instead of a full-corpus projected scan every time. Default ON:
+    # behavior-preserving (any session with a new memory since the watermark
+    # still reappears and gets a full recheck -- see watermark.py) and a
+    # measured-incident perf fix (2026-07-17 RSS-watchdog trip traced to
+    # consolidate.py's full-corpus /list scan).
+    incremental_discovery: bool = True
 
 
 def load_config(**overrides: typing.Any) -> EpisodesConfig:

@@ -19,3 +19,4 @@ def test_defaults() -> None:
     assert cfg.scheduler_enabled is True
     assert cfg.job_timeout_hours == 4
     assert cfg.episode_prompt == ""  # empty => engine-appropriate built-in default
+    assert cfg.incremental_discovery is True

@@ -17,8 +17,17 @@ import datetime
 import typing
 
 
-def _parse_epoch(created_at: str) -> float | None:
-    """Parse an ISO8601 ``createdAt`` to epoch seconds, or None if unparseable."""
+def parse_epoch(created_at: str) -> float | None:
+    """Parse an ISO8601 ``createdAt`` to epoch seconds, or None if unparseable.
+
+    Tolerant of mixed fractional-second precision (``...59.959Z`` vs
+    ``...59Z``) via ``datetime.fromisoformat`` -- a plain string comparison of
+    two ``createdAt`` values is WRONG across precisions (``.`` sorts before
+    ``Z``, so a later fractional timestamp can sort lexicographically
+    *before* an earlier whole-second one). Public: also used by ``/list``'s
+    ``since=`` filter (routes.py) and the episodic-discovery watermark
+    (episodes/watermark.py) for the same reason.
+    """
     if not created_at:
         return None
     try:
@@ -97,7 +106,7 @@ def truncate_to_budget(
 
 def _recency(created_at: str, now: float, halflife_days: float) -> float:
     """Exponential-decay recency in [0, 1]; unparseable/halflife<=0 ⇒ 0.0."""
-    epoch = _parse_epoch(created_at)
+    epoch = parse_epoch(created_at)
     if epoch is None or halflife_days <= 0:
         return 0.0
     age_days = max(0.0, (now - epoch) / 86400.0)

@@ -1171,6 +1171,134 @@ class TestListEndpoint:
             assert set(m.keys()) == {"id"}
 
     @pytest.mark.asyncio
+    async def test_list_session_source_filter(self, async_client, lance_table):
+        """`?sessionSource=` scopes `total`/`memories` to that session --
+        the server-side filter `_fetch_session` (episodes/consolidate.py)
+        relies on instead of a client-side group-by over the whole corpus."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        await lance_table.add(
+            [
+                {
+                    "id": "s1",
+                    "type": "GOTCHA",
+                    "content": "session one",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-a",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "s2",
+                    "type": "GOTCHA",
+                    "content": "session two",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "sess-b",
+                    "projectPath": "",
+                    "createdAt": now,
+                    "lastAccessedAt": now,
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"sessionSource": "sess-a"})
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["memories"][0]["id"] == "s1"
+
+        empty = await async_client.get(
+            "/list", params={"sessionSource": "no-such-session"}
+        )
+        assert empty.json()["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_since_excludes_older(self, async_client, lance_table):
+        await lance_table.add(
+            [
+                {
+                    "id": "old",
+                    "type": "GOTCHA",
+                    "content": "old",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "lastAccessedAt": "2026-01-01T00:00:00Z",
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+                {
+                    "id": "new",
+                    "type": "GOTCHA",
+                    "content": "new",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": "2026-07-01T00:00:00Z",
+                    "lastAccessedAt": "2026-07-01T00:00:00Z",
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"since": "2026-06-01T00:00:00Z"})
+        data = resp.json()
+        ids = {m["id"] for m in data["memories"]}
+        # `init_0` (the fixture's SYSTEM row) is stamped with the real
+        # clock at fixture setup time, which is also >= since -- only "old"
+        # must be excluded.
+        assert "new" in ids
+        assert "old" not in ids
+
+    @pytest.mark.asyncio
+    async def test_list_since_mixed_precision_boundary_includes_later_fractional(
+        self, async_client, lance_table
+    ):
+        """The timestamp trap: a row created at `...05.959Z` (fractional
+        seconds) is chronologically LATER than `since=...05Z` (whole
+        seconds) even though it sorts EARLIER lexicographically ('.' <
+        'Z') -- raw string comparison would wrongly exclude it. Robust
+        comparison parses both sides to datetimes."""
+        await lance_table.add(
+            [
+                {
+                    "id": "frac",
+                    "type": "GOTCHA",
+                    "content": "fractional, later",
+                    "context": "",
+                    "tags": "[]",
+                    "confidence": 0.9,
+                    "sessionSource": "",
+                    "projectPath": "",
+                    "createdAt": "2026-07-17T16:40:05.959Z",
+                    "lastAccessedAt": "2026-07-17T16:40:05.959Z",
+                    "accessCount": 0,
+                    "vector": [0.0] * 768,
+                },
+            ]
+        )
+        resp = await async_client.get("/list", params={"since": "2026-07-17T16:40:05Z"})
+        data = resp.json()
+        ids = {m["id"] for m in data["memories"]}
+        assert "frac" in ids
+
+    @pytest.mark.asyncio
+    async def test_list_since_invalid_timestamp_400(self, async_client):
+        resp = await async_client.get("/list", params={"since": "not-a-date"})
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_list_daemon_internal_without_fields_rejected(self, async_client):
         """2026-07-10 incident rule, enforced at runtime: a caller
         self-attributed as the daemon (X-Simba-Client: daemon) MUST pass
@@ -1219,6 +1347,111 @@ class TestListEndpoint:
         is the existing behavior every other TestListEndpoint test relies
         on, asserted explicitly here so a regression is caught directly)."""
         resp = await async_client.get("/list")
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_without_bound_rejected(
+        self, async_client
+    ):
+        """2026-07-17 RSS-storm rule: projection alone (rule 1) didn't stop
+        the corpus-wide-context incident --- a daemon-internal caller whose
+        fields= includes `context` must ALSO pass a row-bounding constraint
+        (sessionSource=, projectPath=, since=, or limit<=1000)."""
+        resp = await async_client.get(
+            "/list",
+            params={"fields": "id,type,content,context", "limit": 5000},
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 400
+        assert "context" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_with_session_source_allowed(
+        self, async_client
+    ):
+        resp = await async_client.get(
+            "/list",
+            params={
+                "fields": "id,type,content,context",
+                "sessionSource": "sess-a",
+                "limit": 5000,
+            },
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_with_project_path_allowed(
+        self, async_client
+    ):
+        resp = await async_client.get(
+            "/list",
+            params={
+                "fields": "id,type,content,context",
+                "projectPath": "/proj",
+                "limit": 5000,
+            },
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_with_since_allowed(self, async_client):
+        resp = await async_client.get(
+            "/list",
+            params={
+                "fields": "id,type,content,context",
+                "since": "2026-01-01T00:00:00Z",
+                "limit": 5000,
+            },
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_with_limit_under_1000_allowed(
+        self, async_client
+    ):
+        resp = await async_client.get(
+            "/list",
+            params={"fields": "id,type,content,context", "limit": 1000},
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_context_over_1000_limit_rejected(
+        self, async_client
+    ):
+        resp = await async_client.get(
+            "/list",
+            params={"fields": "id,type,content,context", "limit": 1001},
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_list_daemon_internal_no_context_unaffected_by_new_gate(
+        self, async_client
+    ):
+        """The new bound-gate only fires when `context` is projected ---
+        `fields=id,type` (no bound at all, large limit) must stay 200,
+        matching the pre-existing rule-1-only gate."""
+        resp = await async_client.get(
+            "/list",
+            params={"fields": "id,type", "limit": 50000},
+            headers={"X-Simba-Client": "daemon"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_list_external_client_context_without_bound_allowed(
+        self, async_client
+    ):
+        """External/CLI/plain clients are unaffected by the new gate too."""
+        resp = await async_client.get(
+            "/list", params={"fields": "id,type,content,context", "limit": 5000}
+        )
         assert resp.status_code == 200
 
 
