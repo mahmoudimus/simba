@@ -254,11 +254,17 @@ class TestSingleFlight:
             return real_stream(transcript_path, dest_md)
 
         results: list[dict] = []
+        errors: list[BaseException] = []
 
         def worker():
-            results.append(
-                _run_main(fake_home, "concurrent-session", transcript, tmp_path)
-            )
+            # A bare append swallows any exception with the thread, turning a
+            # real failure into an opaque `len(results) == 1` flake later.
+            try:
+                results.append(
+                    _run_main(fake_home, "concurrent-session", transcript, tmp_path)
+                )
+            except BaseException as exc:
+                errors.append(exc)
 
         with unittest.mock.patch.object(
             pc, "_stream_transcript_to_markdown", side_effect=slow_stream
@@ -269,15 +275,21 @@ class TestSingleFlight:
 
             t2 = threading.Thread(target=worker)
             t2.start()
-            t2.join(timeout=5)
+            # Generous join: thread2 skips the export but still runs the rest
+            # of the hook pipeline, which can take >5s on a loaded machine
+            # (e.g. a parallel full-suite run) — the tight timeout was a flake.
+            t2.join(timeout=30)
+            assert not t2.is_alive(), "thread2 did not finish within 30s"
 
             # thread2 must have returned WITHOUT ever calling the streaming
             # function — the single-flight guard, not a race, explains this.
             assert call_count["n"] == 1
 
             release_evt.set()
-            t1.join(timeout=5)
+            t1.join(timeout=30)
+            assert not t1.is_alive(), "thread1 did not finish after release"
 
+        assert errors == []
         assert len(results) == 2
         assert all(r.get("suppressOutput") is True for r in results)
 
