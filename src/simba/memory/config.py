@@ -335,6 +335,16 @@ class MemoryConfig:
     # -> ``<db dir>/embed_cache.db``.
     embed_cache_enabled: bool = True
     embed_cache_path: str = ""
+    # Bound on the persistent query-embed cache's row count, LRU-evicted by
+    # last_used down to 90% of the bound in one batch (0 = unbounded). Live
+    # 2026-07-18: the cache was designed append-only for BENCHMARK reruns over
+    # a fixed corpus, but the daemon uses it for live query embeds -- raw
+    # prompts/tool-inputs/task-notifications are near-unbounded cardinality,
+    # and it grew to 1.3GB / 65,866 rows with no eviction. The eval/benchmark
+    # harness constructs its own EmbeddingCache directly (never touches this
+    # field) and keeps the original unbounded, nothing-is-ever-deleted
+    # semantics for corpus reruns.
+    embed_cache_max_entries: int = 50000
     # Decay / forgetting + feedback-aware ranking (Phase 6). Mutable per-memory
     # ranking signals live in the sqlite ``memory_usage`` table; these tunables
     # drive how strength decays over time, how access reinforces it, and how

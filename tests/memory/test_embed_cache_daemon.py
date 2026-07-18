@@ -13,6 +13,7 @@ import asyncio
 import simba.config
 import simba.memory.config  # registers the "memory" config section
 import simba.memory.embedding_cache as ec
+import simba.memory.embeddings
 import simba.memory.server as server
 
 
@@ -78,3 +79,41 @@ def test_embed_cache_config_defaults():
     cfg = simba.config.load("memory")
     assert cfg.embed_cache_enabled is True
     assert cfg.embed_cache_path == ""
+    assert cfg.embed_cache_max_entries == 50000
+
+
+def test_init_embeddings_wires_max_entries_from_config(tmp_path, monkeypatch):
+    """server.init_embeddings must pass ``memory.embed_cache_max_entries``
+    through to the EmbeddingCache it constructs -- otherwise the config knob
+    is dead and the daemon cache stays unbounded regardless of setting."""
+
+    class _FakeService:
+        def __init__(self, config):
+            self.config = config
+
+        async def start(self):
+            return None
+
+        async def embed(self, text, task=None):
+            return [0.0]
+
+    monkeypatch.setattr(simba.memory.embeddings, "EmbeddingService", _FakeService)
+
+    seen: dict[str, object] = {}
+    real_cache = ec.EmbeddingCache
+
+    class _SpyCache(real_cache):
+        def __init__(self, path, *, max_entries=0):
+            seen["max_entries"] = max_entries
+            super().__init__(path, max_entries=max_entries)
+
+    monkeypatch.setattr(ec, "EmbeddingCache", _SpyCache)
+
+    cfg = simba.memory.config.MemoryConfig(
+        db_path=str(tmp_path), embed_cache_max_entries=123
+    )
+    app = server.create_app(cfg)
+
+    asyncio.run(server.init_embeddings(app))
+    assert seen["max_entries"] == 123
+    app.state.embed_cache.close()
