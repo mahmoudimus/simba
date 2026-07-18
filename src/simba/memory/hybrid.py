@@ -238,6 +238,23 @@ def _passes_filters(
     return not (filter_project and record.get("projectPath") != filter_project)
 
 
+# Columns `_session_record` actually reads off a raw Lance row -- NEVER
+# `vector`. Shared by both direct-query fetches below (`.select()`'d
+# 2026-07-18: these paid for the whole corpus's 1024-dim vectors on every
+# session-expansion / anticipated-query lookup before this fix).
+_SESSION_RECORD_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "content",
+    "context",
+    "confidence",
+    "createdAt",
+    "tags",
+    "projectPath",
+    "sessionSource",
+)
+
+
 def _session_record(raw: dict[str, typing.Any]) -> dict[str, typing.Any]:
     return {
         "id": raw.get("id"),
@@ -266,6 +283,7 @@ async def _session_expansion_records(
     for sid in session_sources:
         query = (
             table.query()
+            .select(list(_SESSION_RECORD_FIELDS))
             .where(f"sessionSource = {_lance_literal(sid)}")
             .limit(limit_per_session)
         )
@@ -287,6 +305,7 @@ async def _records_by_ids(
     for memory_id in memory_ids:
         rows = (
             await table.query()
+            .select(list(_SESSION_RECORD_FIELDS))
             .where(f"id = {_lance_literal(memory_id)}")
             .limit(1)
             .to_list()

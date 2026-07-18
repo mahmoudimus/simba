@@ -68,7 +68,13 @@ async def _lance_rows_by_id(table: typing.Any) -> dict[str, dict[str, typing.Any
     """Read every row keyed by id, refreshing the handle across process boundaries."""
     if hasattr(table, "checkout_latest"):
         await table.checkout_latest()
-    rows = await table.query().to_list()
+    # Only the fields the SYSTEM-type check + `fts.upsert` read (see
+    # `REQUIRED_MEMORY_FIELDS`) -- never `vector` (2026-07-18).
+    rows = (
+        await table.query()
+        .select(list(simba.memory.fts.REQUIRED_MEMORY_FIELDS))
+        .to_list()
+    )
     return {row["id"]: dict(row) for row in rows if row.get("id")}
 
 

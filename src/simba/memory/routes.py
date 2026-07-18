@@ -1359,7 +1359,8 @@ async def normalize_scopes(
     """
     table = request.app.state.table
 
-    rows = await table.query().to_list()
+    # Only `projectPath` is read below -- never `vector`/`content` (2026-07-18).
+    rows = await table.query().select(["projectPath"]).to_list()
     folds: dict[str, dict] = {}
     for row in rows:
         old = row.get("projectPath") or ""
@@ -1468,7 +1469,13 @@ async def promotion_candidates(
         wanted = {c["id"] for c in candidates}
         meta: dict[str, dict] = {}
         try:
-            rows = await table.query().to_list()
+            # Only `id`/`type`/`content`/`projectPath` are read below (see the
+            # loop underneath) -- never `vector` (2026-07-18).
+            rows = (
+                await table.query()
+                .select(["id", "type", "content", "projectPath"])
+                .to_list()
+            )
             meta = {r["id"]: r for r in rows if r.get("id") in wanted}
         except Exception:
             logger.debug("[promotions] content join failed", exc_info=True)
@@ -1882,7 +1889,14 @@ async def metrics(request: fastapi.Request) -> dict:
 async def stats(request: fastapi.Request) -> dict:
     table = request.app.state.table
 
-    all_memories = await table.query().to_list()
+    # Only `type`/`confidence`/`createdAt` are ever read below -- never
+    # `content`/`context`/`vector` (2026-07-18: this endpoint is hit by every
+    # SessionStart hook plus periodic diagnostics, so an unprojected scan was
+    # the primary RSS-burst driver; see docs/adr/2026-07-10-internal-api-
+    # footguns.md's 2026-07-18 addendum).
+    all_memories = (
+        await table.query().select(["type", "confidence", "createdAt"]).to_list()
+    )
 
     by_type: dict[str, int] = {}
     total_confidence = 0.0
@@ -2177,7 +2191,13 @@ async def reindex(request: fastapi.Request) -> dict:
     if not fts_path:
         return {"status": "no_mirror"}
 
-    rows = await table.query().to_list()
+    # Only the fields `fts.rebuild`/`_insert` read (see
+    # `REQUIRED_MEMORY_FIELDS`) -- never `vector` (2026-07-18).
+    rows = (
+        await table.query()
+        .select(list(simba.memory.fts.REQUIRED_MEMORY_FIELDS))
+        .to_list()
+    )
     non_system = [r for r in rows if r.get("type") != "SYSTEM"]
 
     def _rebuild() -> int:
@@ -2262,7 +2282,13 @@ async def reembed(request: fastapi.Request) -> dict:
 
     fts_path = getattr(request.app.state, "fts_path", None)
     if fts_path:
-        rows = await new_table.query().to_list()
+        # Only the fields `fts.rebuild`/`_insert` read (see
+        # `REQUIRED_MEMORY_FIELDS`) -- never `vector` (2026-07-18).
+        rows = (
+            await new_table.query()
+            .select(list(simba.memory.fts.REQUIRED_MEMORY_FIELDS))
+            .to_list()
+        )
         non_system = [r for r in rows if r.get("type") != "SYSTEM"]
 
         def _rebuild() -> int:

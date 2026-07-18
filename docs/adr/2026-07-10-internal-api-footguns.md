@@ -132,3 +132,55 @@ watermark`, sidecar DB) so a repeat sweep's discovery scan is bounded by
   strings, since `createdAt` values are mixed-precision and a later
   fractional-second timestamp can sort lexicographically *before* an
   earlier whole-second one).
+
+## Addendum (2026-07-18) — the HTTP-layer gate missed direct in-process scans
+
+**Incident:** a native `sample` taken mid-RSS-burst under concurrent session
+traffic caught the allocator inside `pyarrow _Tabular.to_pylist ->
+ChunkedArray.to_pylist -> ListScalar.as_py -> arrow::MakeScalar<float> ->
+operator new` — a LanceDB query materializing the 1024-dim `vector` column
+into ~10 million individually heap-allocated Python/Arrow float scalars.
+Rule 1 (2026-07-10) and its 2026-07-17 addendum both gate self-HTTP `GET
+/list` calls — but a **direct, in-process** `table.query().to_list()` or
+`table.vector_search(...).to_list()` never goes through HTTP at all, so
+neither the runtime gate nor `tests/test_internal_list_projection_lint.py`
+(which only AST-scans `<something>.get(url, ...)` call sites) ever saw it.
+Every real call site of this shape as of 2026-07-18 fetched every column —
+`vector` included — regardless of what the caller read afterward: `/stats`
+(hit by every SessionStart hook, the primary burst driver), the hybrid-recall
+session-expansion and anticipated-query record fetches, `vector_db.py`'s
+duplicate-check/search/reembed/access-tracking helpers, the FTS-mirror boot
+reconcile, `/scopes/normalize`, `/promotions/candidates`, `/reindex`,
+`/reembed`, and the cross-store `reconcile.py` audit.
+
+**Rule 1, direct-call corollary:** every in-process LanceDB `.query(`/
+`.search(`-family call chain that reaches `.to_list()` must call `.select(`
+somewhere in that chain, narrowed to the columns its consumers actually
+read — never `vector` unless a caller genuinely needs the embedding back
+(and even then, bounded, e.g. a single-row fallback fetch, never a
+whole-corpus one). This is the same rule as Rule 1 above, just applied to
+the call shape that isn't HTTP.
+
+**Enforcement:**
+- Static gate: `tests/test_lance_projection_lint.py` AST-scans
+  `src/simba/**/*.py` for a call chain ending in `.to_list()` that
+  originates from a `.query(`/`.search(`-family builder (this also matches
+  `vector_search`) and fails, file:line, on any such chain missing
+  `.select(`. Same same-function variable-tracking approach as the sibling
+  HTTP-layer lint (including a self-referential reassignment, e.g. `query =
+  query.where(...)`), and the same reviewed-exception `ALLOWLIST` carve-out
+  — empty as of this pass, since every real site got a genuine projection.
+- Every site fixed in the 2026-07-18 pass got a projection narrowed to its
+  actual consumers (read by hand, not inferred): `/stats` selects
+  `type,confidence,createdAt`; the hybrid-recall record fetches and
+  `vector_db.search_memories` select the metadata/text fields the RRF/
+  rerank/format pipeline reads (`id,type,content,context,confidence,
+  createdAt,tags,projectPath,sessionSource`); `find_duplicates` selects
+  `id,type` (LanceDB auto-includes `_distance` for a vector-search
+  `.to_list()` regardless of `.select()`); the FTS-mirror-feeding sites
+  (`init_fts_mirror`, `/reindex`, `/reembed`, `reconcile.py`) share
+  `simba.memory.fts.REQUIRED_MEMORY_FIELDS`; `reembed_table` selects every
+  column except `vector` (verified via `lancedb`'s async `table.schema()`)
+  and falls back to a bounded (`.limit(1)`) single-row re-fetch of the OLD
+  vector only for a row whose re-embed failed or had no content/context to
+  embed.

@@ -224,6 +224,9 @@ class TestHybridSearch:
             def __init__(self) -> None:
                 self._limit = 100
 
+            def select(self, _columns: list[str]):
+                return self
+
             def where(self, expr: str):
                 assert expr == "sessionSource = 's1'"
                 return self
@@ -281,6 +284,9 @@ class TestHybridSearch:
         class _Query:
             def __init__(self) -> None:
                 self.expr = ""
+
+            def select(self, _columns: list[str]):
+                return self
 
             def where(self, expr: str):
                 self.expr = expr

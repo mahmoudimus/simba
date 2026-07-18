@@ -43,6 +43,22 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+")
 _db = pw.SqliteDatabase(None)
 _initialized: set[str] = set()
 
+# Columns `_insert`/`upsert`/`rebuild` actually read off a Lance memory row
+# (see `_insert` below) -- NEVER `vector`. Callers that fetch Lance rows
+# purely to feed this mirror (server.py's boot reconcile, `/reindex`,
+# `/reembed`'s post-rebuild step, reconcile.py's cross-store audit) should
+# project to exactly this set (2026-07-18: each of those previously fetched
+# every column, `vector` included, over the whole corpus).
+REQUIRED_MEMORY_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "projectPath",
+    "confidence",
+    "createdAt",
+    "content",
+    "context",
+)
+
 
 class MemoryFTS(FTS5Model):
     rowid = RowIDField()

@@ -488,7 +488,14 @@ async def init_fts_mirror(app: fastapi.FastAPI, data_dir: pathlib.Path) -> None:
     app.state.fts_path = str(fts_path)
 
     try:
-        rows = await app.state.table.query().to_list()
+        # Only the fields `fts.rebuild`/`_insert` read (see
+        # `REQUIRED_MEMORY_FIELDS`) -- never `vector` (2026-07-18: this boot
+        # reconcile previously scanned the whole corpus unprojected).
+        rows = (
+            await app.state.table.query()
+            .select(list(simba.memory.fts.REQUIRED_MEMORY_FIELDS))
+            .to_list()
+        )
         non_system = [r for r in rows if r.get("type") != "SYSTEM"]
 
         def _reconcile() -> int | None:
