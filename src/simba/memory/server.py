@@ -519,7 +519,9 @@ async def init_embeddings(
     logger.info("[embed] Ready")
     app.state.embed = service.embed
     if config.embed_cache_enabled:
-        cache = simba.memory.embedding_cache.EmbeddingCache(_embed_cache_path(config))
+        cache = simba.memory.embedding_cache.EmbeddingCache(
+            _embed_cache_path(config), max_entries=config.embed_cache_max_entries
+        )
         app.state.embed_cache = cache
         app.state.embed_query = _cached_query_embedder(
             service, cache, _embed_cache_model_id(config)
