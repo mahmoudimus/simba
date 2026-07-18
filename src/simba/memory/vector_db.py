@@ -12,6 +12,25 @@ import typing
 
 logger = logging.getLogger("simba.memory")
 
+# Columns a vector-search caller actually reads off each result row -- NEVER
+# `vector` itself. Mirrors `simba.memory.hybrid`'s `_session_record`/
+# `_from_vector` field set (duplicated rather than imported: `hybrid` imports
+# THIS module, so the reverse import would cycle). `_distance` is not listed
+# here because LanceDB auto-includes it for a vector-search `.to_list()`
+# regardless of `.select()` (2026-07-18: `.select()` still excludes `vector`
+# even on a vector-search query -- verified against lancedb 0.27).
+_SEARCH_RESULT_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "content",
+    "context",
+    "confidence",
+    "createdAt",
+    "tags",
+    "projectPath",
+    "sessionSource",
+)
+
 
 class EmbeddingDimMismatchError(RuntimeError):
     """Raised when the query embedding dim doesn't match the stored vectors.
@@ -177,6 +196,9 @@ async def find_duplicates(
             await table.vector_search(embedding)
             .column("vector")
             .distance_type("cosine")
+            # Only `id`/`type` are read below (2026-07-18); `_distance` is
+            # auto-included by LanceDB's vector-search `.to_list()`.
+            .select(["id", "type"])
             .limit(5)
             .to_list()
         )
@@ -234,6 +256,10 @@ async def search_memories(
             await table.vector_search(embedding)
             .column("vector")
             .distance_type("cosine")
+            # Metadata/text fields the RRF/rerank/format pipeline reads
+            # (see `_SEARCH_RESULT_FIELDS`) -- never the stored `vector`
+            # itself (2026-07-18).
+            .select(list(_SEARCH_RESULT_FIELDS))
             .limit(max_results * 3)
             .to_list()
         )
@@ -288,6 +314,29 @@ async def search_memories(
         return []
 
 
+async def _fetch_old_vector(
+    table: typing.Any, memory_id: typing.Any
+) -> list[float] | None:
+    """Bounded (``.limit(1)``) fallback read of ONE row's stored ``vector``.
+
+    Used only when ``reembed_table`` couldn't produce a fresh embedding for a
+    row (empty content/context, or a raised ``embed_fn``) so that row keeps a
+    valid vector instead of a missing/null one -- without the bulk read ever
+    fetching the whole corpus's `vector` column up front (2026-07-18).
+    """
+    if not memory_id:
+        return None
+    escaped = str(memory_id).replace("'", "''")
+    rows = (
+        await table.query()
+        .where(f"id = '{escaped}'")
+        .select(["vector"])
+        .limit(1)
+        .to_list()
+    )
+    return rows[0].get("vector") if rows else None
+
+
 async def reembed_table(
     db_path: typing.Any,
     embed_fn: typing.Callable[[str], typing.Awaitable[list[float]]],
@@ -299,13 +348,23 @@ async def reembed_table(
     recreates the table so a changed embedding dimension takes effect, and returns
     ``(new_table, count)``. The caller is responsible for rebuilding the FTS
     mirror and swapping the app's table handle. A per-row embed failure keeps the
-    old vector so one bad row can't abort the rebuild.
+    old vector (via a bounded single-row re-fetch, see ``_fetch_old_vector``) so
+    one bad row can't abort the rebuild.
     """
     import lancedb
 
     db = await lancedb.connect_async(str(db_path))
     table = await db.open_table("memories")
-    rows = await table.query().to_list()
+
+    # Every column EXCEPT `vector` is copied verbatim into the rebuilt table;
+    # the OLD vector is never needed for the (overwhelmingly common)
+    # successful-embed row -- it's about to be overwritten. This still avoids
+    # the ~10M-Arrow-float materialization this ADR is about (2026-07-18) while
+    # preserving every other stored column, including ones this function never
+    # reasons about by name.
+    schema = await table.schema()
+    non_vector_columns = [f.name for f in schema if f.name != "vector"]
+    rows = await table.query().select(non_vector_columns).to_list()
 
     new_rows = []
     for raw in rows:
@@ -315,11 +374,15 @@ async def reembed_table(
         ctx = (row.get("context") or "").strip()
         if ctx:
             text = f"{text} {ctx}".strip()
+        vector: list[float] | None = None
         if text:
             try:
-                row["vector"] = await embed_fn(text)
+                vector = await embed_fn(text)
             except Exception:
                 logger.warning("reembed failed for %s; kept old vector", row.get("id"))
+        if vector is None:
+            vector = await _fetch_old_vector(table, row.get("id"))
+        row["vector"] = vector
         new_rows.append(row)
 
     await db.drop_table("memories")
@@ -370,8 +433,15 @@ async def update_access_tracking(table: typing.Any, memory_ids: list[str]) -> No
     try:
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         for mid in memory_ids:
-            # Read current accessCount so we can increment it.
-            rows = await table.query().where(f"id = '{mid}'").limit(1).to_list()
+            # Read current accessCount so we can increment it (only column
+            # read below -- never `vector`, 2026-07-18).
+            rows = (
+                await table.query()
+                .where(f"id = '{mid}'")
+                .select(["accessCount"])
+                .limit(1)
+                .to_list()
+            )
             current_count = rows[0].get("accessCount", 0) if rows else 0
             await table.update(
                 updates={

@@ -24,6 +24,9 @@ class _FakeQuery:
     def distance_type(self, *_a: typing.Any, **_k: typing.Any) -> _FakeQuery:
         return self
 
+    def select(self, *_a: typing.Any, **_k: typing.Any) -> _FakeQuery:
+        return self
+
     def limit(self, *_a: typing.Any, **_k: typing.Any) -> _FakeQuery:
         return self
 
