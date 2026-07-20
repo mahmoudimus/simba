@@ -104,6 +104,32 @@ class TestPeakRssMb:
         assert value > 0
 
 
+class TestWatchdogMetricMb:
+    """The pure gating-metric helper (macOS incident follow-up): a wedged
+    daemon reached a 52GB physical footprint while the compressor kept
+    resident size down around 361MB, so a resident-based hard limit never
+    tripped. The watchdog metric must read ``ri_phys_footprint``, not
+    ``ri_resident_size`` -- this test constructs the struct with both fields
+    set to distinguishable values and asserts footprint wins."""
+
+    def test_footprint_wins_over_resident(self) -> None:
+        info = rss_watchdog._RusageInfoV2()
+        info.ri_resident_size = 361 * 1024 * 1024  # 361MB, in bytes
+        info.ri_phys_footprint = 52 * 1024 * 1024 * 1024  # 52GB, in bytes
+        assert rss_watchdog._watchdog_metric_mb(info) == pytest.approx(
+            52 * 1024, rel=1e-6
+        )
+
+
+class TestResidentMb:
+    """``_resident_mb`` -- the best-effort forensic annotation reader (not
+    the gating metric). Darwin-only; returns None on every other platform."""
+
+    def test_returns_none_off_darwin(self, monkeypatch) -> None:
+        monkeypatch.setattr(rss_watchdog.sys, "platform", "linux")
+        assert rss_watchdog._resident_mb() is None
+
+
 class TestHistory:
     """The RSS history ring buffer (2026-07-17 follow-up): every
     ``check_once()`` appends ``(t, rssMb)`` to a bounded deque, surfaced via
@@ -279,6 +305,43 @@ class TestOverSoft:
         await watchdog.check_once()
         assert restart_calls == []
 
+    @pytest.mark.asyncio
+    async def test_log_includes_resident_annotation_when_available(
+        self, monkeypatch, caplog
+    ) -> None:
+        """The footprint/resident divergence IS the leak signature -- the
+        soft-crossing log line must carry both when a resident reader is
+        available, so forensics survives even though footprint alone now
+        gates the limit."""
+        monkeypatch.setattr(rss_watchdog, "_release_free_memory_to_os", lambda: None)
+        monkeypatch.setattr(rss_watchdog, "_resident_mb", lambda: 361.2)
+        watchdog, _ = _make_watchdog(
+            soft_limit_mb=100.0,
+            hard_limit_mb=0,
+            rss_values=[52341.0],
+        )
+        with caplog.at_level("WARNING", logger=_LOGGER_NAME):
+            await watchdog.check_once()
+        message = caplog.records[0].getMessage()
+        assert "rss=52341.0MB resident=361.2MB" in message
+
+    @pytest.mark.asyncio
+    async def test_log_omits_resident_annotation_when_unavailable(
+        self, monkeypatch, caplog
+    ) -> None:
+        monkeypatch.setattr(rss_watchdog, "_release_free_memory_to_os", lambda: None)
+        monkeypatch.setattr(rss_watchdog, "_resident_mb", lambda: None)
+        watchdog, _ = _make_watchdog(
+            soft_limit_mb=100.0,
+            hard_limit_mb=0,
+            rss_values=[150.0],
+        )
+        with caplog.at_level("WARNING", logger=_LOGGER_NAME):
+            await watchdog.check_once()
+        message = caplog.records[0].getMessage()
+        assert "resident=" not in message
+        assert "rss=150.0MB soft=" in message
+
 
 class TestOverHard:
     @pytest.mark.asyncio
@@ -315,6 +378,46 @@ class TestOverHard:
         criticals = [r for r in caplog.records if r.levelname == "CRITICAL"]
         assert len(criticals) == 1
         assert "triggering self-restart" in criticals[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_hard_log_includes_resident_annotation_when_available(
+        self, monkeypatch, caplog
+    ) -> None:
+        monkeypatch.setattr(rss_watchdog, "_resident_mb", lambda: 361.2)
+        argv = ["python", "-m", "simba.memory.server"]
+        watchdog, restart_calls = _make_watchdog(
+            soft_limit_mb=0,
+            hard_limit_mb=100.0,
+            min_uptime_seconds=300.0,
+            start_time=time.time() - 3600.0,
+            boot_argv=argv,
+            rss_values=[52341.0],
+        )
+        with caplog.at_level("CRITICAL", logger=_LOGGER_NAME):
+            await watchdog.check_once()
+        assert restart_calls == [argv]
+        criticals = [r for r in caplog.records if r.levelname == "CRITICAL"]
+        assert "rss=52341.0MB resident=361.2MB" in criticals[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_hard_log_omits_resident_annotation_when_unavailable(
+        self, monkeypatch, caplog
+    ) -> None:
+        monkeypatch.setattr(rss_watchdog, "_resident_mb", lambda: None)
+        argv = ["python", "-m", "simba.memory.server"]
+        watchdog, restart_calls = _make_watchdog(
+            soft_limit_mb=0,
+            hard_limit_mb=100.0,
+            min_uptime_seconds=300.0,
+            start_time=time.time() - 3600.0,
+            boot_argv=argv,
+            rss_values=[150.0],
+        )
+        with caplog.at_level("CRITICAL", logger=_LOGGER_NAME):
+            await watchdog.check_once()
+        assert restart_calls == [argv]
+        criticals = [r for r in caplog.records if r.levelname == "CRITICAL"]
+        assert "resident=" not in criticals[0].getMessage()
 
     @pytest.mark.asyncio
     async def test_no_boot_argv_is_critical_only_no_restart_no_crash(
