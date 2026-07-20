@@ -6,6 +6,12 @@ The ``hookEventName`` field is required even when the hook has nothing
 to inject — this module centralizes that invariant so individual hook
 modules can't forget it (the bug fixed in 59ffd4f).
 
+Carve-out: ``PreCompact`` has no ``hookSpecificOutput`` variant in Claude
+Code's hook schema at all (the union only covers PreToolUse,
+UserPromptSubmit, PostToolUse, PostToolBatch, Stop/SubagentStop) — so
+PreCompact never calls into this module and always renders a bare ``{}``
+directly in ``simba.harness.adapters.claude.render``.
+
 Codex adds a ``PermissionRequest`` event whose decision uses the same
 ``hookSpecificOutput`` envelope; the ``decision`` shape is encoded here.
 """

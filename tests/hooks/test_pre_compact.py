@@ -89,11 +89,11 @@ class TestPreCompactMain:
         result = json.loads(
             simba.hooks.pre_compact.main({"transcript_path": "/tmp/t.jsonl"})
         )
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
     def test_requires_transcript_path(self):
         result = json.loads(simba.hooks.pre_compact.main({"session_id": "abc"}))
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
     def test_exports_transcript(self, tmp_path):
         transcript = tmp_path / "transcript.jsonl"
@@ -115,7 +115,7 @@ class TestPreCompactMain:
                 )
             )
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
         session_dir = fake_home / ".claude" / "transcripts" / "test-session"
         assert (session_dir / "transcript.jsonl").exists()
@@ -146,7 +146,7 @@ class TestPreCompactMain:
                 )
             )
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
         session_dir = fake_home / ".claude" / "transcripts" / "codex-session"
         metadata = json.loads((session_dir / "metadata.json").read_text())
@@ -164,7 +164,7 @@ class TestPreCompactMain:
                 }
             )
         )
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
     def test_resets_signal_flag(self, tmp_path):
         """PreCompact clears the rules-signal flag so the next prompt
