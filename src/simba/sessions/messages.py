@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import pathlib
 import re
 import time
@@ -16,6 +17,8 @@ import typing
 
 import simba.config
 import simba.db
+
+logger = logging.getLogger("simba.memory")
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 _FILE_REF_RE = re.compile(
@@ -28,6 +31,14 @@ _TAG_BLOCK_RE = re.compile(r"<(user|assistant|system|tool)>\s*(.*?)\s*</\1>", re
 @dataclasses.dataclass
 class SessionsConfig:
     search_limit: int = 20
+    # Skip parsing any transcript source larger than this (MB). 2026-07-20:
+    # `run_index` in the daemon's executor slurped legacy multi-GB
+    # transcript.jsonl copies via read_text()+splitlines -> 32GB MALLOC_LARGE
+    # (malloc_history-attributed). Parsing also streams now, but the cap
+    # bounds per-cycle CPU on pathological legacy artifacts. Default sits
+    # above hooks.pre_compact_max_transcript_mb (256) so every capped raw
+    # copy still indexes; 0 disables.
+    max_parse_mb: float = 384.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,6 +193,36 @@ def _message_from_json_entry(
     return None
 
 
+def _source_over_cap(path: pathlib.Path) -> bool:
+    """True (with one WARNING) when ``path`` exceeds ``sessions.max_parse_mb``."""
+    try:
+        cap_mb = float(simba.config.load("sessions").max_parse_mb)
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if cap_mb <= 0:
+        return False
+    if size <= cap_mb * 1024 * 1024:
+        return False
+    logger.warning(
+        "[sessions] skipping %s: %.1fMB exceeds sessions.max_parse_mb=%.0fMB",
+        path,
+        size / (1024 * 1024),
+        cap_mb,
+    )
+    return True
+
+
+def _iter_stripped_lines(path: pathlib.Path) -> typing.Iterator[str]:
+    """Yield newline-stripped lines, bounded by one line of memory at a time."""
+    try:
+        with path.open(errors="replace") as fh:
+            for raw_line in fh:
+                yield raw_line.rstrip("\n")
+    except OSError:
+        return
+
+
 def _parse_jsonl(
     path: pathlib.Path,
     *,
@@ -193,12 +234,11 @@ def _parse_jsonl(
     project_path = default_project_path
     parent_session_id = ""
     messages: list[ParsedMessage] = []
-    try:
-        lines = path.read_text(errors="replace").splitlines()
-    except OSError:
+    if _source_over_cap(path):
         return []
-
-    for line in lines:
+    # Stream, never slurp: read_text()+splitlines on a multi-GB transcript
+    # was the 2026-07-20 32GB-heap driver (see SessionsConfig.max_parse_mb).
+    for line in _iter_stripped_lines(path):
         if not line.strip():
             continue
         try:
@@ -260,6 +300,8 @@ def _parse_markdown(
     default_session_id: str = "",
     source: str = "claude",
 ) -> list[ParsedMessage]:
+    if _source_over_cap(path):
+        return []
     try:
         raw = path.read_text(errors="replace")
     except OSError:
