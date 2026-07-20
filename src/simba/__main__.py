@@ -1471,6 +1471,7 @@ def _hook_via_daemon(
                 block_reason=b.get("block_reason"),
                 transform=b.get("transform"),
                 escalated_block=b.get("escalated_block"),
+                system_message=b.get("system_message", ""),
             )
     except (httpx.HTTPError, ValueError):
         pass
@@ -1526,6 +1527,7 @@ def _cmd_hook_canonical(args: list[str]) -> int:
                 "block_reason": result.block_reason,
                 "transform": result.transform,
                 "escalated_block": result.escalated_block,
+                "system_message": result.system_message,
             }
         )
     )

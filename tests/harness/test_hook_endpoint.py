@@ -93,10 +93,32 @@ def test_hook_endpoint_pre_tool_returns_canonical_fields():
     body = resp.json()
     assert "transform" in body
     assert "escalated_block" in body
+    assert "system_message" in body
     # No redirect/rule fired → no block/transform/escalation.
     assert body["block_reason"] is None
     assert body["transform"] is None
     assert body["escalated_block"] is None
+    assert body["system_message"] == ""
+
+
+def test_hook_endpoint_system_message_round_trips(monkeypatch):
+    """The server side of the compact-relay serialization finding: dispatch's
+    CanonicalResult.system_message must survive into the JSON response body
+    (routes.py's run_hook), not just the pre-existing canonical fields."""
+    import simba.harness.core
+
+    def fake_dispatch(event, payload):
+        return simba.harness.core.CanonicalResult(
+            system_message="simba: context is filling up"
+        )
+
+    monkeypatch.setattr(simba.harness.core, "dispatch", fake_dispatch)
+    resp = _client().post(
+        "/hook/pre_tool",
+        json={"tool_name": "Read", "tool_input": {}, "cwd": "/tmp"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["system_message"] == "simba: context is filling up"
 
 
 def test_hook_endpoint_context_returns_canonical_fields(monkeypatch):

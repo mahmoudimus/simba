@@ -186,13 +186,14 @@ class TestIdempotentReexport:
 
 
 class TestSizeCap:
-    def _patch_cap(self, monkeypatch, cap_mb: float):
+    def _patch_cap(self, monkeypatch, cap_mb: float, *, distill_enabled: bool = False):
         real_load = simba.config.load
 
         def fake_load(section, *a, **k):
             if section == "hooks":
                 return simba.hooks.config.HooksConfig(
-                    pre_compact_max_transcript_mb=cap_mb
+                    pre_compact_max_transcript_mb=cap_mb,
+                    pre_compact_distill_enabled=distill_enabled,
                 )
             return real_load(section, *a, **k)
 
@@ -204,12 +205,11 @@ class TestSizeCap:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
 
+        # distill_enabled=False (the helper's default): this test is about the
+        # EXPORT skip/warning specifically, kept isolated from the distiller
+        # spawn (and the compact-relay systemMessage it now triggers) covered
+        # separately by test_pre_compact_distill.py.
         self._patch_cap(monkeypatch, cap_mb=1e-6)  # ~1 byte cap
-        # 2026-07-20: the over-cap path now ALSO spawns a detached distiller
-        # (see test_pre_compact_distill.py for that behavior in isolation) --
-        # this test is about the EXPORT skip/warning specifically, so stub
-        # Popen out rather than let a real `simba transcript distill`
-        # subprocess spawn during the unit suite.
         monkeypatch.setattr(pc.subprocess, "Popen", unittest.mock.MagicMock())
 
         with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
@@ -236,7 +236,10 @@ class TestSizeCap:
 
         result = _run_main(fake_home, "cap-zero-session", transcript, tmp_path)
 
-        assert result == {}
+        # cap disabled -> a real export happened -> compact relay's
+        # systemMessage fires (see test_pre_compact.py for that behavior in
+        # isolation; this test is about the cap=0 bypass specifically).
+        assert result["systemMessage"].startswith("simba: exported 5 message")
         session_dir = fake_home / ".claude" / "transcripts" / "cap-zero-session"
         assert (session_dir / "transcript.md").exists()
 
@@ -297,12 +300,17 @@ class TestSingleFlight:
 
         assert errors == []
         assert len(results) == 2
-        assert all(r == {} for r in results)
+        # t2 joins (and appends) before release_evt fires, so it lost the
+        # single-flight race and returns the empty envelope; t1 then finishes
+        # the real export, whose compact-relay systemMessage fires.
+        assert results[0] == {}
+        assert results[1]["systemMessage"].startswith("simba: exported 3 message")
 
         # Guard released in `finally` — no leaked in-flight state.
         assert "concurrent-session" not in pc._INFLIGHT_SESSIONS
 
-        # A third call proceeds normally (doesn't deadlock / stay locked out).
+        # A third call is idempotent (transcript unchanged since t1's export)
+        # -> skipped, no fresh systemMessage.
         result3 = _run_main(fake_home, "concurrent-session", transcript, tmp_path)
         assert result3 == {}
 
@@ -329,7 +337,7 @@ class TestNoSlurp:
 
         result = _run_main(fake_home, "no-slurp-session", transcript, tmp_path)
 
-        assert result == {}
+        assert result["systemMessage"].startswith("simba: exported 20 message")
         session_dir = fake_home / ".claude" / "transcripts" / "no-slurp-session"
         assert (session_dir / "transcript.md").exists()
         assert (session_dir / "transcript.jsonl").exists()

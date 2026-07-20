@@ -84,7 +84,10 @@ class TestOverCapSpawnsDistillerDetached:
         monkeypatch.setattr(pc.subprocess, "Popen", fake_popen)
 
         result = _run_main(fake_home, "cap-session", transcript, tmp_path)
-        assert result == {}
+        # The distiller was actually spawned -> compact relay leg A's
+        # systemMessage fires ("simba: transcript ...MB over cap -> distiller
+        # spawned").
+        assert result["systemMessage"].endswith("over cap -> distiller spawned")
 
         argv = captured["argv"]
         assert argv[:4] == [sys.executable, "-m", "simba", "transcript"]

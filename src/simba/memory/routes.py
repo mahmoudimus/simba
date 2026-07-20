@@ -2464,6 +2464,7 @@ async def run_hook(event: str, request: fastapi.Request) -> dict:
         "block_reason": result.block_reason,
         "transform": result.transform,  # redirect rewrite (v2 tool gating)
         "escalated_block": result.escalated_block,  # pi-only strong TOOL_RULE block
+        "system_message": result.system_message,  # compact relay (legs A/C)
     }
 
 

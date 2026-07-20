@@ -298,7 +298,7 @@ def _maybe_consolidate_episodes(cwd: str) -> None:
 
 def _spawn_distiller_detached(
     session_id: str, transcript_path: pathlib.Path, cwd_str: str
-) -> None:
+) -> bool:
     """Spawn ``simba transcript distill`` DETACHED for a transcript over
     ``hooks.pre_compact_max_transcript_mb`` -- a bounded replacement for the
     blind skip in ``_export_transcript`` (see ``hooks.pre_compact_distill_enabled``
@@ -312,6 +312,10 @@ def _spawn_distiller_detached(
     an append-mode ``distill.log`` under the session export dir (never
     ``DEVNULL`` -- mirrors ``session_start.py``'s daemon-log rationale: a
     crashed distiller must leave a trace).
+
+    Returns True iff the subprocess was actually spawned (marker-match skip,
+    an I/O setup failure, or a Popen failure all return False) -- callers use
+    this to decide whether a compact-relay ``systemMessage`` is warranted.
     """
     import simba.transcripts
     import simba.transcripts.distill as distill
@@ -320,19 +324,20 @@ def _spawn_distiller_detached(
     try:
         src_size = transcript_path.stat().st_size
     except OSError:
-        return
+        return False
     if distill.marker_matches(session_dir, transcript_path, src_size):
         logger.debug(
             "[pre-compact] distill marker already matches for %s; skipping spawn",
             transcript_path,
         )
-        return
+        return False
 
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
         log_file = open(session_dir / "distill.log", "a")  # noqa: SIM115 -- closed below
     except OSError:
-        return
+        return False
+    spawned = False
     try:
         subprocess.Popen(
             [
@@ -354,30 +359,36 @@ def _spawn_distiller_detached(
             stderr=log_file,
             start_new_session=True,
         )
+        spawned = True
     except OSError:
         logger.warning(
             "[pre-compact] failed to spawn distiller for %s", transcript_path
         )
     finally:
         log_file.close()
+    return spawned
 
 
 def _export_transcript(
     session_id: str, transcript_path: pathlib.Path, cwd_str: str
-) -> int | None:
+) -> tuple[int | None, str]:
     """Export transcript.jsonl/.md/metadata.json for one PreCompact firing.
 
-    Returns the message count, or None if the export was skipped — the
-    transcript is unchanged since the last export (idempotent re-compaction),
-    over ``hooks.pre_compact_max_transcript_mb``, or an I/O error occurred.
-    Fail-soft either way: callers still return their normal hook result.
+    Returns ``(msg_count, system_message)``. ``msg_count`` is None if the
+    export was skipped — the transcript is unchanged since the last export
+    (idempotent re-compaction), over ``hooks.pre_compact_max_transcript_mb``,
+    or an I/O error occurred. Fail-soft either way: callers still return
+    their normal hook result. ``system_message`` is a terse one-line note for
+    the human (compact relay leg A) -- "" unless something actually happened
+    (a real export, or an over-cap distiller spawn); a skipped/idempotent/
+    errored export never gets one.
     """
     cfg = _hooks_cfg()
 
     try:
         src_size = transcript_path.stat().st_size
     except OSError:
-        return None
+        return None, ""
 
     cap_mb = cfg.pre_compact_max_transcript_mb
     if cap_mb and src_size > cap_mb * 1_000_000:
@@ -388,10 +399,15 @@ def _export_transcript(
             src_size / 1_000_000,
             cap_mb,
         )
+        system_message = ""
         if cfg.pre_compact_distill_enabled:
             with contextlib.suppress(Exception):
-                _spawn_distiller_detached(session_id, transcript_path, cwd_str)
-        return None
+                if _spawn_distiller_detached(session_id, transcript_path, cwd_str):
+                    system_message = (
+                        f"simba: transcript {src_size / 1_000_000:.1f}MB over cap "
+                        "-> distiller spawned"
+                    )
+        return None, system_message
 
     transcripts_dir = pathlib.Path.home() / ".claude" / "transcripts"
     session_dir = transcripts_dir / session_id
@@ -412,7 +428,7 @@ def _export_transcript(
                 transcript_path,
                 src_size,
             )
-            return None
+            return None, ""
 
     # 1. Copy original JSONL (kernel copy, no decode — safe at any size).
     with contextlib.suppress(OSError):
@@ -425,7 +441,7 @@ def _export_transcript(
             _stream_transcript_to_markdown(transcript_path, dest_md)
         )
     except OSError:
-        return None
+        return None, ""
 
     # 3. Write metadata
     metadata = {
@@ -452,7 +468,8 @@ def _export_transcript(
     print(f"[pre-compact] Exported transcript ({msg_count} messages)", file=sys.stderr)
     print(f"[pre-compact] Transcript: {dest_md}", file=sys.stderr)
 
-    return msg_count
+    system_message = f"simba: exported {msg_count} messages -> {session_dir}"
+    return msg_count, system_message
 
 
 def run(hook_input: dict) -> CanonicalResult:
@@ -486,7 +503,9 @@ def run(hook_input: dict) -> CanonicalResult:
         )
         return CanonicalResult(suppress_output=True)
     try:
-        msg_count = _export_transcript(session_id, transcript_path, cwd_str)
+        msg_count, system_message = _export_transcript(
+            session_id, transcript_path, cwd_str
+        )
     finally:
         _release_export_slot(session_id)
 
@@ -507,7 +526,7 @@ def run(hook_input: dict) -> CanonicalResult:
         with contextlib.suppress(Exception):
             _maybe_consolidate_episodes(cwd_str)
 
-    return CanonicalResult(suppress_output=True)
+    return CanonicalResult(suppress_output=True, system_message=system_message)
 
 
 def main(hook_input: dict) -> str:

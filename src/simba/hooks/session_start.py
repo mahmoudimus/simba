@@ -327,6 +327,49 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
     )
 
 
+_ARC_LINE_MAX_CHARS = 200
+_ARC_BLOCK_MAX_CHARS = 1500
+
+
+def _compact_relay_arc_block(cwd_str: str, cfg) -> str:
+    """Recent distilled failure->fix arcs, re-injected after compaction.
+
+    A compaction's summarizer drops this kind of specific, hard-won context
+    (exact failure signatures and their fixes) -- this re-surfaces the K
+    (``hooks.compact_relay_arcs_k``) most recent RESOLVED arcs from the
+    failure_arc sidecar (``transcripts/arcs.py``, itself written by the
+    transcript distiller) directly to the model. Bounded: a single indexed
+    ``SELECT ... LIMIT`` (``arcs.list_recent_resolved``), never a table scan
+    or file read. Fail-open: any DB error (missing table, locked file, an
+    unwritable project dir, ...) yields "" -- never raises, matching this
+    module's silent-failure house style.
+    """
+    k = getattr(cfg, "compact_relay_arcs_k", 0)
+    if not k or k <= 0 or not cwd_str:
+        return ""
+    try:
+        import simba.transcripts.arcs as arcs
+
+        rows = arcs.list_recent_resolved(cwd_str, k, cwd=pathlib.Path(cwd_str))
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+
+    lines = ["Recent failure->fix arcs (distilled from prior transcripts):"]
+    for row in rows:
+        fix = row.fix_args_head or "(resolved, no fix recorded)"
+        line = f"- {row.signature} -> {fix}"
+        if len(line) > _ARC_LINE_MAX_CHARS:
+            line = line[: _ARC_LINE_MAX_CHARS - 3] + "..."
+        lines.append(line)
+
+    block = "\n".join(lines)
+    if len(block) > _ARC_BLOCK_MAX_CHARS:
+        block = block[: _ARC_BLOCK_MAX_CHARS - 3] + "..."
+    return block
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the SessionStart hook pipeline. Returns a CanonicalResult."""
     cwd_str = hook_input.get("cwd")
@@ -405,6 +448,14 @@ def run(hook_input: dict) -> CanonicalResult:
         extraction = _check_pending_extraction(session_id, cwd=cwd_str or "")
         if extraction:
             parts.append(extraction)
+
+    # 5. Compact relay leg B: re-inject recently distilled failure->fix arcs
+    #    -- source == "compact" only (not every session_id, unlike #4 above),
+    #    since this is specifically relaying what the compaction just dropped.
+    if hook_input.get("source") == "compact":
+        arc_block = _compact_relay_arc_block(cwd_str or "", _hooks_cfg())
+        if arc_block:
+            parts.append(arc_block)
 
     combined = "\n\n".join(parts)
     return CanonicalResult(additional_context=combined)
