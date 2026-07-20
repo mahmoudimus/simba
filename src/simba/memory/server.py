@@ -798,6 +798,44 @@ def _configure_logging(target: logging.Logger | None = None) -> logging.Logger:
     return target
 
 
+def _log_malloc_stack_logging_status(
+    config: simba.memory.config.MemoryConfig,
+) -> None:
+    """Log one INFO line at boot stating whether malloc stack logging is
+    ACTIVE in this process --- so daemon.log always answers "was this daemon
+    armed?" (2026-07-19: a 16.7GB RSS burst had no attributable allocator
+    stacks because the daemon that ended up serving turned out to be an
+    unarmed hook auto-start).
+
+    "Active" is checked directly against the environment (``"MallocStackLogging"
+    in os.environ``), never against ``config.malloc_stack_logging`` alone ---
+    the two can disagree whenever this process was launched without going
+    through a spawn path that honors the config (e.g. a bare `python -m
+    simba.memory.server` in a shell that already happens to export the var,
+    or --- the case this function specifically warns about below --- one
+    that does not). When the config lever is on but the env is missing, warn
+    once: the env cannot be injected into an already-running process, so the
+    fix is to relaunch, not to expect this process to self-arm. A restart via
+    the execv exec seam (``simba.memory.routes._run_restart_sequence``)
+    PRESERVES whatever env this process already has --- it does not add env
+    that was never set in the first place --- which is exactly why the
+    warning's advice is "relaunch", never "restart".
+    """
+    logger = logging.getLogger("simba.memory")
+    active = "MallocStackLogging" in os.environ
+    logger.info(
+        "[startup] MallocStackLogging %s in this process",
+        "ACTIVE" if active else "inactive",
+    )
+    if config.malloc_stack_logging and not active:
+        logger.warning(
+            "[startup] memory.malloc_stack_logging=True but this process was "
+            "launched without MallocStackLogging set --- relaunch it (a "
+            "restart execv preserves env, it does not add it) to arm stack "
+            "logging for malloc_history."
+        )
+
+
 def main() -> None:
     """Start the memory daemon."""
     # Captured before argparse touches anything (argparse never mutates
@@ -862,6 +900,8 @@ def main() -> None:
         diagnostics_after=args.diagnostics_after,
         sync_interval=args.sync_interval,
     )
+
+    _log_malloc_stack_logging_status(config)
 
     # Bind-first: before ANY model/DB work, refuse to load 2.5GB just to
     # discover the port is taken (see _bind_probe_or_exit's docstring).

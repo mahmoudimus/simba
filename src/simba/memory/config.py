@@ -626,6 +626,34 @@ class MemoryConfig:
     # keeps the original zombie diagnosis (exit non-zero). 0 reproduces the
     # old single-check behavior exactly.
     bind_probe_grace_seconds: float = 45.0
+    # Diagnostic-only: arms macOS malloc stack logging on every daemon spawn
+    # (hook auto-start, `simba server` CLI, the restart execv chain) so
+    # `malloc_history <pid> -callTree` can attribute RSS bursts to actual
+    # allocation call stacks. 2026-07-19: a 16.7GB RSS peak had NO
+    # attributable stacks because the daemon that ended up serving was an
+    # unarmed hook auto-start (or a watchdog execv descendant of one) ---
+    # `MallocStackLogging` must be set in the environment at PROCESS SPAWN;
+    # it cannot be injected into an already-running process. When True, every
+    # spawn path sets `MallocStackLogging=lite` in the child (or, for the
+    # execv chain, the already-current) environment before the daemon boots.
+    # Default OFF: `lite` mode adds allocator overhead, so this stays an
+    # explicit opt-in for active RSS-burst diagnosis, never a standing
+    # default.
+    malloc_stack_logging: bool = False
+
+
+def resolve_malloc_stack_logging(root: pathlib.Path | None = None) -> bool:
+    """Resolve `memory.malloc_stack_logging` for a daemon spawn helper.
+
+    Fail-open to the dataclass default (``False``) so a spawn path never
+    refuses to start the daemon over a broken/missing config file --- mirrors
+    ``resolve_max_content_length``'s fail-open contract below.
+    """
+    try:
+        cfg = simba.config.load("memory", root)
+        return bool(getattr(cfg, "malloc_stack_logging", False))
+    except Exception:
+        return False
 
 
 def resolve_max_content_length(root: pathlib.Path | None = None) -> int:

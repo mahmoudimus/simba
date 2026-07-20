@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import unittest.mock
 
@@ -146,6 +147,109 @@ class TestSessionStartHook:
             simba.hooks.session_start._auto_start_daemon(tmp_path)
 
         assert log_path.read_text().startswith("prior daemon output\n")
+
+    @pytest.mark.real_daemon_spawn
+    def test_auto_start_daemon_injects_malloc_stack_logging_env(self, tmp_path):
+        """2026-07-19: a 16.7GB RSS burst had no attributable allocator
+        stacks because the daemon that ended up serving was an unarmed hook
+        auto-start. When memory.malloc_stack_logging resolves True, the
+        spawned daemon's env must carry MallocStackLogging=lite --- the env
+        var macOS's malloc_history needs, and one that can only be set at
+        process SPAWN, never injected into an already-running process."""
+        captured: dict = {}
+
+        def _fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start.subprocess.Popen",
+                side_effect=_fake_popen,
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._hooks_cfg",
+                return_value=unittest.mock.MagicMock(
+                    poll_attempts=1, poll_interval=0.0
+                ),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+            unittest.mock.patch(
+                "simba.memory.config.resolve_malloc_stack_logging",
+                return_value=True,
+            ),
+        ):
+            simba.hooks.session_start._auto_start_daemon(tmp_path)
+
+        assert captured["env"]["MallocStackLogging"] == "lite"
+
+    @pytest.mark.real_daemon_spawn
+    def test_auto_start_daemon_does_not_inject_env_when_flag_false(self, tmp_path):
+        """Default (malloc_stack_logging=False): no MallocStackLogging key at
+        all --- not even set to something falsy --- so the spawned daemon's
+        env is byte-identical to before this lever existed."""
+        captured: dict = {}
+
+        def _fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start.subprocess.Popen",
+                side_effect=_fake_popen,
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._hooks_cfg",
+                return_value=unittest.mock.MagicMock(
+                    poll_attempts=1, poll_interval=0.0
+                ),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+            unittest.mock.patch(
+                "simba.memory.config.resolve_malloc_stack_logging",
+                return_value=False,
+            ),
+        ):
+            simba.hooks.session_start._auto_start_daemon(tmp_path)
+
+        assert "MallocStackLogging" not in captured.get("env", {})
+
+    @pytest.mark.real_daemon_spawn
+    def test_auto_start_daemon_never_mutates_parent_environ(self, tmp_path):
+        """The child env is a COPY --- injecting MallocStackLogging for the
+        spawned daemon must never leak into this (the hook's own) process."""
+        assert "MallocStackLogging" not in os.environ
+
+        def _fake_popen(args, **kwargs):
+            return unittest.mock.MagicMock()
+
+        with (
+            unittest.mock.patch(
+                "simba.hooks.session_start.subprocess.Popen",
+                side_effect=_fake_popen,
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._hooks_cfg",
+                return_value=unittest.mock.MagicMock(
+                    poll_attempts=1, poll_interval=0.0
+                ),
+            ),
+            unittest.mock.patch(
+                "simba.hooks.session_start._check_health", return_value=None
+            ),
+            unittest.mock.patch(
+                "simba.memory.config.resolve_malloc_stack_logging",
+                return_value=True,
+            ),
+        ):
+            simba.hooks.session_start._auto_start_daemon(tmp_path)
+
+        assert "MallocStackLogging" not in os.environ
 
     def test_auto_start_daemon_log_path_is_repo_root_aware(self, tmp_path):
         """The log lives next to the sqlite sidecar's `.simba`

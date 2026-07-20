@@ -7,6 +7,7 @@ gathers tailor session context, outputs combined additionalContext.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import subprocess
 import time
@@ -71,12 +72,22 @@ def _auto_start_daemon(cwd: pathlib.Path | None = None) -> bool:
         log_file = open(log_path, "a")  # noqa: SIM115 -- closed in `finally` below
     except OSError:
         return False
+    # Never mutate this (the hook's own) process's environment --- always
+    # spawn the daemon against a copy. When `memory.malloc_stack_logging` is
+    # True, arm the copy with `MallocStackLogging=lite` (2026-07-19: a
+    # 16.7GB RSS burst had no attributable stacks because the daemon that
+    # ended up serving was an unarmed hook auto-start like this one) --- the
+    # env can only be set at spawn time, never injected after the fact.
+    env = os.environ.copy()
+    if simba.memory.config.resolve_malloc_stack_logging(cwd):
+        env["MallocStackLogging"] = "lite"
     try:
         subprocess.Popen(
             ["uv", "run", "python", "-m", "simba.memory.server"],
             stdout=log_file,
             stderr=log_file,
             start_new_session=True,
+            env=env,
         )
     except (FileNotFoundError, OSError):
         return False
