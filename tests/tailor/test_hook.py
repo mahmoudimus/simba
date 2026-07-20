@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import types
 
 import pytest
 
@@ -450,3 +451,114 @@ class TestProcessHook:
             }
         )
         simba.tailor.hook.process_hook(hook_input)  # Should not raise
+
+
+class TestProcessHookBoundedTail:
+    """Stop fires on EVERY turn, and ``process_hook`` used to ``read_text()``
+    the WHOLE transcript unconditionally -- a co-culprit in a live 30GB daemon
+    RSS balloon (2026-07-20). ``hooks.stop_tail_mb`` now bounds the read to a
+    tail window, mirroring the PreToolUse fix. These are memory-bound proxies:
+    an error line inside the tail window is detected; the SAME error line
+    placed only at the START of an over-cap file (beyond the window) is not
+    -- proof no whole-file read happened.
+    """
+
+    _ERROR_MSG = (
+        "Error: something went wrong in the request handler while "
+        "processing the main application module for real this time"
+    )
+
+    @classmethod
+    def _transcript(
+        cls, tmp_path: pathlib.Path, *, filler_bytes: int, error_last: bool
+    ):
+        error_line = json.dumps({"toolUseResult": cls._ERROR_MSG})
+        filler_line = json.dumps({"toolUseResult": "x" * filler_bytes})
+        lines = [filler_line, error_line] if error_last else [error_line, filler_line]
+        path = tmp_path / "big.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def test_error_within_tail_window_detected(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+        monkeypatch.setattr(
+            simba.tailor.hook,
+            "_hooks_cfg",
+            lambda: types.SimpleNamespace(stop_tail_mb=0.1),
+        )
+
+        transcript_path = self._transcript(
+            tmp_path, filler_bytes=3_000_000, error_last=True
+        )
+        assert transcript_path.stat().st_size > 3_000_000  # sanity: over the cap
+
+        hook_input = json.dumps(
+            {"transcript_path": str(transcript_path), "cwd": str(tmp_path)}
+        )
+        simba.tailor.hook.process_hook(hook_input)
+
+        with simba.db.get_db(tmp_path) as conn:
+            rows = conn.execute("SELECT * FROM reflections").fetchall()
+        assert len(rows) == 1
+
+    def test_error_beyond_tail_window_not_detected(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+        monkeypatch.setattr(
+            simba.tailor.hook,
+            "_hooks_cfg",
+            lambda: types.SimpleNamespace(stop_tail_mb=1.0),
+        )
+
+        transcript_path = self._transcript(
+            tmp_path, filler_bytes=3_000_000, error_last=False
+        )
+        assert transcript_path.stat().st_size > 3_000_000  # sanity: over the cap
+
+        hook_input = json.dumps(
+            {"transcript_path": str(transcript_path), "cwd": str(tmp_path)}
+        )
+        simba.tailor.hook.process_hook(hook_input)
+
+        # DB may not even be created if nothing was ever stored.
+        if db_path.exists():
+            with simba.db.get_db(tmp_path) as conn:
+                rows = conn.execute("SELECT * FROM reflections").fetchall()
+            assert len(rows) == 0
+
+    def test_uses_configured_stop_tail_mb(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The cap comes from ``hooks.stop_tail_mb``, not a hardcoded value."""
+        import simba.hooks._tail as tail_mod
+
+        seen: dict = {}
+        real_read = tail_mod.read_tail_bytes
+
+        def _spy(path, cap_bytes):
+            seen["cap_bytes"] = cap_bytes
+            return real_read(path, cap_bytes)
+
+        monkeypatch.setattr(tail_mod, "read_tail_bytes", _spy)
+        monkeypatch.setattr(
+            simba.tailor.hook,
+            "_hooks_cfg",
+            lambda: types.SimpleNamespace(stop_tail_mb=0.5),
+        )
+        db_path = tmp_path / ".simba" / "simba.db"
+        monkeypatch.setattr(simba.db, "get_db_path", lambda cwd=None: db_path)
+
+        transcript_path = tmp_path / "small.jsonl"
+        transcript_path.write_text(
+            json.dumps({"toolUseResult": self._ERROR_MSG}) + "\n"
+        )
+        hook_input = json.dumps(
+            {"transcript_path": str(transcript_path), "cwd": str(tmp_path)}
+        )
+        simba.tailor.hook.process_hook(hook_input)
+        assert seen["cap_bytes"] == 500_000

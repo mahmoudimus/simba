@@ -25,6 +25,7 @@ import json
 import pathlib
 import tempfile
 
+import simba.hooks._tail
 import simba.memory.entropy_terms as entropy_terms
 
 # Module-level so tests can monkeypatch to a tmp_path (mirrors signal_flag).
@@ -32,6 +33,11 @@ _TMP_DIR = pathlib.Path(tempfile.gettempdir())
 _TURN_PREFIX = "claude-usage-turn-"
 _SESSION_PREFIX = "claude-usage-session-"
 _MAX_TERMS = 6
+# Fallback cap for extract_last_assistant_text when a caller doesn't pass an
+# explicit cap_bytes (mirrors hooks.stop_tail_mb's default of 16.0 MB; the
+# real production caller, UserPromptSubmit, always passes the configured
+# value -- this default only covers direct/test callers).
+_DEFAULT_TAIL_CAP_BYTES = 16_000_000
 
 
 def _safe(session_id: str) -> str:
@@ -151,19 +157,29 @@ def detect_used(
     return used
 
 
-def extract_last_assistant_text(transcript_path: str) -> str:
+def extract_last_assistant_text(
+    transcript_path: str, cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES
+) -> str:
     """Last assistant message's text parts from a transcript JSONL ("" on any
     trouble). The leftover-turn fallback's response source when Stop never
-    delivered one."""
+    delivered one.
+
+    Bounded to the tail ``cap_bytes`` of the file (2026-07-20, shares
+    ``hooks.stop_tail_mb`` with ``tailor.hook.process_hook``): this used to
+    ``read_text()`` the WHOLE transcript, the same shape that co-caused a live
+    30GB daemon RSS balloon on the Stop path. The last assistant message is
+    always near EOF, so a tail window is sufficient; one older than the
+    window degrades to "" -- an empty leftover-turn fallback, an edge case
+    already (Stop normally consumes the turn record before this ever runs).
+    """
     if not transcript_path:
         return ""
-    import pathlib as _pathlib
-
-    path = _pathlib.Path(transcript_path)
+    path = pathlib.Path(transcript_path)
     try:
-        lines = path.read_text().strip().split("\n")
+        tail, _ = simba.hooks._tail.read_tail_bytes(path, cap_bytes)
     except OSError:
         return ""
+    lines = tail.decode("utf-8", errors="replace").strip().split("\n")
     for line in reversed(lines):
         if not line:
             continue

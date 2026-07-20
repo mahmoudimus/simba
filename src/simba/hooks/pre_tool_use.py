@@ -23,6 +23,7 @@ import simba.db
 import simba.hooks._io
 import simba.hooks._kg_client
 import simba.hooks._memory_client
+import simba.hooks._tail
 import simba.redirect.check
 from simba.harness.core import CanonicalResult
 
@@ -45,30 +46,11 @@ def _hooks_cfg():
     return simba.config.load("hooks")
 
 
-def _read_tail_bytes(path: pathlib.Path, cap_bytes: int) -> tuple[bytes, int]:
-    """Read at most the last ``cap_bytes`` of ``path``, in binary mode.
-
-    Returns ``(tail_bytes, tail_start_offset)`` where ``tail_start_offset`` is
-    the absolute file offset of the first byte actually kept. When the file is
-    within ``cap_bytes``, the whole file is returned with offset 0. Otherwise
-    the seek lands mid-file, so the (possibly-partial) leading line is
-    discarded -- up to and including its first ``\\n`` -- so callers always see
-    whole JSONL lines; a window with no newline at all (a pathological single
-    giant line) yields an empty tail rather than a corrupt partial line.
-
-    May raise ``OSError`` -- callers decide the fallback.
-    """
-    size = path.stat().st_size
-    start = max(0, size - cap_bytes) if cap_bytes > 0 else 0
-    with path.open("rb") as fh:
-        fh.seek(start)
-        data = fh.read()
-    if start == 0:
-        return data, 0
-    nl = data.find(b"\n")
-    if nl == -1:
-        return b"", size
-    return data[nl + 1 :], start + nl + 1
+# Promoted to simba.hooks._tail.read_tail_bytes (2026-07-20): the same
+# whole-file-read shape recurred in tailor.hook / usage_signals, both of
+# which fire on every Stop hook. Kept as a private alias here so existing
+# call sites and tests in this module keep working unchanged.
+_read_tail_bytes = simba.hooks._tail.read_tail_bytes
 
 
 def _extract_thinking(transcript_path: pathlib.Path) -> str:
