@@ -83,3 +83,98 @@ def test_render_generic_block_reason_short_circuits():
 def test_native_to_canonical_map():
     assert claude.NATIVE_TO_CANONICAL["UserPromptSubmit"] == "prompt_submit"
     assert claude.NATIVE_TO_CANONICAL["PreCompact"] == "pre_compact"
+
+
+class TestCompactRelaySystemMessage:
+    """Compact relay leg A: PreCompact's terse ``systemMessage`` for the
+    human, gated on the resolved SIMBA_CLIENT (Codex's tolerance for the new
+    top-level field is unverified -- an unset client is treated as claude,
+    the primary caller)."""
+
+    def test_pre_compact_with_message_and_claude_client_emits_system_message(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        out = claude.render(
+            "PreCompact",
+            CanonicalResult(
+                suppress_output=True,
+                system_message="simba: exported 3 messages -> /tmp/x",
+            ),
+        )
+        assert json.loads(out) == {
+            "systemMessage": "simba: exported 3 messages -> /tmp/x"
+        }
+
+    def test_pre_compact_with_explicit_claude_code_client_emits_system_message(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        out = claude.render(
+            "PreCompact",
+            CanonicalResult(system_message="simba: exported 3 messages -> /tmp/x"),
+        )
+        assert json.loads(out) == {
+            "systemMessage": "simba: exported 3 messages -> /tmp/x"
+        }
+
+    def test_pre_compact_empty_system_message_stays_bare_object(self, monkeypatch):
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        out = claude.render("PreCompact", CanonicalResult(suppress_output=True))
+        assert json.loads(out) == {}
+
+    def test_pre_compact_system_message_suppressed_for_codex_client(self, monkeypatch):
+        monkeypatch.setenv("SIMBA_CLIENT", "codex")
+        out = claude.render(
+            "PreCompact",
+            CanonicalResult(system_message="simba: exported 3 messages -> /tmp/x"),
+        )
+        assert json.loads(out) == {}
+
+
+class TestPreToolContextLowSystemMessage:
+    """Compact relay leg C: the context-low nudge rides the same top-level
+    ``systemMessage`` channel, merged alongside PreToolUse's existing
+    hookSpecificOutput envelope (whichever shape it takes)."""
+
+    def test_context_injection_with_system_message_adds_top_level_field(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        out = claude.render(
+            "PreToolUse",
+            CanonicalResult(
+                additional_context="<context-low-warning>...</context-low-warning>",
+                system_message="simba: context is filling up -- /compact now",
+            ),
+        )
+        parsed = json.loads(out)
+        assert parsed["systemMessage"] == "simba: context is filling up -- /compact now"
+        assert (
+            parsed["hookSpecificOutput"]["additionalContext"]
+            == "<context-low-warning>...</context-low-warning>"
+        )
+
+    def test_context_injection_without_system_message_has_no_top_level_field(self):
+        out = claude.render("PreToolUse", CanonicalResult(additional_context="hi"))
+        assert "systemMessage" not in json.loads(out)
+
+    def test_pretool_system_message_suppressed_for_codex_client(self, monkeypatch):
+        monkeypatch.setenv("SIMBA_CLIENT", "codex")
+        out = claude.render(
+            "PreToolUse",
+            CanonicalResult(additional_context="hi", system_message="simba: nudge"),
+        )
+        assert "systemMessage" not in json.loads(out)
+
+    def test_pretool_deny_shape_still_gets_top_level_system_message(self, monkeypatch):
+        # Even the deny (permissionDecision) shape merges the field in --
+        # the gating/merge is generic, not tied to the plain-context branch.
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        out = claude.render(
+            "PreToolUse",
+            CanonicalResult(block_reason="nope", system_message="simba: nudge"),
+        )
+        parsed = json.loads(out)
+        assert parsed["systemMessage"] == "simba: nudge"
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"

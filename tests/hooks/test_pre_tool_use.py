@@ -799,6 +799,85 @@ class TestCheckContextLow:
         assert "context-low-warning" in ctx
 
 
+class TestContextLowSystemMessage:
+    """Compact relay leg C: a fired context-low warning also carries a short
+    ``systemMessage`` nudge, riding the same warn-once-per-boundary arming as
+    the existing ``additional_context`` warning (unchanged)."""
+
+    def _low_cfg(self, monkeypatch, tmp_path):
+        low_cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), context_low_bytes=100
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: low_cfg)
+        flag = tmp_path / "flag.json"
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_CONTEXT_LOW_FLAG", flag)
+
+    def test_fire_sets_system_message_on_canonical_result(self, tmp_path, monkeypatch):
+        self._low_cfg(monkeypatch, tmp_path)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("x" * 200 + "\n")
+
+        result = simba.hooks.pre_tool_use.run(
+            {
+                "tool_name": "Read",
+                "tool_input": {},
+                "transcript_path": str(transcript),
+            }
+        )
+        assert result.system_message
+        assert "compact" in result.system_message.lower()
+
+    def test_no_fire_leaves_system_message_empty(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("small\n")
+
+        result = simba.hooks.pre_tool_use.run(
+            {
+                "tool_name": "Read",
+                "tool_input": {},
+                "transcript_path": str(transcript),
+            }
+        )
+        assert result.system_message == ""
+
+    def test_no_transcript_path_leaves_system_message_empty(self):
+        result = simba.hooks.pre_tool_use.run({"tool_name": "Read", "tool_input": {}})
+        assert result.system_message == ""
+
+    def test_fire_renders_top_level_system_message(self, tmp_path, monkeypatch):
+        self._low_cfg(monkeypatch, tmp_path)
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("x" * 200 + "\n")
+
+        out = json.loads(
+            simba.hooks.pre_tool_use.main(
+                {
+                    "tool_name": "Read",
+                    "tool_input": {},
+                    "transcript_path": str(transcript),
+                }
+            )
+        )
+        assert out.get("systemMessage")
+        assert "compact" in out["systemMessage"].lower()
+
+    def test_no_fire_renders_no_top_level_system_message(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("small\n")
+
+        out = json.loads(
+            simba.hooks.pre_tool_use.main(
+                {
+                    "tool_name": "Read",
+                    "tool_input": {},
+                    "transcript_path": str(transcript),
+                }
+            )
+        )
+        assert "systemMessage" not in out
+
+
 class TestPreflightGate:
     """PreToolUse blocks a mutating tool with no preflight this turn (spec 28)."""
 

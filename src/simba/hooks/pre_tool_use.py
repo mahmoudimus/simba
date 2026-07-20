@@ -592,12 +592,24 @@ def run(hook_input: dict) -> CanonicalResult:
 
     parts: list[str] = []
     escalated_block: str | None = None
+    system_message = ""
 
     # --- Context-low check (fires for any tool, once per session) ---
     if transcript_path_str:
         warning = _check_context_low(pathlib.Path(transcript_path_str))
         if warning:
             parts.append(warning)
+            # Compact relay leg C: the additional_context warning above is
+            # MODEL-facing (and PreToolUse's additionalContext channel is
+            # gone under the new hook schema anyway); this rides the
+            # top-level systemMessage so the HUMAN sees the nudge too. Fires
+            # exactly when the warning above fires -- same warn-once-per-
+            # compaction-boundary arming (_check_context_low's own), not
+            # re-implemented here.
+            system_message = (
+                "simba: context is filling up -- /compact now will distill + "
+                "relay learnings across the boundary"
+            )
 
     # --- Tool-rule check (fires before thinking recall) ---
     if tool_input:
@@ -701,12 +713,18 @@ def run(hook_input: dict) -> CanonicalResult:
                 parts.append(formatted)
 
     if not parts:
-        return CanonicalResult(escalated_block=escalated_block)
+        return CanonicalResult(
+            escalated_block=escalated_block, system_message=system_message
+        )
 
     combined = "\n\n".join(parts)
     tokens = len(combined) // 4
     combined += f"\n[simba: ~{tokens} tokens injected]"
-    return CanonicalResult(additional_context=combined, escalated_block=escalated_block)
+    return CanonicalResult(
+        additional_context=combined,
+        escalated_block=escalated_block,
+        system_message=system_message,
+    )
 
 
 def main(hook_input: dict) -> str:

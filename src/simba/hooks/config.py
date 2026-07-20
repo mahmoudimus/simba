@@ -356,3 +356,12 @@ class HooksConfig:
     # actual redirect rule always requires an explicit `simba rule promote
     # <id>` approval.
     arc_promotion_min_evidence: int = 3
+
+    # Compact relay leg B: number of recent distilled failure->fix arcs
+    # (failure_arc table) re-injected into SessionStart's source="compact"
+    # branch -- the summarizer that runs across a compaction boundary drops
+    # this kind of specific, hard-won context, so it's relayed to the model
+    # directly instead. Extends the existing default-on compact-branch
+    # injection (pending-extraction notice); keep small -- this is per-
+    # compaction context, not a transcript briefing. 0 disables the block.
+    compact_relay_arcs_k: int = 5

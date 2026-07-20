@@ -39,6 +39,12 @@ class CanonicalResult:
     # callers (e.g. the pi bridge prints "[simba: N memories injected]") so recall
     # is visible, not magic.
     memory_count: int = 0
+    # A short, human-facing note rendered as Claude/Codex's top-level
+    # ``systemMessage`` field (compact relay: PreCompact leg A, PreToolUse
+    # context-low leg C) -- distinct from ``additional_context``, which is
+    # MODEL-facing and travels inside ``hookSpecificOutput``. Empty (default)
+    # means "nothing to say"; renderers omit the field rather than emit "".
+    system_message: str = ""
     # v2 fields (defined for forward-compat; unused in MVP):
     block_reason: str | None = None
     transform: dict | None = None

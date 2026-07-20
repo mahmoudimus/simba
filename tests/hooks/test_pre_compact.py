@@ -115,7 +115,9 @@ class TestPreCompactMain:
                 )
             )
 
-        assert result == {}
+        # A real export happened -> compact relay leg A's systemMessage fires
+        # (the ambient SIMBA_CLIENT is unset in-process, treated as claude).
+        assert result["systemMessage"].startswith("simba: exported 1 message")
 
         session_dir = fake_home / ".claude" / "transcripts" / "test-session"
         assert (session_dir / "transcript.jsonl").exists()
@@ -146,7 +148,8 @@ class TestPreCompactMain:
                 )
             )
 
-        assert result == {}
+        # A real export happened -> compact relay leg A's systemMessage fires.
+        assert result["systemMessage"].startswith("simba: exported 1 message")
 
         session_dir = fake_home / ".claude" / "transcripts" / "codex-session"
         metadata = json.loads((session_dir / "metadata.json").read_text())
@@ -190,6 +193,47 @@ class TestPreCompactMain:
                     }
                 )
             assert not sf.flag_path("compact-session").exists()
+
+
+class TestCompactRelaySystemMessage:
+    """Leg A: PreCompact's ``run()`` populates CanonicalResult.system_message
+    on a real export, and leaves it empty when nothing happened."""
+
+    def test_system_message_populated_on_successful_export(self, tmp_path):
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "test"}}) + "\n"
+        )
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+
+        with unittest.mock.patch("pathlib.Path.home", return_value=fake_home):
+            result = simba.hooks.pre_compact.run(
+                {
+                    "session_id": "sysmsg-session",
+                    "transcript_path": str(transcript),
+                    "cwd": str(tmp_path),
+                }
+            )
+
+        assert result.system_message
+        assert result.system_message.startswith("simba: exported 1 message")
+        session_dir = fake_home / ".claude" / "transcripts" / "sysmsg-session"
+        assert str(session_dir) in result.system_message
+
+    def test_system_message_empty_on_no_transcript_path(self):
+        result = simba.hooks.pre_compact.run({"session_id": "abc"})
+        assert result.system_message == ""
+
+    def test_system_message_empty_on_missing_session_id(self):
+        result = simba.hooks.pre_compact.run({"transcript_path": "/tmp/t.jsonl"})
+        assert result.system_message == ""
+
+    def test_system_message_empty_on_nonexistent_transcript(self, tmp_path):
+        result = simba.hooks.pre_compact.run(
+            {"session_id": "abc", "transcript_path": str(tmp_path / "no.jsonl")}
+        )
+        assert result.system_message == ""
 
 
 class TestRlmDigestTrigger:

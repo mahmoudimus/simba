@@ -63,6 +63,37 @@ def test_dispatch_canonical_injects_process_cwd_when_absent(monkeypatch):
     assert captured["payload"]["cwd"] == os.getcwd()
 
 
+def test_hook_via_daemon_round_trips_system_message(monkeypatch):
+    """CLI-side half of the compact-relay serialization finding: the daemon
+    JSON body's ``system_message`` must survive into the reconstructed
+    CanonicalResult (``_hook_via_daemon`` previously dropped any field it
+    didn't explicitly list)."""
+    import httpx
+
+    import simba.__main__ as cli
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "additional_context": "",
+                "suppress_output": False,
+                "memory_count": 0,
+                "block_reason": None,
+                "transform": None,
+                "escalated_block": None,
+                "system_message": "simba: context is filling up",
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _FakeResp())
+
+    result = cli._hook_via_daemon("pre_tool", {"cwd": "/tmp"})
+
+    assert result is not None
+    assert result.system_message == "simba: context is filling up"
+
+
 def test_dispatch_canonical_preserves_explicit_cwd(monkeypatch):
     """An explicit cwd in the payload is not overwritten by the process cwd."""
     import simba.__main__ as cli

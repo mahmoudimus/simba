@@ -102,6 +102,34 @@ def list_for_session(
         )
 
 
+def list_recent_resolved(
+    project_path: str, limit: int, *, cwd: pathlib.Path | None = None
+) -> list[FailureArc]:
+    """Return the ``limit`` most-recently-created RESOLVED arcs for
+    ``project_path``, newest first.
+
+    Used by SessionStart's compact-relay injection (``source == "compact"``)
+    to re-surface distilled failure->fix lessons the summarizer drops across
+    a compaction boundary. Bounded via a SQL ``LIMIT`` -- never a table scan.
+    ``FailureArc`` carries a ``project_path`` column (unlike some other
+    sidecar tables), so this scopes to the current project rather than
+    falling back to a global query. ``created_at`` is an ISO-8601 ``...Z``
+    string (``workflow/_time.resolve``), which sorts lexicographically in
+    chronological order.
+    """
+    with simba.db.connect(cwd):
+        query = (
+            FailureArc.select()
+            .where(
+                (FailureArc.project_path == project_path)
+                & (FailureArc.resolved == True)  # noqa: E712 -- peewee expression
+            )
+            .order_by(FailureArc.created_at.desc())
+            .limit(limit)
+        )
+        return list(query)
+
+
 def list_all(*, cwd: pathlib.Path | None = None) -> list[FailureArc]:
     """Return every arc recorded (any session, any order).
 

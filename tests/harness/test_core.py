@@ -13,6 +13,7 @@ def test_canonical_result_defaults():
     assert r.block_reason is None
     assert r.transform is None
     assert r.escalated_block is None
+    assert r.system_message == ""
 
 
 def test_dispatch_unknown_event_raises():
