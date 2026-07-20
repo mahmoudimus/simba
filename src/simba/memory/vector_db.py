@@ -15,11 +15,14 @@ logger = logging.getLogger("simba.memory")
 # Columns a vector-search caller actually reads off each result row -- NEVER
 # `vector` itself. Mirrors `simba.memory.hybrid`'s `_session_record`/
 # `_from_vector` field set (duplicated rather than imported: `hybrid` imports
-# THIS module, so the reverse import would cycle). `_distance` is not listed
-# here because LanceDB auto-includes it for a vector-search `.to_list()`
-# regardless of `.select()` (2026-07-18: `.select()` still excludes `vector`
-# even on a vector-search query -- verified against lancedb 0.27).
+# THIS module, so the reverse import would cycle). `_distance` IS listed
+# explicitly: Lance auto-includes it today but WARNs it as deprecated
+# ("disable_scoring_autoprojection"), and a future release will stop --
+# which would silently break similarity scoring (observed live 2026-07-20).
+# (`.select()` still excludes `vector` even on a vector-search query --
+# verified against lancedb 0.27.)
 _SEARCH_RESULT_FIELDS: tuple[str, ...] = (
+    "_distance",
     "id",
     "type",
     "content",
@@ -196,9 +199,11 @@ async def find_duplicates(
             await table.vector_search(embedding)
             .column("vector")
             .distance_type("cosine")
-            # Only `id`/`type` are read below (2026-07-18); `_distance` is
-            # auto-included by LanceDB's vector-search `.to_list()`.
-            .select(["id", "type"])
+            # Only `id`/`type`/`_distance` are read below (2026-07-18).
+            # `_distance` is requested EXPLICITLY: Lance's auto-inclusion is
+            # deprecated (WARN observed live 2026-07-20) and a future release
+            # will drop it, silently breaking the similarity threshold.
+            .select(["_distance", "id", "type"])
             .limit(5)
             .to_list()
         )
