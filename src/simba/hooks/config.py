@@ -81,6 +81,17 @@ class HooksConfig:
     # compaction (the live-context proxy), NOT cumulative file size. Calibrated for
     # a large (~1M-token) window; tune via `simba config set hooks.context_low_bytes`.
     context_low_bytes: int = 8_000_000
+    # Bounded tail window for the pre-tool inspectors (2026-07-20 incident): both
+    # ``_extract_thinking`` and ``_post_compaction_tail_bytes`` used to read the
+    # ENTIRE transcript file to find something that is always near EOF (the last
+    # thinking block / the last compaction marker). PreToolUse fires on every
+    # tool call and the same code runs daemon-side via the /hook/pre_tool bridge,
+    # concurrently across sessions -- five concurrent requests against ~2.1GB
+    # Codex rollouts produced ~30GB of in-flight allocations. Both inspectors now
+    # read at most this many megabytes from the END of the file. Trade-off: a
+    # thinking block or compaction marker older than the tail window is treated
+    # as not-found -- acceptable, both only ever want the MOST RECENT occurrence.
+    pre_tool_tail_mb: float = 16.0
 
     # Tool rules (auto-learning from failures)
     rule_check_enabled: bool = True
