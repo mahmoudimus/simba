@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import sys
 
 import pytest
 
@@ -382,3 +383,68 @@ class TestBudgetEviction:
         p.write_text("hello world", encoding="utf-8")
         store.add_path("s1", p)
         assert store.get("s1").text == "hello world"
+
+
+class TestEagerRetainedBytesAccounting:
+    """The eager ``_Document.retained_bytes()`` must honestly account for
+    the per-line string OBJECT overhead of ``.lines`` (and the per-int
+    overhead of ``.line_starts``), not just double the text object's size.
+    Under many-short-line documents the old ``sys.getsizeof(text) * 2``
+    estimate under-counted real retention 3-5x in production (a live
+    daemon capture showed ~4.7GB of split-line strings on a store that
+    believed it was within budget), causing the DocumentStore LRU to
+    under-evict."""
+
+    @staticmethod
+    def _many_short_lines_text(n_lines: int = 50_000, line: str = "abc") -> str:
+        return "\n".join([line] * n_lines)
+
+    @classmethod
+    def _true_retained_bytes(cls, text: str) -> int:
+        """Independently computed honest sum -- text + the per-line list
+        (list object + every line's string object) + the per-line offset
+        list (list object + every int's object), mirroring exactly what
+        the eager ``_Document`` retains."""
+        lines = text.split("\n")
+        line_starts = [0]
+        pos = 0
+        for line in lines[:-1]:
+            pos += len(line) + 1
+            line_starts.append(pos)
+        return (
+            sys.getsizeof(text)
+            + sys.getsizeof(lines)
+            + sum(sys.getsizeof(line) for line in lines)
+            + sys.getsizeof(line_starts)
+            + sum(sys.getsizeof(n) for n in line_starts)
+        )
+
+    def test_retained_bytes_reflects_true_per_line_overhead(self):
+        text = self._many_short_lines_text()
+        store = ctx.DocumentStore()
+        store.add("d1", text)
+        doc = store.get("d1")
+
+        true_sum = self._true_retained_bytes(text)
+        old_estimate = sys.getsizeof(text) * 2
+
+        accounted = doc.retained_bytes()
+        assert accounted >= true_sum
+        assert accounted > old_estimate * 1.5
+
+    def test_eviction_budget_honors_honest_accounting(self, tmp_path):
+        # Honest single-doc footprint here is ~4.7MB (~11x the old `* 2`
+        # estimate of ~0.4MB). Size the budget so the OLD estimate would
+        # have happily admitted two such docs (2 * ~0.4MB is well under
+        # 5MB) but honest accounting only admits one (2 * ~4.7MB > 5MB).
+        text = self._many_short_lines_text()
+        store = ctx.DocumentStore(
+            max_document_mb=1000.0, store_budget_mb=5.0, tmp_dir=tmp_path / "spill"
+        )
+        store.add("d1", text)
+        assert store._docs["d1"].lazy is False  # still eager, nothing evicted yet
+
+        store.add("d2", text)
+
+        assert store._docs["d1"].lazy is True  # LRU-evicted once d2 hit the budget
+        assert store._docs["d2"].lazy is False  # newest doc keeps its fast path
