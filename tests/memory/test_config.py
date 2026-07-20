@@ -153,3 +153,11 @@ class TestRssWatchdogDefaults:
 class TestBindProbeGraceDefault:
     def test_bind_probe_grace_seconds_default(self) -> None:
         assert config.MemoryConfig().bind_probe_grace_seconds == 45.0
+
+
+class TestMallocStackLoggingDefault:
+    """Diagnostic-only lever (2026-07-19 16.7GB RSS burst with no attributable
+    stacks) — adds allocator overhead, so it stays an explicit opt-in."""
+
+    def test_malloc_stack_logging_off_by_default(self) -> None:
+        assert config.MemoryConfig().malloc_stack_logging is False
