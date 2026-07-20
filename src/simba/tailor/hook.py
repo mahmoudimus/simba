@@ -15,7 +15,9 @@ import sys
 import time
 
 import simba._vendor.peewee as pw
+import simba.config
 import simba.db
+import simba.hooks._tail
 
 
 def _init_reflections_schema(conn) -> None:
@@ -45,6 +47,20 @@ def _init_reflections_schema(conn) -> None:
 
 
 simba.db.register_schema(_init_reflections_schema)
+
+
+def _hooks_cfg():
+    """Load the hooks config section (registers it on first access).
+
+    ``tailor.hook`` already depends on ``simba.db``, which itself imports
+    ``simba.config`` -- so this adds no new dependency edge, just a direct
+    import instead of a transitive one (``simba.config`` has no import of
+    ``simba.tailor``/``simba.db``, so there is no cycle).
+    """
+    import simba.hooks.config
+
+    _ = simba.hooks.config  # ensure the "hooks" section is registered
+    return simba.config.load("hooks")
 
 
 class Reflection(simba.db.BaseModel):
@@ -198,7 +214,18 @@ def parse_transcript_content(lines: list[str]) -> str:
 
 
 def process_hook(input_str: str) -> None:
-    """Main hook processing pipeline."""
+    """Main hook processing pipeline.
+
+    Transcript reads are bounded to a tail window (``hooks.stop_tail_mb``,
+    2026-07-20): this used to ``read_text()`` the WHOLE transcript
+    unconditionally on EVERY Stop hook fire -- a co-culprit in a live 30GB
+    daemon RSS balloon (Stop fires every turn, unlike PreToolUse/PreCompact,
+    whose reads were bounded separately). Error detection now only sees the
+    most recent window: an error line that has scrolled out of the tail is no
+    longer (re-)detected on THIS pass, but it was already reflected by an
+    EARLIER turn's pass over the transcript -- Stop fires every turn, so
+    nothing is permanently missed, only already-seen.
+    """
     if not input_str:
         return
 
@@ -214,8 +241,10 @@ def process_hook(input_str: str) -> None:
     if not transcript_path.exists():
         return
 
+    cap_bytes = int(_hooks_cfg().stop_tail_mb * 1_000_000)
     try:
-        transcript_content = transcript_path.read_text()
+        tail, _ = simba.hooks._tail.read_tail_bytes(transcript_path, cap_bytes)
+        transcript_content = tail.decode("utf-8", errors="replace")
         transcript_lines = [
             line for line in transcript_content.strip().split("\n") if line
         ]

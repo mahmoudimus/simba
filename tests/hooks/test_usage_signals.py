@@ -228,6 +228,99 @@ def test_extract_last_assistant_text(tmp_path) -> None:
     assert us.extract_last_assistant_text(str(tmp_path / "missing.jsonl")) == ""
 
 
+class TestExtractLastAssistantTextBoundedTail:
+    """``extract_last_assistant_text`` is the leftover-turn fallback's response
+    source, fired from UserPromptSubmit on every turn Stop didn't consume its
+    own record -- it used to ``read_text()`` the WHOLE transcript, the same
+    shape that co-caused a live 30GB daemon RSS balloon on the Stop path
+    (2026-07-20). It now shares the bounded-tail helper via a ``cap_bytes``
+    parameter, mirroring the PreToolUse ``_extract_thinking`` fix.
+    """
+
+    @staticmethod
+    def _transcript(tmp_path, *, filler_bytes: int, text_last: bool):
+        assistant_entry = {
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Handled INTERR 50815."}],
+            }
+        }
+        filler_line = json.dumps({"type": "user", "m": "x" * filler_bytes})
+        lines = (
+            [filler_line, json.dumps(assistant_entry)]
+            if text_last
+            else [json.dumps(assistant_entry), filler_line]
+        )
+        path = tmp_path / "big.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def test_text_within_tail_window_found(self, tmp_path) -> None:
+        path = self._transcript(tmp_path, filler_bytes=3_000_000, text_last=True)
+        assert path.stat().st_size > 3_000_000  # sanity: file exceeds the tiny cap
+        result = us.extract_last_assistant_text(str(path), cap_bytes=100_000)
+        assert "INTERR 50815" in result
+
+    def test_text_beyond_tail_window_not_found(self, tmp_path) -> None:
+        # Memory-bound proxy: the assistant text sits at the START of a 3MB
+        # file and the 1MB cap never reaches back that far -> "" proves we no
+        # longer read the whole file (the old unbounded code would find it).
+        path = self._transcript(tmp_path, filler_bytes=3_000_000, text_last=False)
+        assert path.stat().st_size > 3_000_000
+        result = us.extract_last_assistant_text(str(path), cap_bytes=1_000_000)
+        assert result == ""
+
+
+def test_ups_leftover_turn_uses_configured_stop_tail_mb(tmp_path, monkeypatch) -> None:
+    """UserPromptSubmit derives the cap from ``hooks.stop_tail_mb`` (same lever
+    the Stop-side tailor/usage_signals reads) instead of hardcoding one."""
+    import simba.hooks.user_prompt_submit as ups
+
+    cfg = hooks_config.HooksConfig(
+        usage_signals_enabled=True, prompt_min_length=1, stop_tail_mb=0.5
+    )
+    monkeypatch.setattr(ups, "_cfg", lambda: cfg)
+    monkeypatch.setattr(
+        "simba.hooks._memory_client.post_feedback", lambda *a, **kw: True
+    )
+    us.record_turn_injections(
+        "sess-cap", [{"id": "m_prev", "content": "the INTERR 50815 fix"}]
+    )
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Handled it."}],
+                }
+            }
+        )
+    )
+    seen: dict = {}
+    real_extract = us.extract_last_assistant_text
+
+    def _spy(path, cap_bytes=None):
+        seen["cap_bytes"] = cap_bytes
+        if cap_bytes is not None:
+            return real_extract(path, cap_bytes)
+        return real_extract(path)
+
+    monkeypatch.setattr(us, "extract_last_assistant_text", _spy)
+    with unittest.mock.patch(
+        "simba.hooks._memory_client.recall_memories", return_value=[]
+    ):
+        ups.main(
+            {
+                "prompt": "next prompt long enough",
+                "cwd": None,
+                "session_id": "sess-cap",
+                "transcript_path": str(transcript),
+            }
+        )
+    assert seen["cap_bytes"] == 500_000
+
+
 def test_ups_processes_leftover_turn_from_transcript(tmp_path, monkeypatch) -> None:
     """Spec 33 round 2: this harness never delivered Stop (measured live —
     un-swept counts, capsule never signal-gated), so the NEXT prompt's

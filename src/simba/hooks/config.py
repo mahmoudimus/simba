@@ -92,6 +92,22 @@ class HooksConfig:
     # thinking block or compaction marker older than the tail window is treated
     # as not-found -- acceptable, both only ever want the MOST RECENT occurrence.
     pre_tool_tail_mb: float = 16.0
+    # Bounded tail window for Stop-hook transcript scans (2026-07-20): unlike
+    # PreToolUse's inspectors above (which only ever want the single MOST
+    # RECENT thinking block / compaction marker), ``tailor.hook.process_hook``
+    # scans the whole turn for ERROR PATTERNS and ``usage_signals.
+    # extract_last_assistant_text`` looks for the last assistant message --
+    # both used to read_text() the ENTIRE transcript unconditionally on every
+    # Stop hook fire (every turn, not just every tool call), and were a
+    # co-culprit in a live 30GB daemon RSS balloon alongside the PreToolUse
+    # whole-file reads. Both now read at most this many megabytes from the
+    # END of the file. Trade-off for tailor: error detection only sees the
+    # most recent window -- an error line that scrolls out of the window is
+    # no longer (re-)detected on THIS turn, but it was already reflected by
+    # an earlier turn's pass over the transcript, since Stop fires every
+    # turn. 0 disables the cap (reads the whole transcript, the pre-fix
+    # behavior).
+    stop_tail_mb: float = 16.0
 
     # Tool rules (auto-learning from failures)
     rule_check_enabled: bool = True

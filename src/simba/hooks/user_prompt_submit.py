@@ -341,8 +341,11 @@ def run(hook_input: dict) -> CanonicalResult:
             # UserPromptSubmit is the one hook that provably fires every turn.
             # When Stop DID run, the record is gone and this is a no-op.
             if usage_signals.read_turn(session_id):
+                # Bounded tail (2026-07-20): reuse hooks.stop_tail_mb, the same
+                # cap tailor.hook and the Stop-side reader key off of.
+                tail_cap_bytes = int(getattr(cfg, "stop_tail_mb", 16.0) * 1_000_000)
                 prev_response = usage_signals.extract_last_assistant_text(
-                    hook_input.get("transcript_path", "")
+                    hook_input.get("transcript_path", ""), cap_bytes=tail_cap_bytes
                 )
                 if prev_response:
                     usage_signals.process_turn_outcome(session_id, prev_response, cfg)
