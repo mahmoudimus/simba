@@ -205,6 +205,12 @@ class TestSizeCap:
         fake_home.mkdir()
 
         self._patch_cap(monkeypatch, cap_mb=1e-6)  # ~1 byte cap
+        # 2026-07-20: the over-cap path now ALSO spawns a detached distiller
+        # (see test_pre_compact_distill.py for that behavior in isolation) --
+        # this test is about the EXPORT skip/warning specifically, so stub
+        # Popen out rather than let a real `simba transcript distill`
+        # subprocess spawn during the unit suite.
+        monkeypatch.setattr(pc.subprocess, "Popen", unittest.mock.MagicMock())
 
         with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
             result = _run_main(fake_home, "cap-session", transcript, tmp_path)

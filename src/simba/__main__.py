@@ -4985,11 +4985,79 @@ def _cmd_transcript(args: list[str]) -> int:
             return 0
         print(f"could not mark extracted: {meta_path}")
         return 1
+    if sub == "distill":
+        return _cmd_transcript_distill(args[1:])
     print(
         "usage: simba transcript {pending [--project P] [--json] "
-        "| mark-extracted <session_id>}"
+        "| mark-extracted <session_id> "
+        "| distill <jsonl> [--session-id X] [--out DIR] [--project-path P]}"
     )
     return 1
+
+
+def _cmd_transcript_distill(args: list[str]) -> int:
+    """`simba transcript distill <jsonl> [--session-id X] [--out DIR]
+    [--project-path P]` -- bounded single-pass distillation (see
+    ``transcripts/distill.py``) plus persisting any failure->fix arcs it
+    found into the project's ``failure_arc`` sidecar table.
+    """
+    if not args or args[0].startswith("--"):
+        print(
+            "usage: simba transcript distill <jsonl> [--session-id X] "
+            "[--out DIR] [--project-path P]",
+            file=sys.stderr,
+        )
+        return 1
+
+    source = pathlib.Path(args[0])
+    session_id = _parse_opt_value(args, "--session-id") or source.stem
+    project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
+    out_arg = _parse_opt_value(args, "--out")
+
+    import simba.config
+    import simba.hooks.config  # registers "hooks"
+    import simba.transcripts as _tr
+    import simba.transcripts.arcs as _arcs
+    import simba.transcripts.distill as _distill
+
+    out_dir = (
+        pathlib.Path(out_arg) if out_arg else _tr.default_transcripts_dir() / session_id
+    )
+
+    cfg = simba.config.load("hooks")
+    result = _distill.distill_transcript(
+        source,
+        out_dir=out_dir,
+        session_id=session_id,
+        project_path=project_path,
+        max_output_mb=cfg.distill_max_output_mb,
+    )
+
+    for arc in result.arcs:
+        _arcs.upsert_arc(
+            session_source=session_id,
+            harness=result.stats.harness,
+            tool=arc.tool,
+            signature=arc.signature,
+            error_head=arc.error_head,
+            failed_args_head=arc.failed_args_head,
+            fix_args_head=arc.fix_args_head,
+            resolved=arc.resolved,
+            repeat_count=arc.repeat_count,
+            project_path=project_path,
+            cwd=pathlib.Path(project_path),
+        )
+
+    if result.skipped:
+        print(f"distill: skipped (marker matches) -- {result.md_path}")
+    else:
+        print(
+            f"distill: wrote {result.md_path} "
+            f"({result.stats.output_bytes} bytes, "
+            f"{len(result.arcs)} arcs, "
+            f"{result.stats.elapsed_seconds:.2f}s)"
+        )
+    return 0
 
 
 def _free_arg_text(

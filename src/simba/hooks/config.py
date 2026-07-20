@@ -292,3 +292,29 @@ class HooksConfig:
     # this cap skip the export entirely (WARNING logged; hook still returns
     # its normal result — fail-soft). 0 disables the cap.
     pre_compact_max_transcript_mb: float = 256.0
+
+    # Bounded transcript DISTILLER (2026-07-20): the size-cap skip above is
+    # correct (never parse an unbounded file in the daemon's own process) but
+    # blind -- a transcript over the cap is skipped entirely, so a session
+    # that happens to be huge teaches simba nothing. Observed live: a
+    # 2153.4MB Codex rollout ("skipping export") that was ~99% tool-output/
+    # telemetry noise around a single-digit-MB learning signal (user intent,
+    # assistant decisions, failure->fix arcs). When True, the over-cap path
+    # ADDITIONALLY spawns `simba transcript distill` (transcripts/distill.py)
+    # DETACHED -- a single bounded pass that writes a small transcript.md the
+    # existing learning-extraction flow picks up unchanged. This is a bounded
+    # replacement for a blind skip (strictly more signal recovered, never
+    # less), not a "SoTA lever" in the measured-behavior-change sense the
+    # other levers in this file graduate under -- hence default-ON rather
+    # than the usual default-OFF-until-measured. The in-daemon code path only
+    # ever does a size check, a marker check, and a Popen -- it must NEVER
+    # parse the transcript itself (that parse happens in the detached
+    # subprocess). Disable: `simba config set hooks.pre_compact_distill_enabled 0`.
+    pre_compact_distill_enabled: bool = True
+    # Output budget for the distiller's transcript.md (megabytes, decimal).
+    # Bounded via tiered degradation (tool-output head/tail dropped first,
+    # then tool-call heads, then assistant text, then user text) so the
+    # output never scales with source size -- failure->fix arcs are written
+    # from a separately-reserved section and survive even a worst-case
+    # squeeze of this budget. 0 effectively suppresses body content (arcs only).
+    distill_max_output_mb: float = 12.0

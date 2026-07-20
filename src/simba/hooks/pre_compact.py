@@ -26,6 +26,7 @@ import json
 import logging
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -295,6 +296,72 @@ def _maybe_consolidate_episodes(cwd: str) -> None:
     )
 
 
+def _spawn_distiller_detached(
+    session_id: str, transcript_path: pathlib.Path, cwd_str: str
+) -> None:
+    """Spawn ``simba transcript distill`` DETACHED for a transcript over
+    ``hooks.pre_compact_max_transcript_mb`` -- a bounded replacement for the
+    blind skip in ``_export_transcript`` (see ``hooks.pre_compact_distill_enabled``
+    in ``hooks/config.py`` and ``transcripts/distill.py``'s module docstring
+    for the full incident/rationale).
+
+    This runs IN the daemon process (same GIL as every other request), so it
+    does strictly: a marker check (cheap -- one small JSON file) and a
+    ``Popen``. It must NEVER parse the transcript itself -- that single-pass
+    scan happens entirely inside the detached subprocess. stdout/stderr go to
+    an append-mode ``distill.log`` under the session export dir (never
+    ``DEVNULL`` -- mirrors ``session_start.py``'s daemon-log rationale: a
+    crashed distiller must leave a trace).
+    """
+    import simba.transcripts
+    import simba.transcripts.distill as distill
+
+    session_dir = simba.transcripts.default_transcripts_dir() / session_id
+    try:
+        src_size = transcript_path.stat().st_size
+    except OSError:
+        return
+    if distill.marker_matches(session_dir, transcript_path, src_size):
+        logger.debug(
+            "[pre-compact] distill marker already matches for %s; skipping spawn",
+            transcript_path,
+        )
+        return
+
+    try:
+        session_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(session_dir / "distill.log", "a")  # noqa: SIM115 -- closed below
+    except OSError:
+        return
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "simba",
+                "transcript",
+                "distill",
+                str(transcript_path),
+                "--session-id",
+                session_id,
+                "--out",
+                str(session_dir),
+                "--project-path",
+                cwd_str,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+        )
+    except OSError:
+        logger.warning(
+            "[pre-compact] failed to spawn distiller for %s", transcript_path
+        )
+    finally:
+        log_file.close()
+
+
 def _export_transcript(
     session_id: str, transcript_path: pathlib.Path, cwd_str: str
 ) -> int | None:
@@ -321,6 +388,9 @@ def _export_transcript(
             src_size / 1_000_000,
             cap_mb,
         )
+        if cfg.pre_compact_distill_enabled:
+            with contextlib.suppress(Exception):
+                _spawn_distiller_detached(session_id, transcript_path, cwd_str)
         return None
 
     transcripts_dir = pathlib.Path.home() / ".claude" / "transcripts"
