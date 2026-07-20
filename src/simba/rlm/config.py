@@ -15,6 +15,23 @@ class RlmConfig:
     search_context_chars: int = 200
     regex_timeout_seconds: float = 2.0
     max_pattern_length: int = 500
+    # context.py — DocumentStore bounded/lazy mode. Post-mortem 2026-07-20:
+    # malloc_history on a live daemon (36GB RSS, 50.9GB peak) attributed the
+    # heap to a single 2153MB Codex transcript retained whole -- a 2062MB
+    # _io_FileIO_readall_impl buffer, 16.5GB in the newline decoder, and
+    # 21.3GB across 894k live per-line strings from _Document.text.split("\n").
+    # Documents at or under this size keep the fast in-memory (.text/.lines)
+    # path; anything larger is never refused, it is served through an
+    # offset-indexed lazy mode instead (seek + bounded decode per read --
+    # the full document is never materialized as one string).
+    max_document_mb: float = 64.0
+    # Total retained bytes across the DocumentStore (eager doc text + lazy
+    # offset-index arrays). Exceeding it evicts the least-recently-used
+    # documents' retained payload -- doc_id and source identity are kept, so
+    # a later read transparently rebuilds the offset index. Same 2026-07-20
+    # incident: a size cap per document is not enough if enough documents
+    # accumulate, so the store also caps its aggregate footprint.
+    store_budget_mb: float = 256.0
     # transcripts.py — TranscriptProvider
     lru_documents: int = 4
     transcript_source: str = "md"  # "md" | "jsonl"

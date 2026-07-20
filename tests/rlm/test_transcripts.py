@@ -54,3 +54,39 @@ def test_lru_eviction(tmp_path):
     assert not p.store.has("s1")
     assert p.store.has("s2")
     assert p.store.has("s3")
+
+
+class _CfgForcedLazy(_Cfg):
+    max_document_mb = 0.0  # force every transcript into lazy/offset-index mode
+
+
+def test_load_large_transcript_never_slurps(tmp_path, monkeypatch):
+    """The real 2026-07-20 RSS incident: TranscriptProvider.load() used to
+    read_text() the whole transcript before handing it to the DocumentStore.
+    A huge transcript must never be fully materialized -- not even
+    transiently -- on the way into the store."""
+    body = "line\n" * 500
+    _make_transcript(tmp_path, "big", body)
+
+    def _boom(*a, **k):
+        raise AssertionError("Path.read_text must not be called for a lazy transcript")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", _boom)
+
+    p = tr.TranscriptProvider(_CfgForcedLazy(), root=tmp_path)
+    p.load("big")
+    doc = p.store.get("big")
+    assert doc.lazy is True
+    assert not hasattr(doc, "text")
+    assert not hasattr(doc, "lines")
+    # still fully readable
+    assert doc.read_range(0, 4) == "line"
+
+
+def test_load_small_transcript_keeps_fast_path(tmp_path):
+    _make_transcript(tmp_path, "s1", "hello world")
+    p = tr.TranscriptProvider(_Cfg(), root=tmp_path)  # default max_document_mb (64MB)
+    p.load("s1")
+    doc = p.store.get("s1")
+    assert doc.lazy is False
+    assert doc.text == "hello world"

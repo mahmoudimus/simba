@@ -39,3 +39,10 @@ def test_digest_stale_after_seconds_default():
     # 0 => None => no stale-reclaim => preserves current rlm dedup behavior.
     cfg = simba.config.load("rlm")
     assert cfg.digest_stale_after_seconds == 0
+
+
+def test_document_store_bounds_defaults():
+    # Bounded/lazy DocumentStore knobs (2026-07-20 RSS incident).
+    cfg = simba.config.load("rlm")
+    assert cfg.max_document_mb == 64.0
+    assert cfg.store_budget_mb == 256.0
