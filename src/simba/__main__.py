@@ -417,10 +417,27 @@ def _latest_transcript_metadata() -> dict[str, Any] | None:
 
 
 def _extract_transcript_text(path: pathlib.Path) -> str:
-    """Extract plain text from markdown or JSONL transcript."""
+    """Extract plain text from markdown or JSONL transcript.
+
+    Size-capped by ``hooks.pre_compact_max_transcript_mb`` (same semantic as
+    the export path): slurping a multi-GB rollout here reproduces the
+    2026-07-20 RSS incident in the CLI process instead of the daemon.
+    """
     if not path.exists():
         return ""
     try:
+        import simba.hooks.config  # registers the "hooks" section
+
+        _ = simba.hooks.config
+        cap_mb = float(simba.config.load("hooks").pre_compact_max_transcript_mb)
+        if cap_mb > 0 and path.stat().st_size > cap_mb * 1024 * 1024:
+            print(
+                f"transcript {path} is over hooks.pre_compact_max_transcript_mb="
+                f"{cap_mb:.0f}MB; run `simba transcript distill` and extract from "
+                "the distilled export instead",
+                file=sys.stderr,
+            )
+            return ""
         raw = path.read_text()
     except OSError:
         return ""

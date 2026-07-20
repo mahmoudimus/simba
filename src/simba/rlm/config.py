@@ -32,6 +32,11 @@ class RlmConfig:
     # incident: a size cap per document is not enough if enough documents
     # accumulate, so the store also caps its aggregate footprint.
     store_budget_mb: float = 256.0
+    # engine.py — _load_transcript_text: the digest prompt reads at most the
+    # LAST this-many MB of the exported transcript.md (recent context is what
+    # a digest wants). Same 2026-07-20 incident class: distilled exports are
+    # ~12MB, but legacy pre-cap exports can be arbitrarily large. 0 disables.
+    digest_max_transcript_mb: float = 24.0
     # transcripts.py — TranscriptProvider
     lru_documents: int = 4
     transcript_source: str = "md"  # "md" | "jsonl"
