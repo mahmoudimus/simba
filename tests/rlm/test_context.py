@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import pathlib
+
 import pytest
 
 import simba.rlm.context as ctx
@@ -129,3 +132,253 @@ class TestSlices:
         w = c.window("d1", idx, 3)
         assert "ne2" in w or "lin" in w  # a slice around the offset
         assert len(w) <= 6
+
+
+# ---------------------------------------------------------------------------
+# Bounded/lazy DocumentStore (2026-07-20 RSS incident: a single huge document
+# retained as one string + one str-per-line blew a daemon to 50.9GB peak).
+# ---------------------------------------------------------------------------
+
+
+class _LazyCfg:
+    max_search_matches = 20
+    search_context_chars = 5
+    regex_timeout_seconds = 2.0
+    max_pattern_length = 500
+
+
+# Deliberately mixes: combining/precomposed accents, an astral-plane emoji
+# (surrogate pair on some platforms), consecutive empty lines, and no
+# trailing newline -- the awkward cases for a byte<->char offset index.
+UNICODE_FIXTURE = (
+    "line zero has café and é\n"
+    "\n"
+    "second line with emoji \U0001f600 here\n"
+    "\n"
+    "\n"
+    "final line no trailing newline"
+)
+
+
+class TestLazyDocumentNeverRetainsText:
+    def test_over_cap_doc_has_no_text_or_lines(self, tmp_path):
+        path = tmp_path / "big.txt"
+        path.write_text("x" * 5000, encoding="utf-8")
+        store = ctx.DocumentStore(max_document_mb=0.001, tmp_dir=tmp_path / "spill")
+        store.add_path("big", path)
+        doc = store.get("big")
+        assert doc.lazy is True
+        assert not hasattr(doc, "text")
+        assert not hasattr(doc, "lines")
+
+    def test_over_cap_doc_still_serves_reads(self, tmp_path):
+        path = tmp_path / "big.txt"
+        path.write_text("y" * 5000, encoding="utf-8")
+        store = ctx.DocumentStore(max_document_mb=0.001, tmp_dir=tmp_path / "spill")
+        store.add_path("big", path)
+        doc = store.get("big")
+        assert doc.read_range(0, 5) == "yyyyy"
+
+    def test_under_cap_doc_keeps_fast_path(self, tmp_path):
+        path = tmp_path / "small.txt"
+        path.write_text("small doc", encoding="utf-8")
+        store = ctx.DocumentStore(max_document_mb=64.0, tmp_dir=tmp_path / "spill")
+        store.add_path("small", path)
+        doc = store.get("small")
+        assert doc.lazy is False
+        assert doc.text == "small doc"
+        assert doc.lines == ["small doc"]
+
+    def test_over_cap_text_add_spills_and_stays_lazy(self, tmp_path):
+        store = ctx.DocumentStore(max_document_mb=0.001, tmp_dir=tmp_path / "spill")
+        store.add("big", "z" * 5000)
+        doc = store.get("big")
+        assert doc.lazy is True
+        assert not hasattr(doc, "text")
+        assert not hasattr(doc, "lines")
+        assert doc.read_range(0, 5) == "zzzzz"
+
+    def test_lazy_path_logs_info(self, tmp_path, caplog):
+        caplog.set_level(logging.INFO, logger="simba.rlm.context")
+        path = tmp_path / "big.txt"
+        path.write_text("z" * 5000, encoding="utf-8")
+        store = ctx.DocumentStore(max_document_mb=0.001, tmp_dir=tmp_path / "spill")
+        store.add_path("big", path)
+        assert any(
+            "big" in r.message and "lazy" in r.message.lower() for r in caplog.records
+        )
+
+
+class TestLazyEagerParity:
+    """Same fixture text, one eager store and one forced-lazy store; every
+    windowed op must return byte-identical results."""
+
+    def _stores(self, tmp_path, text=UNICODE_FIXTURE):
+        path = tmp_path / "fixture.txt"
+        path.write_text(text, encoding="utf-8")
+        eager = ctx.DocumentStore(max_document_mb=1000.0, tmp_dir=tmp_path / "e")
+        eager.add_path("d", path)
+        # Negative cap (not 0.0): 0.0 would still take the fast path for a
+        # zero-byte file (0 <= 0), which defeats the empty-file parity case.
+        lazy = ctx.DocumentStore(max_document_mb=-1.0, tmp_dir=tmp_path / "l")
+        lazy.add_path("d", path)
+        assert eager.get("d").lazy is False
+        assert lazy.get("d").lazy is True
+        return eager, lazy
+
+    @pytest.mark.parametrize(
+        "start,end",
+        [
+            (0, 5),
+            (0, 10_000),
+            (-10, 5),
+            (5, 3),
+            (10, 10),
+            (7, 40),
+            (0, 1),
+            (0, 0),
+            (1, 100),
+            (20, 45),
+            (58, 61),  # straddles the emoji
+        ],
+    )
+    def test_peek_parity(self, tmp_path, start, end):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        assert sl.peek("d", start, end) == se.peek("d", start, end)
+
+    @pytest.mark.parametrize(
+        "around,radius", [(0, 5), (10, 3), (500, 1000), (1, 0), (60, 5)]
+    )
+    def test_window_parity(self, tmp_path, around, radius):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        assert sl.window("d", around, radius) == se.window("d", around, radius)
+
+    @pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 5, 6, 20, 1000])
+    def test_head_parity(self, tmp_path, n):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        assert sl.head("d", n) == se.head("d", n)
+
+    @pytest.mark.parametrize("n", [0, 1, 2, 3, 4, 5, 6, 20, 1000])
+    def test_tail_parity(self, tmp_path, n):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        assert sl.tail("d", n) == se.tail("d", n)
+
+    def test_head_tail_parity_no_trailing_newline_fixture(self, tmp_path):
+        text = "one\ntwo\nthree"
+        eager, lazy = self._stores(tmp_path, text=text)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        for n in range(0, 5):
+            assert sl.head("d", n) == se.head("d", n)
+            assert sl.tail("d", n) == se.tail("d", n)
+
+    def test_head_tail_parity_empty_file(self, tmp_path):
+        eager, lazy = self._stores(tmp_path, text="")
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        for n in range(0, 3):
+            assert sl.head("d", n) == se.head("d", n)
+            assert sl.tail("d", n) == se.tail("d", n)
+
+    def test_grep_parity(self, tmp_path):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        me = se.grep("d", "line")
+        ml = sl.grep("d", "line")
+        assert [m.to_dict() for m in me] == [m.to_dict() for m in ml]
+        assert len(me) > 0
+
+    def test_grep_parity_unicode_pattern(self, tmp_path):
+        eager, lazy = self._stores(tmp_path)
+        se = ctx.DocumentSearcher(eager, _LazyCfg())
+        sl = ctx.DocumentSearcher(lazy, _LazyCfg())
+        me = se.grep("d", "\U0001f600")
+        ml = sl.grep("d", "\U0001f600")
+        assert [m.to_dict() for m in me] == [m.to_dict() for m in ml]
+        assert len(me) == 1
+
+
+class TestNoSlurpGuard:
+    def test_lazy_ops_never_call_path_read_text(self, tmp_path, monkeypatch):
+        text = UNICODE_FIXTURE * 50
+        path = tmp_path / "f.txt"
+        path.write_text(text, encoding="utf-8")
+
+        def _boom(*a, **k):
+            raise AssertionError(
+                "Path.read_text must not be called for a lazy document"
+            )
+
+        monkeypatch.setattr(pathlib.Path, "read_text", _boom)
+
+        store = ctx.DocumentStore(max_document_mb=0.0, tmp_dir=tmp_path / "spill")
+        store.add_path("d", path)  # ingest itself must not slurp
+        searcher = ctx.DocumentSearcher(store, _LazyCfg())
+
+        assert searcher.peek("d", 0, 10) == text[:10]
+        assert searcher.window("d", 5, 3) == text[max(0, 2) : 8]
+        assert searcher.head("d", 2) == "\n".join(text.split("\n")[:2])
+        assert searcher.tail("d", 2) == "\n".join(text.split("\n")[-2:])
+        assert len(searcher.grep("d", "line")) > 0
+
+
+class TestBudgetEviction:
+    def _many_line_file(self, path, n_lines=2000):
+        # No trailing newline -- keeps "line" count == n_lines exactly, so
+        # tail(1) is unambiguously "line" rather than a trailing empty line.
+        path.write_text("\n".join(["line"] * n_lines), encoding="utf-8")
+
+    def test_eviction_frees_lru_lazy_index(self, tmp_path):
+        store = ctx.DocumentStore(
+            max_document_mb=0.0, store_budget_mb=0.0002, tmp_dir=tmp_path / "spill"
+        )
+        for i in range(5):
+            p = tmp_path / f"t{i}.txt"
+            self._many_line_file(p)
+            store.add_path(f"d{i}", p)
+        doc0 = store._docs["d0"]
+        assert doc0.lazy is True
+        assert doc0.is_index_resident() is False  # LRU-evicted for budget
+
+    def test_evicted_doc_still_serves_reads(self, tmp_path):
+        store = ctx.DocumentStore(
+            max_document_mb=0.0, store_budget_mb=0.0002, tmp_dir=tmp_path / "spill"
+        )
+        for i in range(5):
+            p = tmp_path / f"t{i}.txt"
+            self._many_line_file(p)
+            store.add_path(f"d{i}", p)
+        searcher = ctx.DocumentSearcher(store, _LazyCfg())
+        assert searcher.head("d0", 2) == "line\nline"
+        assert searcher.tail("d0", 1) == "line"
+        # reading rebuilt the index
+        assert store._docs["d0"].is_index_resident() is True
+
+    def test_eviction_logs_debug(self, tmp_path, caplog):
+        caplog.set_level(logging.DEBUG, logger="simba.rlm.context")
+        store = ctx.DocumentStore(
+            max_document_mb=0.0, store_budget_mb=0.0002, tmp_dir=tmp_path / "spill"
+        )
+        for i in range(5):
+            p = tmp_path / f"t{i}.txt"
+            self._many_line_file(p)
+            store.add_path(f"d{i}", p)
+        assert any("evict" in r.message.lower() for r in caplog.records)
+
+    def test_within_budget_no_eviction(self, tmp_path):
+        store = ctx.DocumentStore(
+            max_document_mb=1000.0, store_budget_mb=256.0, tmp_dir=tmp_path / "spill"
+        )
+        p = tmp_path / "small.txt"
+        p.write_text("hello world", encoding="utf-8")
+        store.add_path("s1", p)
+        assert store.get("s1").text == "hello world"
