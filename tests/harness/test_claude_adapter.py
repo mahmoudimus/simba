@@ -23,9 +23,9 @@ def test_stop_no_response_is_empty_object():
     assert json.loads(out) == {}
 
 
-def test_pre_compact_missing_fields_suppresses_output():
+def test_pre_compact_missing_fields_is_bare_empty_object():
     out = simba.hooks.pre_compact.main({})
-    assert json.loads(out) == {"suppressOutput": True}
+    assert json.loads(out) == {}
 
 
 def test_session_start_returns_session_start_envelope():
@@ -48,9 +48,21 @@ def test_render_stop_empty_is_empty_object():
     assert json.loads(claude.render("Stop", CanonicalResult())) == {}
 
 
-def test_render_pre_compact_suppress():
+def test_render_pre_compact_is_bare_empty_object():
+    # Claude Code's tightened hook schema has NO PreCompact variant in the
+    # hookSpecificOutput union, and top-level fields (suppressOutput
+    # included) are all optional -- the only shape guaranteed to validate is
+    # a bare {}. See src/simba/harness/adapters/claude.py's PreCompact branch.
     out = claude.render("PreCompact", CanonicalResult(suppress_output=True))
-    assert json.loads(out) == {"suppressOutput": True}
+    assert json.loads(out) == {}
+
+
+def test_render_pre_compact_never_emits_hookspecificoutput():
+    # Even if a future caller populates additional_context, PreCompact
+    # cannot inject context under the new schema -- it must still collapse
+    # to a bare {}, never a hookSpecificOutput envelope.
+    out = claude.render("PreCompact", CanonicalResult(additional_context="hi"))
+    assert json.loads(out) == {}
 
 
 def test_render_pretool_block_reason_uses_pretool_deny():

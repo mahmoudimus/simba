@@ -84,7 +84,7 @@ class TestOverCapSpawnsDistillerDetached:
         monkeypatch.setattr(pc.subprocess, "Popen", fake_popen)
 
         result = _run_main(fake_home, "cap-session", transcript, tmp_path)
-        assert result.get("suppressOutput") is True
+        assert result == {}
 
         argv = captured["argv"]
         assert argv[:4] == [sys.executable, "-m", "simba", "transcript"]

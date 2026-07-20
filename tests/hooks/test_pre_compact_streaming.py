@@ -163,7 +163,7 @@ class TestIdempotentReexport:
         ):
             result = _run_main(fake_home, "idem-session", transcript, tmp_path)
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
         assert (session_dir / "transcript.md").read_text() == first_content
         assert any("skip" in rec.message.lower() for rec in caplog.records)
 
@@ -215,7 +215,7 @@ class TestSizeCap:
         with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
             result = _run_main(fake_home, "cap-session", transcript, tmp_path)
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
         session_dir = fake_home / ".claude" / "transcripts" / "cap-session"
         assert not (session_dir / "transcript.md").exists()
         assert not (session_dir / "transcript.jsonl").exists()
@@ -236,7 +236,7 @@ class TestSizeCap:
 
         result = _run_main(fake_home, "cap-zero-session", transcript, tmp_path)
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
         session_dir = fake_home / ".claude" / "transcripts" / "cap-zero-session"
         assert (session_dir / "transcript.md").exists()
 
@@ -297,14 +297,14 @@ class TestSingleFlight:
 
         assert errors == []
         assert len(results) == 2
-        assert all(r.get("suppressOutput") is True for r in results)
+        assert all(r == {} for r in results)
 
         # Guard released in `finally` — no leaked in-flight state.
         assert "concurrent-session" not in pc._INFLIGHT_SESSIONS
 
         # A third call proceeds normally (doesn't deadlock / stay locked out).
         result3 = _run_main(fake_home, "concurrent-session", transcript, tmp_path)
-        assert result3.get("suppressOutput") is True
+        assert result3 == {}
 
 
 class TestNoSlurp:
@@ -329,7 +329,7 @@ class TestNoSlurp:
 
         result = _run_main(fake_home, "no-slurp-session", transcript, tmp_path)
 
-        assert result.get("suppressOutput") is True
+        assert result == {}
         session_dir = fake_home / ".claude" / "transcripts" / "no-slurp-session"
         assert (session_dir / "transcript.md").exists()
         assert (session_dir / "transcript.jsonl").exists()

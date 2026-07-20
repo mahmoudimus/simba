@@ -48,9 +48,17 @@ def render(event: str, result: CanonicalResult) -> str:
     if event in ("SessionStart", "UserPromptSubmit"):
         return simba.hooks._io.context(event, result.additional_context)
     if event == "PreCompact":
-        if result.suppress_output:
-            return json.dumps({"suppressOutput": True})
-        return simba.hooks._io.context("PreCompact", result.additional_context)
+        # Claude Code's hook schema has no PreCompact variant in the
+        # hookSpecificOutput union (only PreToolUse / UserPromptSubmit /
+        # PostToolUse / PostToolBatch / Stop / SubagentStop) -- a
+        # hookSpecificOutput envelope for PreCompact fails schema validation
+        # ("Hook JSON output validation failed -- (root): Invalid input").
+        # Every top-level field is optional, so the only shape guaranteed to
+        # validate is a bare {}. PreCompact cannot inject additionalContext
+        # under the new schema either, so result.additional_context is
+        # intentionally ignored here -- stderr remains the channel for
+        # human-visible notes (see _export_transcript's print()s).
+        return json.dumps({})
     if event in ("Stop", "SubagentStop"):
         # block_reason is handled by the generic short-circuit above (→
         # {"decision":"block","reason":…}). Otherwise stopReason / empty object.
