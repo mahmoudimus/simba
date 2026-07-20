@@ -19,12 +19,17 @@ runs detached so a PreCompact hook is never blocked.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
 import typing
+
+import simba.config
+
+logger = logging.getLogger("simba.memory")
 
 
 class RlmEngine(typing.Protocol):
@@ -185,7 +190,14 @@ def get_engine(cfg) -> RlmEngine | None:
 
 
 def _load_transcript_text(transcript_id: str) -> str:
-    """Read the markdown transcript PreCompact exported for ``transcript_id``."""
+    """Read the markdown transcript PreCompact exported for ``transcript_id``.
+
+    Bounded: reads at most the LAST ``rlm.digest_max_transcript_mb`` of the
+    file (recent context is what a digest wants). 2026-07-20: unbounded
+    transcript reads in daemon-reachable lanes were the recurring multi-GB
+    RSS driver; distilled exports are ~12MB but legacy/streamed ones can be
+    arbitrarily large.
+    """
     path = (
         pathlib.Path.home()
         / ".claude"
@@ -194,7 +206,21 @@ def _load_transcript_text(transcript_id: str) -> str:
         / "transcript.md"
     )
     try:
-        return path.read_text()
+        cap_mb = float(simba.config.load("rlm").digest_max_transcript_mb)
+        cap = int(cap_mb * 1024 * 1024)
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if cap > 0 and size > cap:
+                logger.info(
+                    "[rlm] digest transcript %s is %.1fMB; reading last %.0fMB "
+                    "(rlm.digest_max_transcript_mb)",
+                    transcript_id,
+                    size / (1024 * 1024),
+                    cap_mb,
+                )
+                fh.seek(size - cap)
+                fh.readline()  # drop the likely-partial first line
+            return fh.read().decode("utf-8", errors="replace")
     except OSError:
         return ""
 
