@@ -7,6 +7,7 @@ promotion candidates awaiting review. Default-off → "" and zero HTTP.
 from __future__ import annotations
 
 import json
+import pathlib
 
 import simba.hooks.config as hooks_config
 import simba.hooks.session_start as session_start
@@ -316,6 +317,84 @@ def test_curated_nudge_absent_when_marker_missing_keys(tmp_path, monkeypatch) ->
     (simba_dir / "curated-import.json").write_text(json.dumps({"unexpected": True}))
 
     assert session_start._lifecycle_nudges(cfg, cwd=tmp_path) == ""
+
+
+def test_rule_candidates_inbox_line_present_when_pending(tmp_path, monkeypatch) -> None:
+    """N pending rule candidate(s) shows up in the same joined inbox line as
+    promotions/supersessions/gaps -- purely local (.simba/simba.db), no
+    daemon dependency beyond the /digest call other inbox lines already make.
+    """
+    import simba.db
+    import simba.redirect.candidates as candidates
+
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    with simba.db.connect(tmp_path):
+        candidates.RuleCandidate.create(
+            signature="sig-1",
+            tool="Bash",
+            rule_kind="pattern",
+            status="pending",
+            created_at="2026-07-20T00:00:00Z",
+        )
+
+    text = session_start._lifecycle_nudges(cfg, cwd=tmp_path)
+    assert "1 pending rule candidate(s)" in text
+    assert "simba rule promote" in text
+    assert "[Lifecycle] inbox:" in text
+
+
+def test_rule_candidates_inbox_line_absent_when_none_pending(
+    tmp_path, monkeypatch
+) -> None:
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    assert session_start._lifecycle_nudges(cfg, cwd=tmp_path) == ""
+
+
+def test_rule_candidates_inbox_line_fail_soft_on_bad_db(monkeypatch) -> None:
+    """A DB/filesystem error while counting must never break the whole
+    lifecycle nudge -- resolves to "" for this line, same as everywhere
+    else in this module."""
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+    monkeypatch.setattr(session_start.httpx, "get", _quiet_digest_get)
+
+    bogus_cwd = pathlib.Path("/nonexistent/not-a-real-path-xyz")
+    assert session_start._lifecycle_nudges(cfg, cwd=bogus_cwd) == ""
+
+
+def test_rule_candidates_inbox_line_in_fallback_path(tmp_path, monkeypatch) -> None:
+    """Older-daemon fallback path (no /digest): the rule-candidate count is
+    local-only, so it still surfaces even when the daemon can't serve
+    /digest."""
+    import simba.db
+    import simba.redirect.candidates as candidates
+
+    cfg = hooks_config.HooksConfig(session_start_lifecycle_nudges=True)
+
+    def fake_get(url, params=None, timeout=0.0):
+        if url.endswith("/digest"):
+            return _Resp({}, status_code=404)
+        if url.endswith("/stats"):
+            return _Resp({"lastMaintenance": None})
+        return _Resp({"total": 0, "candidates": []})
+
+    monkeypatch.setattr(session_start.httpx, "get", fake_get)
+
+    with simba.db.connect(tmp_path):
+        candidates.RuleCandidate.create(
+            signature="sig-1",
+            tool="Bash",
+            rule_kind="pattern",
+            status="pending",
+            created_at="2026-07-20T00:00:00Z",
+        )
+
+    text = session_start._lifecycle_nudges(cfg, cwd=tmp_path)
+    assert "1 pending rule candidate(s)" in text
+    assert "simba rule promote" in text
 
 
 def test_curated_nudge_absent_when_cwd_is_none(monkeypatch) -> None:

@@ -3663,6 +3663,10 @@ def _cmd_rule(args: list[str]) -> int:
     """Manage tool rules (auto-learned + manual) and tool-call redirects."""
     if args and args[0] == "redirect":
         return _cmd_rule_redirect(args[1:])
+    if args and args[0] == "scan-arcs":
+        return _cmd_rule_scan_arcs(args[1:])
+    if args and args[0] == "promote":
+        return _cmd_rule_promote(args[1:])
 
     import simba.rules_cli
 
@@ -3676,7 +3680,8 @@ def _cmd_rule_redirect(args: list[str]) -> int:
 
     usage = (
         "Usage:\n"
-        "  simba rule redirect add <program> <replacement> [--reason TEXT]\n"
+        "  simba rule redirect add <program> <replacement> "
+        "[--reason TEXT] [--mode deny|rewrite]\n"
         "  simba rule redirect list\n"
         "  simba rule redirect rm <program>"
     )
@@ -3697,7 +3702,24 @@ def _cmd_rule_redirect(args: list[str]) -> int:
         if "--reason" in args:
             i = args.index("--reason")
             reason = args[i + 1] if i + 1 < len(args) else ""
-        store.add(program, replacement, reason=reason, project_path=project_id, cwd=cwd)
+        mode = ""
+        if "--mode" in args:
+            i = args.index("--mode")
+            mode = args[i + 1] if i + 1 < len(args) else ""
+            if mode not in ("deny", "rewrite"):
+                print(
+                    f"Error: --mode must be 'deny' or 'rewrite', got {mode!r}",
+                    file=sys.stderr,
+                )
+                return 1
+        store.add(
+            program,
+            replacement,
+            reason=reason,
+            mode=mode,
+            project_path=project_id,
+            cwd=cwd,
+        )
         print(f"redirect added: {program} -> {replacement}")
         return 0
 
@@ -3707,8 +3729,16 @@ def _cmd_rule_redirect(args: list[str]) -> int:
             print("no redirect rules (store or .simba/redirects.toml)")
             return 0
         for r in rules:
+            if r.pattern:
+                extra = f"  # {r.reason}" if r.reason else ""
+                mode_tag = f" [{r.mode}]" if r.mode else ""
+                print(
+                    f"[{r.source}]{mode_tag} pattern:{r.pattern} -> {r.rewrite}{extra}"
+                )
+                continue
             extra = f"  # {r.reason}" if r.reason else ""
-            print(f"[{r.source}] {r.program} -> {r.replacement}{extra}")
+            mode_tag = f" [{r.mode}]" if r.mode else ""
+            print(f"[{r.source}]{mode_tag} {r.program} -> {r.replacement}{extra}")
         return 0
 
     if sub == "rm":
@@ -3721,6 +3751,149 @@ def _cmd_rule_redirect(args: list[str]) -> int:
 
     print(usage, file=sys.stderr)
     return 1
+
+
+def _cmd_rule_scan_arcs(args: list[str]) -> int:
+    """`simba rule scan-arcs` -- mine the failure_arc sidecar table for
+    mechanical failed->fixed shell-command patterns (redirect/arc_promotion.py)
+    and upsert them as pending rule candidates for `simba rule promote`.
+
+    Deterministic, LLM-free, and never activates anything by itself --
+    scanning only ever produces (or refreshes) a *candidate*.
+    """
+    import simba.config
+    import simba.hooks.config  # registers "hooks"
+    import simba.redirect.arc_promotion as arc_promotion
+
+    cwd = pathlib.Path.cwd()
+    cfg = simba.config.load("hooks")
+    summary = arc_promotion.scan(cwd, min_evidence=cfg.arc_promotion_min_evidence)
+    print(f"{summary.total} candidate(s) ({summary.new} new)")
+    return 0
+
+
+def _render_rule_candidate(row: Any) -> str:
+    """Render one pending rule candidate for `simba rule promote`'s listing:
+    a short id, an evidence summary, a before/after diff line, the derived
+    rule (as it will literally be written on approval), and the reason."""
+    evidence = f"x{row.evidence_count} across {row.session_count} session(s)"
+    lines = [f"  [{row.id}] {row.tool}  {evidence}"]
+    lines.append(f"      - {row.failed_example}")
+    lines.append(f"      + {row.fixed_example}")
+    if row.rule_kind == "program":
+        lines.append(
+            f"      rule: program  {row.rule_program} -> {row.rule_replacement}"
+        )
+    else:
+        lines.append(f"      rule: pattern  {row.rule_pattern} -> {row.rule_rewrite}")
+    scope = row.project_path or "cross-project"
+    lines.append(f"      scope: {scope}")
+    lines.append(f"      reason: {row.reason}")
+    return "\n".join(lines)
+
+
+def _cmd_rule_promote(args: list[str]) -> int:
+    """`simba rule promote` -- review redirect-rule candidates mined from
+    failure->fix arcs (`simba rule scan-arcs`).
+
+    Usage:
+      simba rule promote                 List pending candidates
+      simba rule promote <id>            Approve: write a DENY redirect rule
+      simba rule promote <id> --reject   Reject the candidate
+
+    Approval and rejection are one-way and one-time (a decided candidate
+    can't be re-approved/re-rejected); a re-run of `simba rule scan-arcs`
+    never resurrects a rejected candidate. There is deliberately no
+    bulk-approve flag -- every rule that gets written is a distinct human
+    decision.
+    """
+    import simba.db
+    import simba.redirect.candidates as candidates_store
+
+    cwd = pathlib.Path.cwd()
+    use_json = "--json" in args
+    reject = "--reject" in args
+    positional = [a for a in args if not a.startswith("--")]
+
+    if not positional:
+        pending = candidates_store.list_pending(cwd=cwd)
+        if use_json:
+            print(
+                json.dumps(
+                    [
+                        {
+                            "id": row.id,
+                            "tool": row.tool,
+                            "failedExample": row.failed_example,
+                            "fixedExample": row.fixed_example,
+                            "ruleKind": row.rule_kind,
+                            "ruleProgram": row.rule_program,
+                            "ruleReplacement": row.rule_replacement,
+                            "rulePattern": row.rule_pattern,
+                            "ruleRewrite": row.rule_rewrite,
+                            "reason": row.reason,
+                            "evidenceCount": row.evidence_count,
+                            "sessionCount": row.session_count,
+                            "projectPath": row.project_path,
+                        }
+                        for row in pending
+                    ]
+                )
+            )
+            return 0
+        if not pending:
+            print(
+                "no pending rule candidates "
+                "(`simba rule scan-arcs` to mine failure->fix arcs)"
+            )
+            return 0
+        print(f"{len(pending)} pending rule candidate(s):\n")
+        print("\n\n".join(_render_rule_candidate(row) for row in pending))
+        return 0
+
+    try:
+        candidate_id = int(positional[0])
+    except ValueError:
+        print(f"Error: id must be an integer, got {positional[0]!r}", file=sys.stderr)
+        return 1
+
+    if reject:
+        try:
+            candidates_store.reject(candidate_id, cwd=cwd)
+        except (KeyError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(f"rejected candidate #{candidate_id}")
+        return 0
+
+    project_id = simba.db.resolve_project_id(cwd)
+    try:
+        row = candidates_store.approve(candidate_id, project_path=project_id, cwd=cwd)
+    except (KeyError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"approved candidate #{candidate_id} -- wrote a DENY redirect rule:")
+    if row.rule_kind == "program":
+        print(f"  program: {row.rule_program}")
+        print(f"  replacement: {row.rule_replacement}")
+    else:
+        print(f"  pattern: {row.rule_pattern}")
+        print(f"  rewrite: {row.rule_rewrite}")
+    print(f"  reason: {row.reason}")
+    print("mode=deny (blocks + suggests the fix). To graduate to auto-rewrite:")
+    if row.rule_kind == "program":
+        print(
+            f'  simba rule redirect add {row.rule_program} "{row.rule_replacement}" '
+            "--mode rewrite"
+        )
+    else:
+        print(
+            "  pattern-kind rules have no CLI graduation path yet -- edit the "
+            "`mode` column of the `redirect_rules` row "
+            f"(signature={row.signature}) in .simba/simba.db directly"
+        )
+    return 0
 
 
 def _cmd_eval(args: list[str]) -> int:
@@ -5064,6 +5237,24 @@ def _cmd_transcript_distill(args: list[str]) -> int:
             project_path=project_path,
             cwd=pathlib.Path(project_path),
         )
+
+    # Rule-candidate scan (redirect/arc_promotion.py): mine the sidecar table
+    # this distill just fed for mechanical failed->fixed patterns. Fail-soft
+    # -- a scan hiccup must never fail the distill itself -- and one log line
+    # either way (nothing printed on failure, since there's no real summary
+    # to report).
+    try:
+        import simba.redirect.arc_promotion as _arc_promotion
+
+        scan_summary = _arc_promotion.scan(
+            pathlib.Path(project_path), min_evidence=cfg.arc_promotion_min_evidence
+        )
+        print(
+            f"distill: rule-candidate scan -- {scan_summary.total} candidate(s) "
+            f"({scan_summary.new} new)"
+        )
+    except Exception:
+        pass
 
     if result.skipped:
         print(f"distill: skipped (marker matches) -- {result.md_path}")
