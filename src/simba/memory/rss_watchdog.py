@@ -15,14 +15,24 @@ battle-tested ``os.execv`` exec seam (PR #89/#91:
 the process is old enough that a genuine leak, not startup cost, is the
 likely explanation.
 
-``current_rss_mb()`` reads CURRENT resident size. ``resource.getrusage(...)
-.ru_maxrss`` is a HIGH-WATER MARK that only ever grows across the process's
-lifetime, so it cannot answer "are we over budget RIGHT NOW" --- a single
-transient spike (e.g. one large recall candidate pool) would trip a
-ru_maxrss-based gate forever after, even once the freed pages were returned
-to the OS. It remains a useful annotation on log lines (bounded, cheap to
-read), so ``peak_rss_mb()`` is exposed for that purpose only --- never for
-the soft/hard comparison itself.
+``current_rss_mb()`` reads a CURRENT (not high-water-mark) memory metric. On
+macOS that metric is PHYSICAL FOOTPRINT (``ri_phys_footprint``), not resident
+size (``ri_resident_size``): macOS's memory compressor pages ballooning
+memory OUT of residency, so resident size structurally under-reports leaks.
+The motivating incident: a wedged daemon reached a 52GB physical footprint
+while showing only ~0.36GB resident --- a resident-gated hard limit never
+tripped. ``footprint(1)`` and Activity Monitor's "Memory" column report
+footprint (dirty + compressed + swapped pages included) for the same reason;
+this module gates on the same metric. Linux/``ps`` fall back to resident size
+(no compressor to dodge there, and it's the portable best-effort figure).
+
+``resource.getrusage(...).ru_maxrss`` is a HIGH-WATER MARK that only ever
+grows across the process's lifetime, so it cannot answer "are we over budget
+RIGHT NOW" --- a single transient spike (e.g. one large recall candidate
+pool) would trip a ru_maxrss-based gate forever after, even once the freed
+pages were returned to the OS. It remains a useful annotation on log lines
+(bounded, cheap to read), so ``peak_rss_mb()`` is exposed for that purpose
+only --- never for the soft/hard comparison itself.
 
 psutil is NOT a dependency of this project (checked via ``rg psutil
 pyproject.toml uv.lock`` --- no hits), so ``current_rss_mb`` reads through
@@ -51,41 +61,63 @@ logger = logging.getLogger("simba.memory")
 # --- current RSS: portable, best-effort, never raises ------------------------
 
 
-def _rss_via_libproc(pid: int) -> float | None:
-    """macOS: ``libproc.proc_pid_rusage`` (RUSAGE_INFO_V2), ``ri_resident_size``.
-
-    The struct layout below is the stable C ABI from ``<sys/resource.h>``
+class _RusageInfoV2(ctypes.Structure):
+    """``RUSAGE_INFO_V2`` --- the stable C ABI from ``<sys/resource.h>``
     (fields through ``ri_diskio_byteswritten`` are the V2 shape; later SDKs
     only ever APPEND fields for newer flavors, never reorder existing ones,
     so reading through a V2-shaped struct with the V2 flavor constant is
-    safe across macOS versions). Empirically verified against ``ps -o rss=``
-    and ``resource.getrusage().ru_maxrss`` at implementation time.
+    safe across macOS versions). Module-level (not nested in a function) so
+    tests can construct and populate it directly against the pure helpers
+    below without going through a real ``proc_pid_rusage`` syscall.
+    """
+
+    _fields_ = [
+        ("ri_uuid", ctypes.c_uint8 * 16),
+        ("ri_user_time", ctypes.c_uint64),
+        ("ri_system_time", ctypes.c_uint64),
+        ("ri_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_interrupt_wkups", ctypes.c_uint64),
+        ("ri_pageins", ctypes.c_uint64),
+        ("ri_wired_size", ctypes.c_uint64),
+        ("ri_resident_size", ctypes.c_uint64),
+        ("ri_phys_footprint", ctypes.c_uint64),
+        ("ri_proc_start_abstime", ctypes.c_uint64),
+        ("ri_proc_exit_abstime", ctypes.c_uint64),
+        ("ri_child_user_time", ctypes.c_uint64),
+        ("ri_child_system_time", ctypes.c_uint64),
+        ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
+        ("ri_child_interrupt_wkups", ctypes.c_uint64),
+        ("ri_child_pageins", ctypes.c_uint64),
+        ("ri_child_elapsed_abstime", ctypes.c_uint64),
+        ("ri_diskio_bytesread", ctypes.c_uint64),
+        ("ri_diskio_byteswritten", ctypes.c_uint64),
+    ]
+
+
+def _watchdog_metric_mb(info: _RusageInfoV2) -> float:
+    """The soft/hard gating metric, in MB: ``ri_phys_footprint`` (physical
+    footprint), never ``ri_resident_size``. Pure --- takes an already-
+    populated struct, does no I/O. See the module docstring for why
+    footprint and not resident size: the compressor pages ballooning memory
+    OUT of residency, so resident size structurally under-reports leaks.
+    """
+    return float(info.ri_phys_footprint) / (1024 * 1024)
+
+
+def _rusage_resident_mb(info: _RusageInfoV2) -> float:
+    """Resident size, in MB --- forensic annotation only, never the gating
+    metric (see ``_watchdog_metric_mb``). Pure, same shape as its sibling."""
+    return float(info.ri_resident_size) / (1024 * 1024)
+
+
+def _libproc_rusage(pid: int) -> _RusageInfoV2 | None:
+    """macOS: fetch a populated ``RUSAGE_INFO_V2`` via
+    ``libproc.proc_pid_rusage``. None off-darwin or on failure. Empirically
+    verified against ``ps -o rss=`` and ``resource.getrusage().ru_maxrss`` at
+    implementation time.
     """
     if sys.platform != "darwin":
         return None
-
-    class _RusageInfoV2(ctypes.Structure):
-        _fields_ = [
-            ("ri_uuid", ctypes.c_uint8 * 16),
-            ("ri_user_time", ctypes.c_uint64),
-            ("ri_system_time", ctypes.c_uint64),
-            ("ri_pkg_idle_wkups", ctypes.c_uint64),
-            ("ri_interrupt_wkups", ctypes.c_uint64),
-            ("ri_pageins", ctypes.c_uint64),
-            ("ri_wired_size", ctypes.c_uint64),
-            ("ri_resident_size", ctypes.c_uint64),
-            ("ri_phys_footprint", ctypes.c_uint64),
-            ("ri_proc_start_abstime", ctypes.c_uint64),
-            ("ri_proc_exit_abstime", ctypes.c_uint64),
-            ("ri_child_user_time", ctypes.c_uint64),
-            ("ri_child_system_time", ctypes.c_uint64),
-            ("ri_child_pkg_idle_wkups", ctypes.c_uint64),
-            ("ri_child_interrupt_wkups", ctypes.c_uint64),
-            ("ri_child_pageins", ctypes.c_uint64),
-            ("ri_child_elapsed_abstime", ctypes.c_uint64),
-            ("ri_diskio_bytesread", ctypes.c_uint64),
-            ("ri_diskio_byteswritten", ctypes.c_uint64),
-        ]
 
     rusage_info_v2 = 2
     libproc = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
@@ -95,7 +127,31 @@ def _rss_via_libproc(pid: int) -> float | None:
     )
     if rc != 0:
         return None
-    return float(buf.ri_resident_size) / (1024 * 1024)
+    return buf
+
+
+def _rss_via_libproc(pid: int) -> float | None:
+    """macOS: the watchdog gating metric (physical footprint, in MB) via
+    ``libproc.proc_pid_rusage``. None off-darwin or on failure."""
+    info = _libproc_rusage(pid)
+    if info is None:
+        return None
+    return _watchdog_metric_mb(info)
+
+
+def _resident_mb(pid: int | None = None) -> float | None:
+    """Best-effort resident size, in MB, for ``pid`` (default: self) ---
+    forensic log annotation only (see the module docstring); NEVER the
+    soft/hard gating metric, which is ``current_rss_mb()`` /
+    ``_watchdog_metric_mb``. macOS only; None on every other platform or on
+    any read failure (reuses the same struct/syscall as ``_rss_via_libproc``,
+    just reading a different field).
+    """
+    target = os.getpid() if pid is None else pid
+    info = _libproc_rusage(target)
+    if info is None:
+        return None
+    return _rusage_resident_mb(info)
 
 
 def _rss_via_procfs(pid: int) -> float | None:
@@ -134,7 +190,16 @@ _STRATEGIES: tuple[typing.Callable[[int], float | None], ...] = (
 
 
 def current_rss_mb(pid: int | None = None) -> float | None:
-    """Best-effort CURRENT resident set size in MB for ``pid`` (default: self).
+    """Best-effort CURRENT memory-pressure metric in MB for ``pid`` (default:
+    self) --- the soft/hard watchdog gating metric.
+
+    On macOS this is PHYSICAL FOOTPRINT (``ri_phys_footprint``), not resident
+    size: resident size is compressible (the memory compressor pages
+    ballooning memory OUT of residency) and structurally under-reports leaks
+    --- the motivating incident was a process at 52GB physical footprint
+    showing ~0.36GB resident. On Linux (``/proc/<pid>/statm``) and the final
+    ``ps`` fallback this is resident size, unchanged --- there is no
+    compressor to dodge there, and no cheaper portable alternative.
 
     Tries the native platform reader first (macOS libproc / Linux procfs),
     then a ``ps`` subprocess. Returns ``None`` if every strategy fails ---
@@ -209,6 +274,14 @@ def _fmt_mb(value: float | None) -> str:
 
 def _fmt_limit(value: float) -> str:
     return f"{value:.0f}MB" if value > 0 else "off"
+
+
+def _fmt_resident(value: float | None) -> str:
+    """The resident-size forensic annotation for a log line, e.g.
+    ``" resident=361.2MB"`` --- empty string (no token at all) when
+    unavailable, so off-darwin/failure log lines are byte-identical to
+    before this annotation existed."""
+    return f" resident={value:.1f}MB" if value is not None else ""
 
 
 # --- the watchdog loop ---------------------------------------------------------
@@ -305,19 +378,22 @@ class RssWatchdog:
         gc.collect()
         _release_free_memory_to_os()
         logger.warning(
-            "[rss-watchdog] soft limit crossed: rss=%s soft=%s hard=%s",
+            "[rss-watchdog] soft limit crossed: rss=%s%s soft=%s hard=%s",
             _fmt_mb(rss),
+            _fmt_resident(_resident_mb()),
             _fmt_limit(self.soft_limit_mb),
             _fmt_limit(self.hard_limit_mb),
         )
 
     async def _handle_hard(self, rss: float) -> None:
         peak = peak_rss_mb()
+        resident = _fmt_resident(_resident_mb())
         if not self.boot_argv:
             logger.critical(
-                "[rss-watchdog] HARD limit exceeded: rss=%s hard=%s peak=%s -- "
+                "[rss-watchdog] HARD limit exceeded: rss=%s%s hard=%s peak=%s -- "
                 "no boot argv on record, cannot self-restart",
                 _fmt_mb(rss),
+                resident,
                 _fmt_limit(self.hard_limit_mb),
                 _fmt_mb(peak),
             )
@@ -326,10 +402,11 @@ class RssWatchdog:
         uptime = time.time() - self.start_time
         if uptime < self.min_uptime_seconds:
             logger.critical(
-                "[rss-watchdog] HARD limit exceeded: rss=%s hard=%s peak=%s "
+                "[rss-watchdog] HARD limit exceeded: rss=%s%s hard=%s peak=%s "
                 "uptime=%.0fs -- younger than min_uptime=%.0fs, refusing to "
                 "restart (anti-flap)",
                 _fmt_mb(rss),
+                resident,
                 _fmt_limit(self.hard_limit_mb),
                 _fmt_mb(peak),
                 uptime,
@@ -338,9 +415,10 @@ class RssWatchdog:
             return
 
         logger.critical(
-            "[rss-watchdog] HARD limit exceeded: rss=%s hard=%s peak=%s "
+            "[rss-watchdog] HARD limit exceeded: rss=%s%s hard=%s peak=%s "
             "uptime=%.0fs -- triggering self-restart",
             _fmt_mb(rss),
+            resident,
             _fmt_limit(self.hard_limit_mb),
             _fmt_mb(peak),
             uptime,

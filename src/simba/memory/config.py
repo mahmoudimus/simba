@@ -128,12 +128,17 @@ class MemoryConfig:
     # documented no-op, and the enforceable RLIMIT_AS would abort LanceDB's
     # mmap-based table reads). A 45GB leak incident (fixed in PRs #90-92) is
     # the motivating precedent for this HARD cap on top of that fix: an
-    # asyncio loop polls current RSS every `rss_check_interval_seconds`; past
-    # `rss_soft_limit_mb` it runs gc.collect() + a platform allocator-pressure
-    # hint and logs a warning; past `rss_hard_limit_mb` — and only once the
-    # process has run for at least `rss_restart_min_uptime_seconds` (anti-
-    # flap) — it self-restarts via the existing PR #89/#91 os.execv exec seam
-    # (simba.memory.routes._run_restart_sequence). Both limits default to 0
+    # asyncio loop polls the current memory metric every
+    # `rss_check_interval_seconds`; past `rss_soft_limit_mb` it runs
+    # gc.collect() + a platform allocator-pressure hint and logs a warning;
+    # past `rss_hard_limit_mb` — and only once the process has run for at
+    # least `rss_restart_min_uptime_seconds` (anti-flap) — it self-restarts
+    # via the existing PR #89/#91 os.execv exec seam
+    # (simba.memory.routes._run_restart_sequence). On macOS the metric is
+    # PHYSICAL FOOTPRINT, not resident size: the memory compressor pages
+    # ballooning memory OUT of residency, so resident size structurally
+    # under-reports leaks (a process at 52GB physical footprint showed
+    # ~0.36GB resident in the motivating incident). Both limits default to 0
     # (disabled) per repo policy (UNMEASURED lever); the daemon's steady-state
     # floor is ~1.5-3.6GB (bge-large embedder + cross-encoder reranker +
     # LanceDB), so a soft/hard pair like 2500/3500 is a reasonable starting
