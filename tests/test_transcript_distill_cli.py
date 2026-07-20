@@ -143,3 +143,135 @@ class TestCmdTranscriptDistill:
 
         rows = arcs.list_for_session("s1", cwd=project_dir)
         assert len(rows) == 1
+
+
+def _write_resolved_flag_drop_fixture(path: pathlib.Path) -> None:
+    """Same failure ("rg -rn pattern") 3x, then a fix ("rg -n pattern") --
+    resolved with repeat_count=3, meeting the default arc_promotion_min_evidence
+    (3) so the post-distill rule-candidate scan produces a candidate."""
+    lines = [
+        json.dumps({"type": "session_meta", "payload": {"id": "s3", "cwd": "/repo"}}),
+    ]
+
+    def _call(call_id: str, command: str) -> str:
+        return json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": call_id,
+                    "name": "exec",
+                    "input": command,
+                },
+            }
+        )
+
+    def _failed(call_id: str) -> str:
+        return json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": [
+                        {"type": "text", "text": "Script failed\nWall time 1.0s\n"},
+                        {"type": "text", "text": "regex parse error: unsupported flag"},
+                    ],
+                },
+            }
+        )
+
+    def _ok(call_id: str) -> str:
+        return json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": [
+                        {"type": "text", "text": "Script completed\nWall time 0.1s\n"},
+                        {"type": "text", "text": "no matches"},
+                    ],
+                },
+            }
+        )
+
+    for i in range(3):
+        cid = f"c{i}"
+        lines.append(_call(cid, "rg -rn pattern"))
+        lines.append(_failed(cid))
+    lines.append(_call("c-fix", "rg -n pattern"))
+    lines.append(_ok("c-fix"))
+    path.write_text("\n".join(lines) + "\n")
+
+
+class TestCmdTranscriptDistillRuleCandidateScan:
+    """`simba transcript distill` also mines the failure_arc sidecar table it
+    just fed for mechanical failed->fixed patterns (redirect/arc_promotion.py)
+    -- fail-soft, one extra log line, after the arc upserts."""
+
+    def test_distill_reports_rule_candidate_scan_line(
+        self, tmp_path: pathlib.Path, capsys
+    ) -> None:
+        source = tmp_path / "rollout.jsonl"
+        _write_resolved_flag_drop_fixture(source)
+        out_dir = tmp_path / "out"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        rc = cli._cmd_transcript(
+            [
+                "distill",
+                str(source),
+                "--session-id",
+                "s3",
+                "--out",
+                str(out_dir),
+                "--project-path",
+                str(project_dir),
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "distill: rule-candidate scan -- 1 candidate(s) (1 new)" in out
+
+        import simba.redirect.candidates as candidates
+
+        pending = candidates.list_pending(cwd=project_dir)
+        assert len(pending) == 1
+        assert pending[0].rule_kind == "pattern"
+
+    def test_distill_scan_failure_is_fail_soft(
+        self, tmp_path: pathlib.Path, monkeypatch, capsys
+    ) -> None:
+        """A scan-time exception must never fail the distill itself, and the
+        primary distill success line must still print."""
+        source = tmp_path / "rollout.jsonl"
+        _write_resolved_flag_drop_fixture(source)
+        out_dir = tmp_path / "out"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        import simba.redirect.arc_promotion as arc_promotion
+
+        def _boom(*a, **kw):
+            raise RuntimeError("scan blew up")
+
+        monkeypatch.setattr(arc_promotion, "scan", _boom)
+
+        rc = cli._cmd_transcript(
+            [
+                "distill",
+                str(source),
+                "--session-id",
+                "s3",
+                "--out",
+                str(out_dir),
+                "--project-path",
+                str(project_dir),
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "distill: rule-candidate scan" not in out
+        assert "distill: wrote" in out

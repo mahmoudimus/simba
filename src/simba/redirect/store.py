@@ -7,6 +7,8 @@ Two sources so rules can be either version-controlled with the project
 
 from __future__ import annotations
 
+import contextlib
+import sqlite3
 import tomllib
 from typing import TYPE_CHECKING
 
@@ -25,6 +27,14 @@ class RedirectRow(simba.db.BaseModel):
     replacement = pw.CharField(null=True)
     reason = pw.CharField(null=True)
     project_path = pw.CharField(null=True)
+    # Pattern-kind rule fields (flag-level fixes -- see rules.RedirectRule's
+    # pattern/rewrite) plus a per-rule mode override, added for arc-derived
+    # candidates (redirect/arc_promotion.py, redirect/candidates.py). NULL
+    # for plain program rules. See ``_migrate_redirect_rules_columns`` below
+    # for how a pre-existing table gets these columns added.
+    pattern = pw.TextField(null=True)
+    rewrite = pw.TextField(null=True)
+    mode = pw.CharField(null=True)
 
     class Meta:
         table_name = "redirect_rules"
@@ -33,6 +43,33 @@ class RedirectRow(simba.db.BaseModel):
 
 
 simba.db.register_model(RedirectRow)
+
+
+def _migrate_redirect_rules_columns(conn: sqlite3.Connection) -> None:
+    """Additive migration: add pattern/rewrite/mode to a pre-existing
+    ``redirect_rules`` table.
+
+    New databases get these columns straight from the ``RedirectRow`` model
+    when ``create_tables`` runs (right after schema initializers, see
+    ``simba.db.connect``); this backfills databases created before those
+    fields existed. Idempotent (checks ``PRAGMA table_info`` first) and
+    guarded on the table already existing -- a brand-new DB hasn't created it
+    yet when schema initializers run, so there is nothing to migrate.
+    Mirrors ``neuron/schema.py``'s ``_migrate_dormant_flag``.
+    """
+    has_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='redirect_rules'"
+    ).fetchone()
+    if not has_table:
+        return
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(redirect_rules)")}
+    for name in ("pattern", "rewrite", "mode"):
+        if name not in cols:
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(f"ALTER TABLE redirect_rules ADD COLUMN {name} TEXT")
+
+
+simba.db.register_schema(_migrate_redirect_rules_columns)
 
 
 def load_toml(path: pathlib.Path) -> list[RedirectRule]:
@@ -74,10 +111,18 @@ def add(
     replacement: str,
     *,
     reason: str = "",
+    mode: str = "",
     project_path: str,
     cwd: pathlib.Path | None = None,
 ) -> None:
-    """Add or replace a redirect rule in the DB store."""
+    """Add or replace a program redirect rule in the DB store.
+
+    Delete-then-create keyed on ``(program, project_path)`` -- a project has
+    at most one active redirect per program, so re-adding the same program
+    is how a rule is edited in place (e.g. graduating an arc-approved
+    deny-mode candidate to ``mode="rewrite"`` via
+    ``simba rule redirect add <program> <replacement> --mode rewrite``).
+    """
     with simba.db.connect(cwd):
         RedirectRow.delete().where(
             (RedirectRow.program == program)
@@ -87,6 +132,37 @@ def add(
             program=program,
             replacement=replacement,
             reason=reason,
+            mode=mode,
+            project_path=project_path,
+        )
+
+
+def add_pattern(
+    pattern: str,
+    rewrite: str,
+    *,
+    reason: str = "",
+    mode: str = "",
+    project_path: str,
+    cwd: pathlib.Path | None = None,
+) -> None:
+    """Add a pattern-kind redirect rule to the DB store.
+
+    Unlike ``add()``, this is a plain insert (no delete-then-replace): a
+    regex/rewrite pair has no natural single-per-project key the way a
+    program name does, so there's nothing to identify-and-replace by. The
+    ``rule_candidate`` approval flow (redirect/candidates.py) only ever
+    calls this once per candidate (a candidate can't be re-approved once
+    decided), so duplicate rows from repeated calls are not a concern here.
+    """
+    with simba.db.connect(cwd):
+        RedirectRow.create(
+            program=None,
+            replacement=None,
+            pattern=pattern,
+            rewrite=rewrite,
+            reason=reason,
+            mode=mode,
             project_path=project_path,
         )
 
@@ -114,8 +190,11 @@ def list_rules(
         )
     return [
         RedirectRule(
-            program=r.program,
-            replacement=r.replacement,
+            program=r.program or "",
+            replacement=r.replacement or "",
+            pattern=r.pattern or "",
+            rewrite=r.rewrite or "",
+            mode=r.mode or "",
             reason=r.reason or "",
             source="store",
         )

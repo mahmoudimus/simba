@@ -318,3 +318,14 @@ class HooksConfig:
     # from a separately-reserved section and survive even a worst-case
     # squeeze of this budget. 0 effectively suppresses body content (arcs only).
     distill_max_output_mb: float = 12.0
+
+    # Arc -> redirect-rule promotion (redirect/arc_promotion.py): a
+    # deterministic, LLM-free eligibility filter that turns recurring
+    # failure->fix arcs (failure_arc table) into candidate redirect rules for
+    # human review via `simba rule promote`. A signature is eligible once
+    # sum(repeat_count) across its matching arcs reaches this floor (OR the
+    # arcs come from >=2 distinct sessions -- see arc_promotion.py). Never
+    # auto-applied: eligibility only produces a *candidate*; writing an
+    # actual redirect rule always requires an explicit `simba rule promote
+    # <id>` approval.
+    arc_promotion_min_evidence: int = 3

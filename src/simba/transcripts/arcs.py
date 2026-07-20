@@ -100,3 +100,15 @@ def list_for_session(
         return list(
             FailureArc.select().where(FailureArc.session_source == session_source)
         )
+
+
+def list_all(*, cwd: pathlib.Path | None = None) -> list[FailureArc]:
+    """Return every arc recorded (any session, any order).
+
+    Used by the redirect rule-candidate scan (``redirect/arc_promotion.py``),
+    which mines cross-session failure->fix patterns -- unlike
+    ``list_for_session``, this deliberately spans every session so recurring
+    signatures across the whole project's history are visible in one pass.
+    """
+    with simba.db.connect(cwd):
+        return list(FailureArc.select())

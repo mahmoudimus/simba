@@ -132,6 +132,29 @@ def _curated_import_nudge(cwd: pathlib.Path | None) -> str:
     )
 
 
+def _pending_rule_candidates_line(cwd: pathlib.Path | None) -> str:
+    """Pending arc-derived redirect-rule candidates (redirect/candidates.py),
+    awaiting `simba rule promote` review.
+
+    Unlike the rest of ``_lifecycle_nudges``, this is local-only -- the
+    ``rule_candidate`` table lives in the project's own ``.simba/simba.db``,
+    not the memory daemon's LanceDB, so it needs no HTTP round trip and stays
+    correct even when the daemon (and therefore ``/digest``) is down. Fail-
+    soft on any DB/filesystem trouble, same as everything else here.
+    """
+    if cwd is None:
+        return ""
+    try:
+        import simba.redirect.candidates as candidates
+
+        count = candidates.count_pending(cwd=pathlib.Path(cwd))
+    except Exception:
+        return ""
+    if not count:
+        return ""
+    return f"{count} pending rule candidate(s) — `simba rule promote`"
+
+
 def _lifecycle_nudges(cfg, cwd: pathlib.Path | None = None) -> str:
     """One-glance lifecycle state at session start (spec 33 Phase 5).
 
@@ -181,6 +204,9 @@ def _lifecycle_nudges(cfg, cwd: pathlib.Path | None = None) -> str:
         gap_count = int((digest.get("gaps") or {}).get("total", 0))
         if gap_count:
             inbox.append(f"{gap_count} knowledge gap(s) — `simba memory gaps`")
+        rule_candidates_line = _pending_rule_candidates_line(cwd)
+        if rule_candidates_line:
+            inbox.append(rule_candidates_line)
         if inbox:
             lines.append("[Lifecycle] inbox: " + " | ".join(inbox))
 
@@ -228,6 +254,9 @@ def _lifecycle_nudges(cfg, cwd: pathlib.Path | None = None) -> str:
                     )
         except (httpx.HTTPError, ValueError, TypeError):
             pass
+        rule_candidates_line = _pending_rule_candidates_line(cwd)
+        if rule_candidates_line:
+            lines.append(f"[Lifecycle] {rule_candidates_line}")
 
     curated_line = _curated_import_nudge(cwd)
     if curated_line:

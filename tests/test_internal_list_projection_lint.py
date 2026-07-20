@@ -47,7 +47,7 @@ ALLOWLIST: set[tuple[str, int]] = {
     ("src/simba/__main__.py", 2884),
     # `simba eval build`: human-invoked CLI; needs real content/context to
     # build eval cases.
-    ("src/simba/__main__.py", 3879),
+    ("src/simba/__main__.py", 4052),
     # `simba rules list`: human-facing CLI, type-filtered + limit=50.
     ("src/simba/rules_cli.py", 104),
     # `simba rules prune`: human-facing CLI, type-filtered + limit=1000.
