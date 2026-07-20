@@ -174,6 +174,19 @@ class _Document:
             self._total_chars = len(text)
             self._line_char_starts: array.array | None = None
             self._line_byte_starts: array.array | None = None
+            # Honest retained-bytes accounting, computed ONCE here (O(n_lines))
+            # rather than on every budget check. A flat `sys.getsizeof(text) * 2`
+            # estimate ignores the per-line string OBJECT overhead in `.lines`
+            # and the per-int object overhead in `.line_starts` -- both scale
+            # with line count, not text size, so many-short-line documents
+            # under-counted 3-5x in production (see module docstring).
+            self._eager_retained_bytes = (
+                sys.getsizeof(self.text)
+                + sys.getsizeof(self.lines)
+                + sum(sys.getsizeof(line) for line in self.lines)
+                + sys.getsizeof(self.line_starts)
+                + sum(sys.getsizeof(n) for n in self.line_starts)
+            )
         else:
             if source_path is None:
                 raise ValueError("_Document requires either text or source_path")
@@ -194,18 +207,24 @@ class _Document:
         return (not self.lazy) or self._line_char_starts is not None
 
     def retained_bytes(self) -> int:
-        """Approximate resident bytes -- used only to enforce
-        ``store_budget_mb``, not required to be exact. Lazy: the two offset-
-        index arrays (8 bytes/entry each; 0 once evicted). Eager: ~2x the
-        text object's size (text + its per-line list), a cheap O(1) estimate
-        that avoids summing sizeof() over every line."""
+        """Resident bytes -- used only to enforce ``store_budget_mb``, not
+        required to be exact. Lazy: the two offset-index arrays (8
+        bytes/entry each; 0 once evicted) -- these are packed C values with
+        no per-entry Python object overhead, so the flat itemsize multiply
+        is already honest. Eager: the honest sum computed once at ingest in
+        ``__init__`` (see ``_eager_retained_bytes``) -- text + the per-line
+        list (list object + every line's string object) + the per-line
+        offset list (list object + every int's object). A prior ``~2x the
+        text object's size`` shortcut ignored that per-object overhead,
+        which scales with line count rather than text size and under-
+        counted 3-5x for many-short-line documents in production."""
         if self.lazy:
             if self._line_char_starts is None:
                 return 0
             return (
                 len(self._line_char_starts) + len(self._line_byte_starts)
             ) * self._line_char_starts.itemsize
-        return sys.getsizeof(self.text) * 2
+        return self._eager_retained_bytes
 
     def _ensure_index(self) -> None:
         if self.lazy and self._line_char_starts is None:
