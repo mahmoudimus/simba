@@ -45,15 +45,53 @@ def _hooks_cfg():
     return simba.config.load("hooks")
 
 
+def _read_tail_bytes(path: pathlib.Path, cap_bytes: int) -> tuple[bytes, int]:
+    """Read at most the last ``cap_bytes`` of ``path``, in binary mode.
+
+    Returns ``(tail_bytes, tail_start_offset)`` where ``tail_start_offset`` is
+    the absolute file offset of the first byte actually kept. When the file is
+    within ``cap_bytes``, the whole file is returned with offset 0. Otherwise
+    the seek lands mid-file, so the (possibly-partial) leading line is
+    discarded -- up to and including its first ``\\n`` -- so callers always see
+    whole JSONL lines; a window with no newline at all (a pathological single
+    giant line) yields an empty tail rather than a corrupt partial line.
+
+    May raise ``OSError`` -- callers decide the fallback.
+    """
+    size = path.stat().st_size
+    start = max(0, size - cap_bytes) if cap_bytes > 0 else 0
+    with path.open("rb") as fh:
+        fh.seek(start)
+        data = fh.read()
+    if start == 0:
+        return data, 0
+    nl = data.find(b"\n")
+    if nl == -1:
+        return b"", size
+    return data[nl + 1 :], start + nl + 1
+
+
 def _extract_thinking(transcript_path: pathlib.Path) -> str:
-    """Extract last thinking block from transcript JSONL."""
+    """Extract last thinking block from transcript JSONL.
+
+    Bounded to the last ``hooks.pre_tool_tail_mb`` of the file (2026-07-20):
+    PreToolUse fires on every tool call, and a whole-file read here on
+    multi-GB Codex rollouts was a recurring driver of daemon RSS balloons
+    under concurrent ``/hook/pre_tool`` traffic. Semantic trade-off: a
+    thinking block that ended more than the cap before EOF is no longer
+    found -- acceptable, we only ever want the MOST RECENT one, which is
+    always near EOF.
+    """
     if not transcript_path.exists():
         return ""
 
+    cap_bytes = int(_hooks_cfg().pre_tool_tail_mb * 1_000_000)
     try:
-        lines = transcript_path.read_text().strip().split("\n")
+        tail, _ = _read_tail_bytes(transcript_path, cap_bytes)
     except OSError:
         return ""
+
+    lines = tail.decode("utf-8", errors="replace").strip().split("\n")
 
     # Read from end to find last assistant thinking
     for line in reversed(lines):
@@ -119,20 +157,36 @@ def _post_compaction_tail_bytes(transcript_path: pathlib.Path) -> tuple[int, int
     ``(tail_bytes, last_compaction_offset)`` where the tail is measured from the
     start of the last ``isCompactSummary`` line to EOF (0 offset = never
     compacted, tail == total).
+
+    The marker scan itself is bounded to the last ``hooks.pre_tool_tail_mb`` of
+    the file (2026-07-20): this used to ``read_bytes()`` the WHOLE transcript
+    just to ``rfind`` the last marker -- the only caller (``_check_context_low``)
+    already skips small files via its cheap path, so that whole-file read fired
+    precisely and only for the giant files where it hurt most. A compaction
+    older than the tail window degrades to the never-compacted case (offset 0)
+    -- the context-low warning still fires correctly because the live tail is
+    then >= the cap, which is >= the threshold that gated us into this path.
     """
     try:
-        data = transcript_path.read_bytes()
+        total = transcript_path.stat().st_size
     except OSError:
         return (0, 0)
-    total = len(data)
-    idx = data.rfind(_COMPACT_MARKER.replace(b" ", b""))
+
+    cap_bytes = int(_hooks_cfg().pre_tool_tail_mb * 1_000_000)
+    try:
+        tail, tail_start = _read_tail_bytes(transcript_path, cap_bytes)
+    except OSError:
+        return (0, 0)
+
+    idx = tail.rfind(_COMPACT_MARKER.replace(b" ", b""))
     if idx == -1:
         # tolerate whitespace variants ("isCompactSummary": true)
-        loose = data.rfind(b'"isCompactSummary"')
+        loose = tail.rfind(b'"isCompactSummary"')
         idx = loose if loose != -1 else -1
     if idx == -1:
         return (total, 0)
-    line_start = data.rfind(b"\n", 0, idx) + 1  # 0 if marker is on the first line
+    # 0 if the marker is on the first line kept in the tail window
+    line_start = tail_start + tail.rfind(b"\n", 0, idx) + 1
     return (total - line_start, line_start)
 
 

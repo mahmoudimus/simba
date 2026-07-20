@@ -228,6 +228,69 @@ class TestRecallMinQueryChars:
         mock_recall.assert_called_once()
 
 
+class TestPreToolTailBound:
+    """PreToolUse must not read a multi-GB transcript whole-file (2026-07-20:
+    the recurring driver of daemon RSS balloons under concurrent
+    ``/hook/pre_tool`` traffic). ``hooks.pre_tool_tail_mb`` bounds
+    ``_extract_thinking`` to the last N bytes of the transcript.
+    """
+
+    @staticmethod
+    def _big_transcript(
+        tmp_path, *, filler_bytes: int, thinking_text: str, thinking_first: bool
+    ):
+        thinking_entry = {
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": thinking_text}],
+            }
+        }
+        filler_line = json.dumps({"type": "user", "m": "x" * filler_bytes})
+        lines = (
+            [json.dumps(thinking_entry), filler_line]
+            if thinking_first
+            else [filler_line, json.dumps(thinking_entry)]
+        )
+        path = tmp_path / "big.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def test_thinking_found_within_tail_window(self, tmp_path, monkeypatch):
+        # 3MB of filler, thinking block as the LAST line, a tiny cap that still
+        # comfortably reaches back far enough -> found (it's in the tail).
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pre_tool_tail_mb=0.1
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        path = self._big_transcript(
+            tmp_path,
+            filler_bytes=3_000_000,
+            thinking_text="deep dive on the auth module",
+            thinking_first=False,
+        )
+        assert path.stat().st_size > 3_000_000  # sanity: file exceeds the tiny cap
+        result = simba.hooks.pre_tool_use._extract_thinking(path)
+        assert result == "deep dive on the auth module"
+
+    def test_thinking_beyond_tail_window_not_found(self, tmp_path, monkeypatch):
+        # Memory-bound proxy: the thinking block sits at the START of a 3MB
+        # file and the 1MB cap never reaches back that far -> "" proves we no
+        # longer read the whole file (the old unbounded code would find it).
+        cfg = dataclasses.replace(
+            simba.hooks.config.HooksConfig(), pre_tool_tail_mb=1.0
+        )
+        monkeypatch.setattr(simba.hooks.pre_tool_use, "_hooks_cfg", lambda: cfg)
+        path = self._big_transcript(
+            tmp_path,
+            filler_bytes=3_000_000,
+            thinking_text="the one at the start",
+            thinking_first=True,
+        )
+        assert path.stat().st_size > 3_000_000
+        result = simba.hooks.pre_tool_use._extract_thinking(path)
+        assert result == ""
+
+
 class _ViolatingLLM:
     def complete_json(self, prompt):
         return {
