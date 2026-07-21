@@ -357,6 +357,19 @@ class HooksConfig:
     # <id>` approval.
     arc_promotion_min_evidence: int = 3
 
+    # PostToolBatch lane (new Claude Code hook schema event: fires once per
+    # tool-call round with a tool_calls[] array, before the next model call).
+    # UNMEASURED lever -> DEFAULT-OFF (off ⇒ zero cost: no daemon calls, no
+    # recall, a valid empty envelope). Enable:
+    # `simba config set hooks.post_tool_batch_enabled 1`.
+    post_tool_batch_enabled: bool = False
+    # Hard cap on the batch payload this lane will ever build a query from
+    # (kilobytes, decimal). tool_response is the SERIALIZED result as the
+    # model sees it and can be arbitrarily large; the trim runs client-side,
+    # unconditionally, before any daemon call -- the daemon must never receive
+    # an unbounded batch payload (see post_tool_batch._trim_batch_payload).
+    post_tool_batch_max_payload_kb: float = 256.0
+
     # Compact relay leg B: number of recent distilled failure->fix arcs
     # (failure_arc table) re-injected into SessionStart's source="compact"
     # branch -- the summarizer that runs across a compaction boundary drops

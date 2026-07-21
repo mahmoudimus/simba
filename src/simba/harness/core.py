@@ -22,6 +22,9 @@ _EVENT_MODULES = {
     "subagent_stop": "simba.hooks.subagent_stop",
     "pre_compact": "simba.hooks.pre_compact",
     "pre_tool": "simba.hooks.pre_tool_use",
+    # Claude-only (no Codex equivalent): fires once per tool-call round with a
+    # tool_calls[] batch. Default-off (hooks.post_tool_batch_enabled).
+    "post_tool_batch": "simba.hooks.post_tool_batch",
     # pi-only reasoning-layer hooks (spec 27 Tier 2): no Claude/Codex equivalent.
     "context": "simba.hooks.context",
     "message_end": "simba.hooks.message_end",

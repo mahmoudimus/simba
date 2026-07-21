@@ -1,7 +1,11 @@
 """Render a CanonicalResult to the Claude Code / Codex stdout envelope.
 
-Claude and Codex share envelope shapes for the four MVP events, so one adapter
-serves both.  Output is byte-identical to the pre-refactor hooks.<event>.main().
+Claude and Codex share envelope shapes for most events, so one adapter serves
+both -- but Claude Code's hook schema keeps evolving (PostToolBatch, a
+tightened PreToolUse, Stop/SubagentStop additionalContext) while Codex's
+tolerance for each change is unverified. Every such change is gated on the
+resolved ``SIMBA_CLIENT`` (see ``_client_accepts_system_message``) so Codex
+keeps receiving byte-identical output until its own tolerance is confirmed.
 """
 
 from __future__ import annotations
@@ -24,6 +28,9 @@ NATIVE_TO_CANONICAL = {
     "SubagentStop": "subagent_stop",
     "PreCompact": "pre_compact",
     "PreToolUse": "pre_tool",
+    # Claude-only (no Codex registration -- see .claude-plugin/hooks.json vs
+    # .codex/hooks.json): fires once per tool-call round. Default-off.
+    "PostToolBatch": "post_tool_batch",
     # v2: "PostToolUse": "post_tool",
     #     "PermissionRequest": "permission_request",
 }
@@ -73,8 +80,21 @@ def render(event: str, result: CanonicalResult) -> str:
             )
         elif result.block_reason:
             out = simba.hooks._io.pretool_deny(result.block_reason)
-        else:
+        elif not _client_accepts_system_message():
+            # Codex: unchanged legacy shape. Its schema tolerance for the
+            # removed additionalContext variant (see the claude branch below)
+            # is unverified, so it keeps exactly what it has always received.
             out = simba.hooks._io.context("PreToolUse", result.additional_context)
+        else:
+            # Claude Code's tightened PreToolUse hookSpecificOutput variant has
+            # NO additionalContext anymore (only permissionDecision /
+            # permissionDecisionReason / updatedInput survive) -- a
+            # hookSpecificOutput.additionalContext envelope for PreToolUse now
+            # fails schema validation. Any recalled context is silently
+            # dropped here; it migrates to the PostToolBatch lane
+            # (simba.hooks.post_tool_batch) instead, which renders on its own
+            # (valid) hookSpecificOutput variant.
+            out = simba.hooks._io.empty("PreToolUse")
         # Context-low leg C: the nudge rides top-level systemMessage regardless
         # of which PreToolUse shape fired (context injection is the common
         # case, but the merge is generic, not tied to it).
@@ -105,8 +125,17 @@ def render(event: str, result: CanonicalResult) -> str:
         return json.dumps({})
     if event in ("Stop", "SubagentStop"):
         # block_reason is handled by the generic short-circuit above (→
-        # {"decision":"block","reason":…}). Otherwise stopReason / empty object.
+        # {"decision":"block","reason":…}). Otherwise: Claude Code's hook
+        # schema now documents a real hookSpecificOutput.additionalContext
+        # variant for Stop/SubagentStop ("feedback for the model; the
+        # conversation continues") -- render there for claude (default).
+        # Codex's tolerance for this new variant is unverified, so it keeps
+        # the legacy top-level ``stopReason`` shape it has always received
+        # (same client gate as the PreToolUse migration above / the
+        # systemMessage merge's _client_accepts_system_message).
         if result.additional_context:
+            if _client_accepts_system_message():
+                return simba.hooks._io.context(event, result.additional_context)
             return json.dumps({"stopReason": result.additional_context})
         return json.dumps({})
     return simba.hooks._io.context(event, result.additional_context)

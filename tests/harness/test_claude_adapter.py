@@ -39,7 +39,26 @@ def test_render_user_prompt_submit_with_context():
     assert parsed["hookSpecificOutput"]["additionalContext"] == "hi"
 
 
-def test_render_stop_with_context_uses_stop_reason():
+def test_render_stop_with_context_uses_hookspecificoutput_for_claude_client(
+    monkeypatch,
+):
+    # Claude Code's hook schema now documents a real Stop hookSpecificOutput
+    # variant ("feedback for the model; the conversation continues") -- an
+    # unset SIMBA_CLIENT resolves to claude (this adapter's primary caller).
+    monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+    out = claude.render("Stop", CanonicalResult(additional_context="WARN"))
+    assert json.loads(out) == {
+        "hookSpecificOutput": {
+            "hookEventName": "Stop",
+            "additionalContext": "WARN",
+        }
+    }
+
+
+def test_render_stop_with_context_uses_stop_reason_for_codex_client(monkeypatch):
+    # Codex's tolerance for the new hookSpecificOutput variant is unverified,
+    # so it keeps the legacy top-level stopReason shape it has always gotten.
+    monkeypatch.setenv("SIMBA_CLIENT", "codex")
     out = claude.render("Stop", CanonicalResult(additional_context="WARN"))
     assert json.loads(out) == {"stopReason": "WARN"}
 
@@ -135,9 +154,15 @@ class TestCompactRelaySystemMessage:
 class TestPreToolContextLowSystemMessage:
     """Compact relay leg C: the context-low nudge rides the same top-level
     ``systemMessage`` channel, merged alongside PreToolUse's existing
-    hookSpecificOutput envelope (whichever shape it takes)."""
+    hookSpecificOutput envelope (whichever shape it takes).
 
-    def test_context_injection_with_system_message_adds_top_level_field(
+    Note (schema-driven render migration): for the claude client (default),
+    PreToolUse's additionalContext is gone (see TestPreToolUseAdditionalContext
+    Migration below) -- these tests only cover the systemMessage merge itself,
+    which is unaffected either way.
+    """
+
+    def test_context_injection_with_system_message_adds_top_level_field_claude(
         self, monkeypatch
     ):
         monkeypatch.delenv("SIMBA_CLIENT", raising=False)
@@ -150,6 +175,25 @@ class TestPreToolContextLowSystemMessage:
         )
         parsed = json.loads(out)
         assert parsed["systemMessage"] == "simba: context is filling up -- /compact now"
+        # additionalContext is gone for claude -- see the migration tests below.
+        assert "additionalContext" not in parsed["hookSpecificOutput"]
+
+    def test_context_injection_keeps_legacy_shape_for_codex_no_system_message(
+        self, monkeypatch
+    ):
+        # Codex: legacy additionalContext shape preserved, but systemMessage
+        # is suppressed regardless (its tolerance for that field is
+        # separately unverified -- see _client_accepts_system_message).
+        monkeypatch.setenv("SIMBA_CLIENT", "codex")
+        out = claude.render(
+            "PreToolUse",
+            CanonicalResult(
+                additional_context="<context-low-warning>...</context-low-warning>",
+                system_message="simba: context is filling up -- /compact now",
+            ),
+        )
+        parsed = json.loads(out)
+        assert "systemMessage" not in parsed
         assert (
             parsed["hookSpecificOutput"]["additionalContext"]
             == "<context-low-warning>...</context-low-warning>"
@@ -178,3 +222,54 @@ class TestPreToolContextLowSystemMessage:
         parsed = json.loads(out)
         assert parsed["systemMessage"] == "simba: nudge"
         assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestPreToolUseAdditionalContextMigration:
+    """Schema-driven render migration (Leg 2): Claude Code's PreToolUse
+    hookSpecificOutput variant dropped additionalContext entirely -- only
+    permissionDecision/permissionDecisionReason/updatedInput survive. For the
+    claude client (default) that context is silently dropped (it migrates to
+    the PostToolBatch lane instead); Codex keeps the byte-identical legacy
+    shape since its schema tolerance for the change is unverified.
+    """
+
+    def test_claude_client_never_renders_additional_context(self, monkeypatch):
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        out = claude.render(
+            "PreToolUse", CanonicalResult(additional_context="<tool-rule-warning>...")
+        )
+        parsed = json.loads(out)
+        assert parsed == {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+
+    def test_claude_client_explicit_still_drops_context(self, monkeypatch):
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        out = claude.render("PreToolUse", CanonicalResult(additional_context="warn"))
+        assert json.loads(out) == {
+            "hookSpecificOutput": {"hookEventName": "PreToolUse"}
+        }
+
+    def test_codex_client_preserves_legacy_additional_context_shape(self, monkeypatch):
+        monkeypatch.setenv("SIMBA_CLIENT", "codex")
+        out = claude.render(
+            "PreToolUse", CanonicalResult(additional_context="<tool-rule-warning>...")
+        )
+        assert json.loads(out) == {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "<tool-rule-warning>...",
+            }
+        }
+
+    def test_claude_client_deny_and_rewrite_shapes_unaffected(self, monkeypatch):
+        monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+        deny = json.loads(
+            claude.render("PreToolUse", CanonicalResult(block_reason="no"))
+        )
+        assert deny["hookSpecificOutput"]["permissionDecision"] == "deny"
+        rewrite = json.loads(
+            claude.render(
+                "PreToolUse",
+                CanonicalResult(transform={"command": "rg -n x", "reason": "r"}),
+            )
+        )
+        assert rewrite["hookSpecificOutput"]["updatedInput"]["command"] == "rg -n x"

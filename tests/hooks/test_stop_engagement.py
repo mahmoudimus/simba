@@ -18,6 +18,20 @@ def _patch_cfg(monkeypatch) -> None:
     )
 
 
+def _stop_context(out: str) -> str:
+    """Extract Stop's model-facing text regardless of render shape.
+
+    Default (unset SIMBA_CLIENT) resolves to claude -> non-empty context
+    renders as hookSpecificOutput.additionalContext (schema-driven
+    migration); a legacy stopReason lookup would silently see nothing.
+    """
+    parsed = json.loads(out)
+    hso = parsed.get("hookSpecificOutput")
+    if isinstance(hso, dict) and "additionalContext" in hso:
+        return hso["additionalContext"]
+    return parsed.get("stopReason", "")
+
+
 class TestStopEchoVerify:
     def test_off_by_default_no_echo_check(self, tmp_path, monkeypatch) -> None:
         # Characterization: lever OFF (default) → byte-identical to today. Even with
@@ -59,7 +73,7 @@ class TestStopEchoVerify:
                 "session_id": "sess-miss",
             }
         )
-        reason = json.loads(out).get("stopReason", "")
+        reason = _stop_context(out)
         assert "🦁☑" in reason
 
     def test_on_no_flag_when_echo_present(self, tmp_path, monkeypatch) -> None:
@@ -75,8 +89,8 @@ class TestStopEchoVerify:
                 "session_id": "sess-ok",
             }
         )
-        # Echo present → no engagement nudge in the stopReason.
-        reason = json.loads(out).get("stopReason", "")
+        # Echo present → no engagement nudge in the rendered context.
+        reason = _stop_context(out)
         assert "echo" not in reason.lower()
 
     def test_on_no_flag_when_simba_idle(self, tmp_path, monkeypatch) -> None:
@@ -92,7 +106,7 @@ class TestStopEchoVerify:
                 "session_id": "sess-idle",
             }
         )
-        reason = json.loads(out).get("stopReason", "")
+        reason = _stop_context(out)
         assert "🦁☑" not in reason
 
     def test_on_clears_record_after_check(self, tmp_path, monkeypatch) -> None:
