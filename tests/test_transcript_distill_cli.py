@@ -145,6 +145,152 @@ class TestCmdTranscriptDistill:
         assert len(rows) == 1
 
 
+def _write_two_arc_fixture(path: pathlib.Path) -> None:
+    """A resolved "exec" arc (AssertionError) plus an unresolved "spawn_agent"
+    arc (agent pool exhausted, never retried) -- the no-focus default order
+    lists the resolved arc first (see distill.py's sort key); a focus
+    mentioning the unresolved arc's words should move it first instead.
+    """
+    lines = [
+        json.dumps({"type": "session_meta", "payload": {"id": "s4", "cwd": "/repo"}}),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "call_id": "c-fail",
+                    "name": "spawn_agent",
+                    "arguments": '{"task":"risky"}',
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "c-fail",
+                    "output": [
+                        {"type": "text", "text": "Script failed\nWall time 1.0s\n"},
+                        {
+                            "type": "text",
+                            "text": "AttributeError: agent pool exhausted",
+                        },
+                    ],
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "c-exec-fail",
+                    "name": "exec",
+                    "input": "pytest -x",
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "c-exec-fail",
+                    "output": [
+                        {"type": "text", "text": "Script failed\nWall time 1.0s\n"},
+                        {"type": "text", "text": "AssertionError: boom"},
+                    ],
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "c-exec-fix",
+                    "name": "exec",
+                    "input": "pytest -k fixed",
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "c-exec-fix",
+                    "output": [
+                        {"type": "text", "text": "Script completed\nWall time 0.1s\n"},
+                        {"type": "text", "text": "1 passed"},
+                    ],
+                },
+            }
+        ),
+    ]
+    path.write_text("\n".join(lines) + "\n")
+
+
+class TestCmdTranscriptDistillFocus:
+    def test_focus_flag_reorders_failure_arcs_section(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        source = tmp_path / "rollout.jsonl"
+        _write_two_arc_fixture(source)
+        out_dir = tmp_path / "out"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        rc = cli._cmd_transcript(
+            [
+                "distill",
+                str(source),
+                "--session-id",
+                "s4",
+                "--out",
+                str(out_dir),
+                "--project-path",
+                str(project_dir),
+                "--focus",
+                "agent pool exhausted",
+            ]
+        )
+        assert rc == 0
+        text = (out_dir / "transcript.md").read_text()
+        arcs_section = text.split("<failure-arcs")[1].split("</failure-arcs>")[0]
+        assert arcs_section.index('tool="spawn_agent"') < arcs_section.index(
+            'tool="exec"'
+        )
+
+    def test_no_focus_flag_keeps_default_order(self, tmp_path: pathlib.Path) -> None:
+        source = tmp_path / "rollout.jsonl"
+        _write_two_arc_fixture(source)
+        out_dir = tmp_path / "out"
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        rc = cli._cmd_transcript(
+            [
+                "distill",
+                str(source),
+                "--session-id",
+                "s4",
+                "--out",
+                str(out_dir),
+                "--project-path",
+                str(project_dir),
+            ]
+        )
+        assert rc == 0
+        text = (out_dir / "transcript.md").read_text()
+        arcs_section = text.split("<failure-arcs")[1].split("</failure-arcs>")[0]
+        # No focus -> resolved "exec" arc sorts first (default order).
+        assert arcs_section.index('tool="exec"') < arcs_section.index(
+            'tool="spawn_agent"'
+        )
+
+
 def _write_resolved_flag_drop_fixture(path: pathlib.Path) -> None:
     """Same failure ("rg -rn pattern") 3x, then a fix ("rg -n pattern") --
     resolved with repeat_count=3, meeting the default arc_promotion_min_evidence

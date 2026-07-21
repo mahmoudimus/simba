@@ -5182,21 +5182,24 @@ def _cmd_transcript(args: list[str]) -> int:
     print(
         "usage: simba transcript {pending [--project P] [--json] "
         "| mark-extracted <session_id> "
-        "| distill <jsonl> [--session-id X] [--out DIR] [--project-path P]}"
+        "| distill <jsonl> [--session-id X] [--out DIR] [--project-path P] "
+        "[--focus TEXT]}"
     )
     return 1
 
 
 def _cmd_transcript_distill(args: list[str]) -> int:
     """`simba transcript distill <jsonl> [--session-id X] [--out DIR]
-    [--project-path P]` -- bounded single-pass distillation (see
-    ``transcripts/distill.py``) plus persisting any failure->fix arcs it
-    found into the project's ``failure_arc`` sidecar table.
+    [--project-path P] [--focus TEXT]` -- bounded single-pass distillation
+    (see ``transcripts/distill.py``) plus persisting any failure->fix arcs it
+    found into the project's ``failure_arc`` sidecar table. ``--focus``
+    (forwarded by ``hooks/pre_compact.py``'s over-cap detached spawn) only
+    reorders the distilled ``<failure-arcs>`` listing -- never what's stored.
     """
     if not args or args[0].startswith("--"):
         print(
             "usage: simba transcript distill <jsonl> [--session-id X] "
-            "[--out DIR] [--project-path P]",
+            "[--out DIR] [--project-path P] [--focus TEXT]",
             file=sys.stderr,
         )
         return 1
@@ -5205,6 +5208,7 @@ def _cmd_transcript_distill(args: list[str]) -> int:
     session_id = _parse_opt_value(args, "--session-id") or source.stem
     project_path = _parse_opt_value(args, "--project-path") or str(pathlib.Path.cwd())
     out_arg = _parse_opt_value(args, "--out")
+    focus = _parse_opt_value(args, "--focus") or ""
 
     import simba.config
     import simba.hooks.config  # registers "hooks"
@@ -5223,6 +5227,7 @@ def _cmd_transcript_distill(args: list[str]) -> int:
         session_id=session_id,
         project_path=project_path,
         max_output_mb=cfg.distill_max_output_mb,
+        focus=focus,
     )
 
     for arc in result.arcs:
