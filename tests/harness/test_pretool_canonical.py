@@ -142,14 +142,30 @@ def test_render_pretool_empty_context() -> None:
     assert out == simba.hooks._io.empty("PreToolUse")
 
 
-def test_render_pretool_context_injection() -> None:
+def test_render_pretool_context_injection_codex(monkeypatch) -> None:
+    # Codex keeps the legacy additionalContext shape byte-identical (its
+    # schema tolerance for the removed variant is unverified). See
+    # test_claude_adapter.py::TestPreToolUseAdditionalContextMigration for
+    # the claude-client (default) side of this schema-driven migration.
+    monkeypatch.setenv("SIMBA_CLIENT", "codex")
     out = claude.render("PreToolUse", CanonicalResult(additional_context="warn"))
     assert out == simba.hooks._io.context("PreToolUse", "warn")
 
 
-def test_render_ignores_escalated_block() -> None:
+def test_render_pretool_context_injection_claude_drops_context(monkeypatch) -> None:
+    # Claude Code's tightened PreToolUse hookSpecificOutput variant has no
+    # additionalContext -- an unset/claude client renders the empty envelope
+    # regardless of what additional_context carries.
+    monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+    out = claude.render("PreToolUse", CanonicalResult(additional_context="warn"))
+    assert out == simba.hooks._io.empty("PreToolUse")
+
+
+def test_render_ignores_escalated_block_codex(monkeypatch) -> None:
     # escalated_block is pi-only metadata; Claude/Codex render must ignore it.
-    # With only a TOOL_RULE warning in additional_context, render injects context.
+    # With only a TOOL_RULE warning in additional_context, Codex still injects
+    # context (legacy shape, byte-identical).
+    monkeypatch.setenv("SIMBA_CLIENT", "codex")
     out = claude.render(
         "PreToolUse",
         CanonicalResult(
@@ -158,6 +174,21 @@ def test_render_ignores_escalated_block() -> None:
         ),
     )
     assert out == simba.hooks._io.context("PreToolUse", "<tool-rule-warning>...")
+
+
+def test_render_ignores_escalated_block_claude(monkeypatch) -> None:
+    # Same escalated_block-is-ignored invariant, but for claude (default) the
+    # TOOL_RULE warning itself no longer renders either (migrated away) --
+    # both are absent from the envelope.
+    monkeypatch.delenv("SIMBA_CLIENT", raising=False)
+    out = claude.render(
+        "PreToolUse",
+        CanonicalResult(
+            additional_context="<tool-rule-warning>...",
+            escalated_block="blocked by rule",
+        ),
+    )
+    assert out == simba.hooks._io.empty("PreToolUse")
 
 
 # ── escalated_block population (pi-only metadata) ───────────────────────────

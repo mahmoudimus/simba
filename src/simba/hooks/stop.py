@@ -135,9 +135,11 @@ def run(hook_input: dict) -> CanonicalResult:
             hook_input, simba.config.load("memory"), cwd=cwd
         )
 
-    # Stop hooks don't support hookSpecificOutput — only top-level fields.
-    # The tailor error capture writes to disk as a side effect. A non-None
-    # block_reason renders as {"decision":"block","reason":…} (reconsider).
+    # Rendering (see simba.harness.adapters.claude): claude (default) renders
+    # non-empty additional_context as hookSpecificOutput.additionalContext;
+    # codex keeps the legacy top-level stopReason. The tailor error capture
+    # writes to disk as a side effect. A non-None block_reason renders as
+    # {"decision":"block","reason":…} (reconsider) regardless of client.
     return CanonicalResult(
         additional_context="\n\n".join(parts), block_reason=block_reason
     )

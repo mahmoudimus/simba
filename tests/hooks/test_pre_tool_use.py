@@ -54,16 +54,18 @@ class TestPreToolUseHook:
             ),
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
-            result = json.loads(
-                simba.hooks.pre_tool_use.main(
-                    {
-                        "tool_name": "Read",
-                        "transcript_path": str(transcript),
-                    }
-                )
+            # Production layer (run()), not the rendered envelope: whether
+            # additional_context reaches Claude's PreToolUse envelope is a
+            # RENDER-layer concern covered by test_claude_adapter.py's
+            # TestPreToolUseAdditionalContextMigration -- this test only
+            # pins that the recall pipeline itself still produces context.
+            result = simba.hooks.pre_tool_use.run(
+                {
+                    "tool_name": "Read",
+                    "transcript_path": str(transcript),
+                }
             )
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "auth uses JWT" in ctx
+        assert "auth uses JWT" in result.additional_context
 
     def test_dedup_skips_repeated_thinking(self, tmp_path):
         transcript = tmp_path / "transcript.jsonl"
@@ -177,14 +179,13 @@ class TestRecallMinQueryChars:
             ),
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
-            result = json.loads(
-                simba.hooks.pre_tool_use.main(
-                    {"tool_name": "Read", "transcript_path": str(transcript)}
-                )
+            # Production layer (run()) -- see the note in
+            # test_returns_memories_for_valid_tool above.
+            result = simba.hooks.pre_tool_use.run(
+                {"tool_name": "Read", "transcript_path": str(transcript)}
             )
         mock_recall.assert_called_once()
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "at the floor" in ctx
+        assert "at the floor" in result.additional_context
 
     def test_custom_floor_configurable(self, tmp_path, monkeypatch):
         cfg = dataclasses.replace(
@@ -361,14 +362,13 @@ class TestPitfallGate:
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
             # "Edit" is NOT in _ENABLED_TOOLS — the gate must still fire on it.
-            result = json.loads(
-                simba.hooks.pre_tool_use.main(
-                    {"tool_name": "Edit", "transcript_path": str(transcript)}
-                )
+            # Production layer (run()) -- see the note in
+            # test_returns_memories_for_valid_tool above.
+            result = simba.hooks.pre_tool_use.run(
+                {"tool_name": "Edit", "transcript_path": str(transcript)}
             )
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "pitfall-warning" in ctx
-        assert "No assertion weakening" in ctx
+        assert "pitfall-warning" in result.additional_context
+        assert "No assertion weakening" in result.additional_context
 
     def test_silent_when_topical_but_no_violation(self, tmp_path, monkeypatch):
         # The key fix: topically-close candidate the LLM judges NON-violating → silent.
@@ -431,13 +431,15 @@ class TestPitfallGate:
             ),
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
-            result = json.loads(
-                simba.hooks.pre_tool_use.main(
-                    {"tool_name": "Edit", "transcript_path": str(transcript)}
-                )
+            # Production layer (run()) -- see the note in
+            # test_returns_memories_for_valid_tool above.
+            result = simba.hooks.pre_tool_use.run(
+                {"tool_name": "Edit", "transcript_path": str(transcript)}
             )
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "pitfall-warning" in ctx and "that fix broke the build" in ctx
+        assert (
+            "pitfall-warning" in result.additional_context
+            and "that fix broke the build" in result.additional_context
+        )
 
     def test_recalls_only_doctrine_types(self, tmp_path, monkeypatch):
         cfg = dataclasses.replace(
@@ -492,13 +494,13 @@ class TestPitfallGate:
             ),
             unittest.mock.patch("simba.hooks.pre_tool_use._save_hash"),
         ):
-            result = json.loads(
-                simba.hooks.pre_tool_use.main(
-                    {"tool_name": "Grep", "transcript_path": str(transcript)}
-                )
+            # Production layer (run()) -- see the note in
+            # test_returns_memories_for_valid_tool above.
+            result = simba.hooks.pre_tool_use.run(
+                {"tool_name": "Grep", "transcript_path": str(transcript)}
             )
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "pitfall-warning" not in ctx  # gate suppressed on a read tool
+        # gate suppressed on a read tool
+        assert "pitfall-warning" not in result.additional_context
 
     def test_check_pitfall_disabled_returns_none(self, monkeypatch):
         # Unit: default config (gate off) → None regardless of input. Pin the
@@ -790,13 +792,12 @@ class TestCheckContextLow:
         transcript = tmp_path / "transcript.jsonl"
         transcript.write_text("x" * 200 + "\n")
 
-        result = json.loads(
-            simba.hooks.pre_tool_use.main(
-                {"tool_name": "Write", "transcript_path": str(transcript)}
-            )
+        # Production layer (run()) -- see the note in
+        # test_returns_memories_for_valid_tool above.
+        result = simba.hooks.pre_tool_use.run(
+            {"tool_name": "Write", "transcript_path": str(transcript)}
         )
-        ctx = result["hookSpecificOutput"].get("additionalContext", "")
-        assert "context-low-warning" in ctx
+        assert "context-low-warning" in result.additional_context
 
 
 class TestContextLowSystemMessage:

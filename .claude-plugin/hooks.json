@@ -21,6 +21,13 @@
         "timeout": 3000
       }
     ],
+    "PostToolBatch": [
+      {
+        "type": "command",
+        "command": "simba hook PostToolBatch",
+        "timeout": 3000
+      }
+    ],
     "PreToolUse": [
       {
         "type": "command",

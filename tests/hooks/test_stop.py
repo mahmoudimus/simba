@@ -7,11 +7,27 @@ import json
 import simba.hooks.stop
 
 
+def _stop_context(result: dict) -> str:
+    """Extract Stop's model-facing text regardless of render shape.
+
+    Claude (default, unset SIMBA_CLIENT) renders non-empty context as
+    ``hookSpecificOutput.additionalContext`` (the schema-driven migration);
+    Codex still gets the legacy top-level ``stopReason``. Empty either way ->
+    "".
+    """
+    hso = result.get("hookSpecificOutput")
+    if isinstance(hso, dict) and "additionalContext" in hso:
+        return hso["additionalContext"]
+    return result.get("stopReason", "")
+
+
 class TestStopHook:
     def test_returns_valid_json(self, tmp_path):
         result = json.loads(simba.hooks.stop.main({"cwd": str(tmp_path)}))
-        # Stop hooks don't use hookSpecificOutput — only top-level fields
+        # No response -> no context -> the empty envelope either way (no
+        # hookSpecificOutput, no stopReason).
         assert "hookSpecificOutput" not in result
+        assert "stopReason" not in result
 
     def test_no_warning_when_signal_present(self, tmp_path):
         result = json.loads(
@@ -22,9 +38,7 @@ class TestStopHook:
                 }
             )
         )
-        assert "stopReason" not in result or "MEMORY ALERT" not in result.get(
-            "stopReason", ""
-        )
+        assert "MEMORY ALERT" not in _stop_context(result)
 
     def test_warning_when_signal_missing(self, tmp_path):
         claude_md = tmp_path / "CLAUDE.md"
@@ -38,7 +52,10 @@ class TestStopHook:
                 }
             )
         )
-        reason = result.get("stopReason", "")
+        # Default client (unset SIMBA_CLIENT) resolves to claude -> the new
+        # hookSpecificOutput.additionalContext shape (see
+        # test_claude_adapter.py's Stop migration tests for the codex side).
+        reason = result["hookSpecificOutput"]["additionalContext"]
         assert "MEMORY ALERT" in reason
         assert "Project Rules" in reason
 
@@ -56,7 +73,7 @@ class TestStopHook:
                 }
             )
         )
-        # No hookSpecificOutput for Stop hooks
+        # No response -> no context -> empty envelope (no hookSpecificOutput).
         assert "hookSpecificOutput" not in result
 
 

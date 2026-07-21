@@ -154,6 +154,20 @@ def test_hook_endpoint_message_end_returns_canonical_fields():
     assert resp.json()["block_reason"] is None
 
 
+def test_hook_endpoint_post_tool_batch_returns_canonical_fields():
+    # Default-off lever: the daemon must resolve "post_tool_batch" (rather
+    # than 404 like an unknown event) and return the standard empty
+    # CanonicalResult fields with no daemon-side recall performed.
+    resp = _client().post(
+        "/hook/post_tool_batch",
+        json={"tool_calls": [{"tool_name": "Bash"}], "cwd": "/tmp"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["additional_context"] == ""
+    assert "memory_count" in body
+
+
 def test_stop_capture_uses_payload_cwd(tmp_path):
     # A transcript with an error so the tailor pipeline actually writes to disk;
     # the write must land under the payload cwd, never the daemon/process cwd.
