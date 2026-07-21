@@ -40,6 +40,20 @@ from simba.harness.core import CanonicalResult
 
 logger = logging.getLogger("simba.hooks.pre_compact")
 
+# /compact focus double duty: Claude Code's PreCompact hook receives the
+# `/compact <text>` argument as `custom_instructions` on stdin (empty/absent
+# for auto-compact). This is the only boundary that ever sees it -- SessionStart
+# does NOT receive custom_instructions -- so it's persisted here (as
+# "compactFocus" in the session's exported metadata.json, see _export_transcript)
+# for SessionStart(source="compact") to read back and rank the compact-relay
+# arc block (hooks/session_start.py's _compact_relay_arc_block), and
+# forwarded to the detached distiller as --focus (transcripts/distill.py) for
+# the over-cap path. Truncated here, once, so both consumers see the same
+# bounded string. Module-level budget constant (like distill.py's role-aware
+# budgets), not a `simba config` knob -- an internal truncation limit, not a
+# behavior lever.
+_FOCUS_MAX_CHARS = 300
+
 # Single-flight guard (part 4): two concurrent POST /hook/pre_compact for the
 # SAME session_id must not both run the export — the daemon dispatches each
 # hook call on a threadpool thread (see memory/routes.py::run_hook), so this
@@ -297,7 +311,7 @@ def _maybe_consolidate_episodes(cwd: str) -> None:
 
 
 def _spawn_distiller_detached(
-    session_id: str, transcript_path: pathlib.Path, cwd_str: str
+    session_id: str, transcript_path: pathlib.Path, cwd_str: str, focus: str = ""
 ) -> bool:
     """Spawn ``simba transcript distill`` DETACHED for a transcript over
     ``hooks.pre_compact_max_transcript_mb`` -- a bounded replacement for the
@@ -312,6 +326,12 @@ def _spawn_distiller_detached(
     an append-mode ``distill.log`` under the session export dir (never
     ``DEVNULL`` -- mirrors ``session_start.py``'s daemon-log rationale: a
     crashed distiller must leave a trace).
+
+    *focus* is the already-truncated ``/compact`` focus text (see
+    ``_FOCUS_MAX_CHARS``), forwarded as ``--focus`` when non-empty so the
+    distilled transcript's failure-arc listing is ordered by relevance to it
+    (``transcripts/distill.py``) -- "" omits the flag entirely, giving today's
+    unfocused ordering.
 
     Returns True iff the subprocess was actually spawned (marker-match skip,
     an I/O setup failure, or a Popen failure all return False) -- callers use
@@ -338,22 +358,25 @@ def _spawn_distiller_detached(
     except OSError:
         return False
     spawned = False
+    argv = [
+        sys.executable,
+        "-m",
+        "simba",
+        "transcript",
+        "distill",
+        str(transcript_path),
+        "--session-id",
+        session_id,
+        "--out",
+        str(session_dir),
+        "--project-path",
+        cwd_str,
+    ]
+    if focus:
+        argv.extend(["--focus", focus])
     try:
         subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "simba",
-                "transcript",
-                "distill",
-                str(transcript_path),
-                "--session-id",
-                session_id,
-                "--out",
-                str(session_dir),
-                "--project-path",
-                cwd_str,
-            ],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=log_file,
@@ -370,7 +393,10 @@ def _spawn_distiller_detached(
 
 
 def _export_transcript(
-    session_id: str, transcript_path: pathlib.Path, cwd_str: str
+    session_id: str,
+    transcript_path: pathlib.Path,
+    cwd_str: str,
+    custom_instructions: str = "",
 ) -> tuple[int | None, str]:
     """Export transcript.jsonl/.md/metadata.json for one PreCompact firing.
 
@@ -382,6 +408,11 @@ def _export_transcript(
     the human (compact relay leg A) -- "" unless something actually happened
     (a real export, or an over-cap distiller spawn); a skipped/idempotent/
     errored export never gets one.
+
+    *custom_instructions* is the already-truncated ``/compact`` focus text
+    (see ``_FOCUS_MAX_CHARS``) -- "" for auto-compact/no focus. It is
+    persisted into the written metadata (as ``compactFocus``, key omitted
+    entirely when ""), and forwarded to the over-cap detached distiller spawn.
     """
     cfg = _hooks_cfg()
 
@@ -402,7 +433,9 @@ def _export_transcript(
         system_message = ""
         if cfg.pre_compact_distill_enabled:
             with contextlib.suppress(Exception):
-                if _spawn_distiller_detached(session_id, transcript_path, cwd_str):
+                if _spawn_distiller_detached(
+                    session_id, transcript_path, cwd_str, custom_instructions
+                ):
                     system_message = (
                         f"simba: transcript {src_size / 1_000_000:.1f}MB over cap "
                         "-> distiller spawned"
@@ -452,6 +485,8 @@ def _export_transcript(
         "daemon_url": simba.hooks._memory_client.daemon_url(),
         "status": "pending_extraction",
     }
+    if custom_instructions:
+        metadata["compactFocus"] = custom_instructions
     metadata_path = session_dir / "metadata.json"
     with contextlib.suppress(OSError):
         metadata_path.write_text(json.dumps(metadata, indent=2))
@@ -479,6 +514,17 @@ def run(hook_input: dict) -> CanonicalResult:
         hook_input.get("transcript_path") or hook_input.get("transcriptPath") or ""
     )
     cwd_str = hook_input.get("cwd", "")
+    # /compact <text> -- Claude Code's ONLY delivery point for the focus text
+    # ("" for auto-compact/no focus). Truncated once here so every downstream
+    # consumer (metadata persistence, the detached distiller's --focus) sees
+    # the same bounded string.
+    custom_instructions = (
+        hook_input.get("custom_instructions")
+        or hook_input.get("customInstructions")
+        or ""
+    )
+    if custom_instructions:
+        custom_instructions = custom_instructions.strip()[:_FOCUS_MAX_CHARS]
 
     # Reset the rules-signal flag (spec 25): the model loses context across a
     # compaction, so the next prompt must re-inject the CORE block. Fail-soft.
@@ -504,7 +550,7 @@ def run(hook_input: dict) -> CanonicalResult:
         return CanonicalResult(suppress_output=True)
     try:
         msg_count, system_message = _export_transcript(
-            session_id, transcript_path, cwd_str
+            session_id, transcript_path, cwd_str, custom_instructions
         )
     finally:
         _release_export_slot(session_id)

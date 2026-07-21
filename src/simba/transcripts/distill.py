@@ -84,6 +84,7 @@ import typing
 
 import simba.hooks.pre_compact as _pre_compact
 import simba.tailor.hook as _tailor_hook
+import simba.transcripts.focus as _focus
 
 # ── role-aware budgets (module-level constants, NOT simba config knobs) ────
 TEXT_MESSAGE_BUDGET = 4096  # user/assistant message text
@@ -715,6 +716,7 @@ def distill_transcript(
     project_path: str = "",
     max_output_mb: float = 12.0,
     force: bool = False,
+    focus: str = "",
 ) -> DistillResult:
     """Single-pass, bounded distillation of ``source_path`` into
     ``out_dir/transcript.md`` (+ ``distill-meta.json``).
@@ -722,6 +724,16 @@ def distill_transcript(
     Idempotent: if ``out_dir/distill-meta.json`` already matches this exact
     (source path, source size) and ``force`` is False, returns immediately
     with ``skipped=True`` and no re-scan.
+
+    *focus* is an optional ``/compact`` focus string (``hooks/pre_compact.py``'s
+    over-cap spawn forwards it as ``--focus``). It affects ONLY the ordering of
+    ``result.arcs`` (and therefore the ``<failure-arcs>`` section of the output
+    document): focus-matching arcs are listed first, via the same deterministic
+    token-overlap scoring ``hooks/session_start.py`` uses for the compact-relay
+    ranking (``transcripts/focus.py`` -- no LLM, no embeddings). It never
+    changes the ``failure_arc`` sidecar schema or what gets stored -- the CLI
+    layer's ``upsert_arc`` loop over ``result.arcs`` is order-independent. ""
+    (the default) -- identical output to before this parameter existed.
     """
     start = time.monotonic()
     source_path = pathlib.Path(source_path)
@@ -831,7 +843,19 @@ def distill_transcript(
                 _handle_event(ev)
 
     arcs = arc_tracker.finalize()
-    arcs.sort(key=lambda a: (not a.resolved, -a.repeat_count))
+    focus_tokens = set(_focus.tokenize(focus)) if focus else set()
+    if focus_tokens:
+        arcs.sort(
+            key=lambda a: (
+                -_focus.score_overlap(
+                    focus_tokens, f"{a.signature} {a.fix_args_head or ''}"
+                ),
+                not a.resolved,
+                -a.repeat_count,
+            )
+        )
+    else:
+        arcs.sort(key=lambda a: (not a.resolved, -a.repeat_count))
     arc_section = _arc_section(arcs)
     remaining = max(0.0, budget_bytes - len(arc_section))
     body_parts = body.trim_to_budget(remaining)

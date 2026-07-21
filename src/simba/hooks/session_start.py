@@ -330,8 +330,70 @@ def _check_pending_extraction(session_id: str, cwd: str = "") -> str:
 _ARC_LINE_MAX_CHARS = 200
 _ARC_BLOCK_MAX_CHARS = 1500
 
+# When ranking by focus, fetch this many candidates per K wanted -- still a
+# single bounded SQL LIMIT (arcs.list_recent_resolved), just wider than the
+# final injected count so token-overlap scoring has something to rank beyond
+# the newest K by recency alone.
+_FOCUS_CANDIDATE_MULTIPLIER = 3
 
-def _compact_relay_arc_block(cwd_str: str, cfg) -> str:
+
+def _read_compact_focus(
+    session_id: str, *, transcripts_dir: pathlib.Path | None = None
+) -> str:
+    """Read THIS session's persisted ``/compact`` focus (``pre_compact.py``'s
+    ``compactFocus`` in ``metadata.json``), or "" when absent/missing/corrupt.
+
+    Reads the session's own ``metadata.json`` directly
+    (``transcripts_dir/session_id/metadata.json``) rather than scanning --
+    PreCompact and this SessionStart(``source="compact"``) fire for the SAME
+    session_id across one compaction boundary, so there's exactly one file to
+    look at (unlike ``_check_pending_extraction``'s cross-session
+    ``find_pending``, which is deliberately project-scoped since extraction
+    can be picked up by a later, different session). Fail-open: any I/O or
+    JSON error yields "" -- never raises.
+    """
+    if not session_id:
+        return ""
+    import simba.transcripts as _transcripts
+
+    base = transcripts_dir or _transcripts.default_transcripts_dir()
+    meta_path = base / session_id / "metadata.json"
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, ValueError):
+        return ""
+    focus = meta.get("compactFocus", "")
+    return focus if isinstance(focus, str) else ""
+
+
+def _rank_arcs_by_focus(rows: list, focus_text: str, k: int) -> list:
+    """Order *rows* by (token-overlap score against signature+fix desc,
+    recency desc), then take the top *k*.
+
+    *rows* arrive already recency-sorted (``arcs.list_recent_resolved``'s
+    ``ORDER BY created_at DESC``) -- using each row's original index as the
+    secondary sort key implements "recency desc" as the tiebreaker without
+    re-parsing timestamps. Deterministic keyword matching only (see
+    ``transcripts/focus.py``) -- no LLM, no embeddings.
+    """
+    import simba.transcripts.focus as _focus
+
+    tokens = set(_focus.tokenize(focus_text))
+    if not tokens:
+        return rows[:k]
+    scored = sorted(
+        enumerate(rows),
+        key=lambda pair: (
+            -_focus.score_overlap(
+                tokens, f"{pair[1].signature} {pair[1].fix_args_head or ''}"
+            ),
+            pair[0],
+        ),
+    )
+    return [row for _, row in scored[:k]]
+
+
+def _compact_relay_arc_block(cwd_str: str, cfg, session_id: str = "") -> str:
     """Recent distilled failure->fix arcs, re-injected after compaction.
 
     A compaction's summarizer drops this kind of specific, hard-won context
@@ -343,20 +405,39 @@ def _compact_relay_arc_block(cwd_str: str, cfg) -> str:
     or file read. Fail-open: any DB error (missing table, locked file, an
     unwritable project dir, ...) yields "" -- never raises, matching this
     module's silent-failure house style.
+
+    When *session_id* has a persisted ``/compact`` focus (``_read_compact_focus``),
+    up to ``_FOCUS_CANDIDATE_MULTIPLIER * K`` candidates are fetched (still one
+    bounded LIMIT query) and reordered by relevance to the focus
+    (``_rank_arcs_by_focus``), and a ``Compaction focus: <text>`` line is
+    prepended. No persisted focus (the common case, and every caller that
+    doesn't pass *session_id*) -- exactly today's pure-recency K-row fetch,
+    byte-identical output.
     """
     k = getattr(cfg, "compact_relay_arcs_k", 0)
     if not k or k <= 0 or not cwd_str:
         return ""
+
+    focus_text = _read_compact_focus(session_id) if session_id else ""
     try:
         import simba.transcripts.arcs as arcs
 
-        rows = arcs.list_recent_resolved(cwd_str, k, cwd=pathlib.Path(cwd_str))
+        fetch_limit = k * _FOCUS_CANDIDATE_MULTIPLIER if focus_text else k
+        rows = arcs.list_recent_resolved(
+            cwd_str, fetch_limit, cwd=pathlib.Path(cwd_str)
+        )
     except Exception:
         return ""
     if not rows:
         return ""
 
-    lines = ["Recent failure->fix arcs (distilled from prior transcripts):"]
+    if focus_text:
+        rows = _rank_arcs_by_focus(rows, focus_text, k)
+
+    lines = []
+    if focus_text:
+        lines.append(f"Compaction focus: {focus_text}")
+    lines.append("Recent failure->fix arcs (distilled from prior transcripts):")
     for row in rows:
         fix = row.fix_args_head or "(resolved, no fix recorded)"
         line = f"- {row.signature} -> {fix}"
@@ -453,7 +534,9 @@ def run(hook_input: dict) -> CanonicalResult:
     #    -- source == "compact" only (not every session_id, unlike #4 above),
     #    since this is specifically relaying what the compaction just dropped.
     if hook_input.get("source") == "compact":
-        arc_block = _compact_relay_arc_block(cwd_str or "", _hooks_cfg())
+        arc_block = _compact_relay_arc_block(
+            cwd_str or "", _hooks_cfg(), session_id=session_id
+        )
         if arc_block:
             parts.append(arc_block)
 

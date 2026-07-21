@@ -439,6 +439,94 @@ class TestMarkerMatches:
         assert not distill.marker_matches(tmp_path / "nope", tmp_path / "src", 10)
 
 
+class TestFocusOrdering:
+    """/compact focus (docs/plans -- compact relay follow-up): an optional
+    ``focus`` string reorders ``result.arcs`` (and therefore the
+    ``<failure-arcs>`` section of the output document) so focus-matching
+    arcs are listed first -- via the same deterministic token-overlap
+    scoring as the compact-relay ranking in hooks/session_start.py. Never
+    touches the failure_arc sidecar schema or what gets stored (that's the
+    CLI layer's separate ``upsert_arc`` loop over ``result.arcs``, which is
+    order-independent).
+    """
+
+    def test_no_focus_output_byte_identical_to_default(
+        self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
+    ) -> None:
+        out_dir_a = tmp_path / "out-a"
+        out_dir_b = tmp_path / "out-b"
+        distill.distill_transcript(
+            fixture_path, out_dir=out_dir_a, session_id="s1", max_output_mb=12.0
+        )
+        distill.distill_transcript(
+            fixture_path,
+            out_dir=out_dir_b,
+            session_id="s1",
+            max_output_mb=12.0,
+            focus="",
+        )
+        assert (out_dir_a / "transcript.md").read_text() == (
+            out_dir_b / "transcript.md"
+        ).read_text()
+
+    def test_no_focus_arc_order_is_resolved_first_then_repeat_count_desc(
+        self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
+    ) -> None:
+        out_dir = tmp_path / "out"
+        result = distill.distill_transcript(
+            fixture_path, out_dir=out_dir, session_id="s1", max_output_mb=12.0
+        )
+        tools_in_order = [a.tool for a in result.arcs]
+        assert tools_in_order == [RESOLVED_TOOL, REPEATED_TOOL, UNRESOLVED_TOOL]
+
+    def test_focus_matching_arc_moves_first(
+        self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
+    ) -> None:
+        out_dir = tmp_path / "out"
+        # UNRESOLVED_ERROR == "AttributeError: agent pool exhausted" -- last
+        # in the no-focus order (unresolved, repeat_count=1). A focus
+        # mentioning those words should move it to the front.
+        result = distill.distill_transcript(
+            fixture_path,
+            out_dir=out_dir,
+            session_id="s1",
+            max_output_mb=12.0,
+            focus="investigate the agent pool exhausted failure",
+        )
+        assert result.arcs[0].tool == UNRESOLVED_TOOL
+
+    def test_focus_reorders_failure_arcs_section_in_output_doc(
+        self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
+    ) -> None:
+        out_dir = tmp_path / "out"
+        distill.distill_transcript(
+            fixture_path,
+            out_dir=out_dir,
+            session_id="s1",
+            max_output_mb=12.0,
+            focus="agent pool exhausted",
+        )
+        text = (out_dir / "transcript.md").read_text()
+        arcs_section = text.split("<failure-arcs")[1].split("</failure-arcs>")[0]
+        assert arcs_section.index(f'tool="{UNRESOLVED_TOOL}"') < arcs_section.index(
+            f'tool="{RESOLVED_TOOL}"'
+        )
+
+    def test_non_matching_focus_falls_back_to_default_order(
+        self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
+    ) -> None:
+        out_dir = tmp_path / "out"
+        result = distill.distill_transcript(
+            fixture_path,
+            out_dir=out_dir,
+            session_id="s1",
+            max_output_mb=12.0,
+            focus="xyzxyz nomatch qqqqq",
+        )
+        tools_in_order = [a.tool for a in result.arcs]
+        assert tools_in_order == [RESOLVED_TOOL, REPEATED_TOOL, UNRESOLVED_TOOL]
+
+
 class TestOrdinaryMessages:
     def test_user_and_assistant_text_present_under_generous_budget(
         self, tmp_path: pathlib.Path, fixture_path: pathlib.Path
