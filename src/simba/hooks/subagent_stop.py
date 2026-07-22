@@ -32,7 +32,15 @@ def run(hook_input: dict) -> CanonicalResult:
     Doctrine-verify (Tier 2) only — no tailor/continuous capture (the parent's
     ``Stop`` owns that). Off by default → empty result. Fail-open."""
     cfg = _hooks_cfg()
-    response = hook_input.get("response", "")
+    # Same empty-"response" gap as Stop's (Claude Code sends none) -- backfill
+    # from the transcript tail so reasoning-verify below doesn't run blind. A
+    # runtime-provided response always wins; see simba.hooks.stop for the
+    # fuller rationale (this hook has only the one consumer).
+    response = hook_input.get("response") or ""
+    if not response:
+        import simba.hooks.usage_signals as usage_signals
+
+        response = usage_signals.backfill_response(hook_input, cfg)
     if getattr(cfg, "reasoning_verify_enabled", False) and response:
         from simba.hooks import reasoning_verify
 
