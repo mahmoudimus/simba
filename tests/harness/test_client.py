@@ -57,6 +57,47 @@ class TestDetectClient:
         assert client.detect_client("flag-name") == "flag-name"
 
 
+class TestDetectClientSource:
+    """``detect_client_source`` also reports whether resolution was defaulted."""
+
+    def test_explicit_is_not_defaulted(self) -> None:
+        name, defaulted = client.detect_client_source("explicit-name")
+        assert name == "explicit-name"
+        assert defaulted is False
+
+    def test_env_is_not_defaulted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "my-runtime")
+        name, defaulted = client.detect_client_source()
+        assert name == "my-runtime"
+        assert defaulted is False
+
+    def test_claude_code_marker_is_not_defaulted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDECODE", "1")
+        name, defaulted = client.detect_client_source()
+        assert name == client.CLAUDE_CODE
+        assert defaulted is False
+
+    def test_codex_sandbox_marker_is_not_defaulted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
+        name, defaulted = client.detect_client_source()
+        assert name == client.CODEX
+        assert defaulted is False
+
+    def test_fallthrough_is_defaulted(self) -> None:
+        name, defaulted = client.detect_client_source(default=client.CLAUDE_CODE)
+        assert name == client.CLAUDE_CODE
+        assert defaulted is True
+
+    def test_detect_client_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # detect_client keeps its old (non-tuple) signature/behavior.
+        monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
+        assert client.detect_client() == client.CODEX
+
+
 class TestClientHeaders:
     def test_returns_header_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDECODE", "1")

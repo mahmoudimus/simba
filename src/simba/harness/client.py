@@ -65,29 +65,52 @@ def detect_client(explicit: str | None = None, *, default: str = CLI) -> str:
     the ``codex`` CLI, which would mis-tag Claude Code hooks. Codex hooks carry
     an explicit ``--client codex`` (and run under ``CODEX_SANDBOX``).
     """
-    base = _detect_base(explicit, default=default)
+    resolved, _defaulted = detect_client_source(explicit, default=default)
+    return resolved
+
+
+def detect_client_source(
+    explicit: str | None = None, *, default: str = CLI
+) -> tuple[str, bool]:
+    """Resolve the client name, plus whether resolution fell through to ``default``.
+
+    Same precedence and return value as ``detect_client``, but also reports
+    whether NONE of the real signals (explicit flag, ``SIMBA_CLIENT`` env, or a
+    runtime marker) fired — i.e. the caller got ``default`` only because
+    nothing else was available. ``simba.__main__._cmd_hook`` uses this to gate
+    its payload-sniff fallback: a genuine resolution (even one that happens to
+    equal ``default``, e.g. an explicit ``--client claude-code``) must never be
+    second-guessed, only a true default is eligible for refinement.
+    """
+    base, defaulted = _detect_base(explicit, default=default)
     # The daemon-loopback hop: a recall issued from inside the daemon while
     # serving a hook nests under its origin → "claude-code.daemon". Collapse if
-    # the origin is already a ".daemon" value (never double-append).
+    # the origin is already a ".daemon" value (never double-append). Nesting
+    # only changes the returned name, not whether it was defaulted.
     if base == DAEMON:
         origin = get_origin_client()
         if origin:
-            return origin if origin.endswith(f".{DAEMON}") else f"{origin}.{DAEMON}"
-    return base
+            nested = origin if origin.endswith(f".{DAEMON}") else f"{origin}.{DAEMON}"
+            return nested, defaulted
+    return base, defaulted
 
 
-def _detect_base(explicit: str | None, *, default: str) -> str:
-    """Resolve the un-nested client name (precedence per the module docstring)."""
+def _detect_base(explicit: str | None, *, default: str) -> tuple[str, bool]:
+    """Resolve the un-nested client name (precedence per the module docstring).
+
+    Returns ``(name, defaulted)`` — ``defaulted`` is True only for the final
+    fall-through to ``default`` (no explicit flag, no env, no runtime marker).
+    """
     if explicit:
-        return explicit
+        return explicit, False
     env = os.environ.get("SIMBA_CLIENT")
     if env:
-        return env
+        return env, False
     if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
-        return CLAUDE_CODE
+        return CLAUDE_CODE, False
     if os.environ.get("CODEX_SANDBOX"):
-        return CODEX
-    return default
+        return CODEX, False
+    return default, True
 
 
 def client_headers(

@@ -260,10 +260,58 @@ def _build_codex_hooks_config() -> dict:
     return {"hooks": hooks}
 
 
+def _heal_codex_hook_command(command: str) -> str:
+    """Append a missing ``--client codex`` flag to a legacy simba hook command.
+
+    Matches conservatively on the ``simba hook`` token (rather than requiring
+    an exact prefix) so a hand-edited invocation -- e.g. an absolute
+    interpreter path -- is still recognized. A command that already carries
+    ``--client`` (any value) or isn't a ``simba hook`` invocation at all is
+    returned unchanged.
+    """
+    if "simba hook" not in command or "--client" in command:
+        return command
+    return f"{command} --client codex"
+
+
+def _heal_codex_hooks_config(node: Any) -> Any:
+    """Recursively heal ``command`` strings in a parsed .codex/hooks.json tree.
+
+    Walks dicts/lists looking for ``"command"`` string values to pass through
+    ``_heal_codex_hook_command``; every other key/value -- matchers, timeouts,
+    non-simba hook commands, and any top-level structure a user or another
+    tool added -- comes back unchanged, so healing an existing file never
+    clobbers content simba didn't write.
+    """
+    if isinstance(node, dict):
+        return {
+            key: (
+                _heal_codex_hook_command(value)
+                if key == "command" and isinstance(value, str)
+                else _heal_codex_hooks_config(value)
+            )
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_heal_codex_hooks_config(item) for item in node]
+    return node
+
+
 def _write_codex_project_hooks(
     project_dir: pathlib.Path, *, remove: bool = False
 ) -> bool:
-    """Write or remove .codex/hooks.json in ``project_dir``.
+    """Write, merge-heal, or remove .codex/hooks.json in ``project_dir``.
+
+    A fresh install (no existing file) writes ``_build_codex_hooks_config()``
+    verbatim -- every generated command already carries ``--client codex``.
+    Re-running over an EXISTING file merges instead of blindly overwriting:
+    it heals any legacy flagless ``simba hook`` command left by an older
+    ``simba codex-install``/``simba install`` (Codex sets no reliable client
+    marker in its hook subprocesses, so a flagless command resolves to the
+    claude-code default and gets claude's envelope shape, which Codex's
+    schema rejects -- "hook returned invalid stop hook JSON output") while
+    leaving already-flagged simba commands and any non-simba command (another
+    tool's hook registration) byte-identical.
 
     Returns True if a change was made.
     """
@@ -274,6 +322,15 @@ def _write_codex_project_hooks(
             return True
         return False
     hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    if hooks_path.exists():
+        try:
+            existing = json.loads(hooks_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if isinstance(existing, dict):
+            healed = _heal_codex_hooks_config(existing)
+            hooks_path.write_text(json.dumps(healed, indent=2) + "\n")
+            return True
     hooks_path.write_text(json.dumps(_build_codex_hooks_config(), indent=2) + "\n")
     return True
 
@@ -1590,13 +1647,21 @@ def _cmd_pi_install(args: list[str]) -> int:
     return 0
 
 
-def _resolve_hook_client(args: list[str]) -> tuple[list[str], str]:
+def _resolve_hook_client(args: list[str]) -> tuple[list[str], str, bool]:
     """Split a ``--client NAME`` (or ``--client=NAME``) flag out of ``args``.
 
-    Returns ``(positional_args_without_flag, resolved_client_name)``. The client
-    name follows ``simba.harness.client.detect_client`` precedence, defaulting to
-    ``claude-code`` (the primary caller of ``simba hook``). Codex's generated
-    hooks pass ``--client codex`` so they self-identify deterministically.
+    Returns ``(positional_args_without_flag, resolved_client_name, defaulted)``.
+    The client name follows ``simba.harness.client.detect_client`` precedence,
+    defaulting to ``claude-code`` (the primary caller of ``simba hook``).
+    Codex's generated hooks pass ``--client codex`` so they self-identify
+    deterministically. ``defaulted`` is True only when resolution fell all the
+    way through to that default -- no explicit flag, no ``SIMBA_CLIENT`` env,
+    no runtime marker (``CLAUDECODE``/``CLAUDE_CODE_ENTRYPOINT``/
+    ``CODEX_SANDBOX``). ``_cmd_hook`` uses it to gate a cheap post-hoc payload
+    sniff: a legacy ``.codex/hooks.json`` (written before ``--client codex``
+    existed) invokes ``simba hook <Event>`` flagless, and Codex sets no
+    reliable marker in its hook subprocesses, so that defaults to claude-code
+    and Codex gets claude's envelope shape -- which its schema rejects.
     """
     import simba.harness.client
 
@@ -1615,18 +1680,46 @@ def _resolve_hook_client(args: list[str]) -> tuple[list[str], str]:
             continue
         positional.append(a)
         i += 1
-    resolved = simba.harness.client.detect_client(
+    resolved, defaulted = simba.harness.client.detect_client_source(
         client_flag, default=simba.harness.client.CLAUDE_CODE
     )
-    return positional, resolved
+    return positional, resolved, defaulted
+
+
+# Payload fields that might carry a transcript path, across Claude Code
+# (snake_case) and possible Codex/pi callers (camelCase / rollout_path).
+_HOOK_TRANSCRIPT_PAYLOAD_KEYS = ("transcript_path", "transcriptPath", "rollout_path")
+
+
+def _sniff_codex_client(payload: dict) -> str | None:
+    """Cheap post-hoc signal: does a transcript path look like a Codex rollout?
+
+    Only meaningful when client resolution fell through to the default (see
+    ``_resolve_hook_client``'s ``defaulted`` return) -- an explicit ``--client``
+    flag or ``SIMBA_CLIENT`` env value is a genuine resolution and always wins,
+    this never runs to override one. Codex session transcripts live under
+    ``~/.codex/sessions/**/rollout-*.jsonl`` (``CODEX_HOME`` overrides the
+    root), so a ``/.codex/`` path segment is the cheapest available signal --
+    a substring check on an already-parsed payload field, no filesystem
+    access. Returns ``None`` when nothing in the payload looks like a Codex
+    path (the defaulted resolution stands).
+    """
+    for key in _HOOK_TRANSCRIPT_PAYLOAD_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and "/.codex/" in value:
+            import simba.harness.client
+
+            return simba.harness.client.CODEX
+    return None
 
 
 def _cmd_hook(args: list[str]) -> int:
     """Dispatch a hook event. Called by Claude Code / Codex, not users."""
-    # Resolve client identity once, then export it so BOTH the daemon path
+    # Resolve client identity, then export it so BOTH the daemon path
     # (X-Simba-Client header) and the inline fallback (recall via _memory_client)
-    # attribute this process consistently.
-    args, client = _resolve_hook_client(args)
+    # attribute this process consistently. A defaulted resolution gets one
+    # more chance below, once the payload is parsed -- see _sniff_codex_client.
+    args, client, client_defaulted = _resolve_hook_client(args)
     os.environ["SIMBA_CLIENT"] = client
 
     if not args:
@@ -1636,18 +1729,29 @@ def _cmd_hook(args: list[str]) -> int:
 
     event = args[0]
 
+    # Parse stdin once, before EITHER dispatch path below, so the payload
+    # sniff can refine a defaulted client before the canonicalized-event
+    # render (which reads SIMBA_CLIENT to pick claude vs codex envelope
+    # shapes) or the legacy module.main() dispatch ever sees it.
+    payload: dict = {}
+    try:
+        raw = sys.stdin.read()
+        if raw:
+            payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    if client_defaulted:
+        sniffed = _sniff_codex_client(payload)
+        if sniffed is not None and sniffed != client:
+            client = sniffed
+            os.environ["SIMBA_CLIENT"] = client
+
     import simba.harness.adapters.claude as claude
 
     # Canonicalized (MVP) events: daemon-first, inline fallback, render to envelope.
     canonical = claude.NATIVE_TO_CANONICAL.get(event)
     if canonical is not None:
-        payload: dict = {}
-        try:
-            raw = sys.stdin.read()
-            if raw:
-                payload = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            pass
         result = _dispatch_canonical(canonical, payload)
         print(claude.render(event, result))
         return 0
@@ -1663,15 +1767,7 @@ def _cmd_hook(args: list[str]) -> int:
 
     module = importlib.import_module(module_name)
 
-    hook_data: dict = {}
-    try:
-        raw = sys.stdin.read()
-        if raw:
-            hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    print(module.main(hook_data))
+    print(module.main(payload))
     return 0
 
 
