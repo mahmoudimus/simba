@@ -42,12 +42,12 @@ SRC_ROOT = REPO_ROOT / "src" / "simba"
 ALLOWLIST: set[tuple[str, int]] = {
     # `simba memory list`: interactive display, default limit=20 (not a
     # corpus-wide scan).
-    ("src/simba/__main__.py", 2153),
+    ("src/simba/__main__.py", 2249),
     # `simba memory prune`: human-invoked CLI, not an automated daemon pass.
-    ("src/simba/__main__.py", 2903),
+    ("src/simba/__main__.py", 2999),
     # `simba eval build`: human-invoked CLI; needs real content/context to
     # build eval cases.
-    ("src/simba/__main__.py", 4071),
+    ("src/simba/__main__.py", 4167),
     # `simba rules list`: human-facing CLI, type-filtered + limit=50.
     ("src/simba/rules_cli.py", 104),
     # `simba rules prune`: human-facing CLI, type-filtered + limit=1000.

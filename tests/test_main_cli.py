@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import pathlib
+import sys
 
 import pytest
 
@@ -25,28 +27,51 @@ class TestResolveHookClient:
             monkeypatch.delenv(var, raising=False)
 
     def test_explicit_flag(self) -> None:
-        args, client = cli._resolve_hook_client(
+        args, client, defaulted = cli._resolve_hook_client(
             ["UserPromptSubmit", "--client", "codex"]
         )
         assert args == ["UserPromptSubmit"]
         assert client == "codex"
+        assert defaulted is False
 
     def test_equals_form(self) -> None:
-        args, client = cli._resolve_hook_client(["PreToolUse", "--client=codex"])
+        args, client, defaulted = cli._resolve_hook_client(
+            ["PreToolUse", "--client=codex"]
+        )
         assert args == ["PreToolUse"]
         assert client == "codex"
+        assert defaulted is False
 
     def test_default_is_claude_code(self) -> None:
-        args, client = cli._resolve_hook_client(["SessionStart"])
+        args, client, defaulted = cli._resolve_hook_client(["SessionStart"])
         assert args == ["SessionStart"]
         assert client == "claude-code"
+        assert defaulted is True
 
     def test_env_marker_codex_without_flag(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CODEX_SANDBOX", "seatbelt")
-        _args, client = cli._resolve_hook_client(["SessionStart"])
+        _args, client, defaulted = cli._resolve_hook_client(["SessionStart"])
         assert client == "codex"
+        assert defaulted is False
+
+    def test_explicit_claude_code_is_not_defaulted(self) -> None:
+        # An explicit flag that happens to equal the default is still a real
+        # resolution -- the payload sniff must never second-guess it.
+        _args, client, defaulted = cli._resolve_hook_client(
+            ["Stop", "--client", "claude-code"]
+        )
+        assert client == "claude-code"
+        assert defaulted is False
+
+    def test_simba_client_env_is_not_defaulted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        _args, client, defaulted = cli._resolve_hook_client(["Stop"])
+        assert client == "claude-code"
+        assert defaulted is False
 
 
 class TestHookConfigClientTag:
@@ -73,6 +98,94 @@ class TestHookConfigClientTag:
         ]
         assert cmds
         assert all("--client" not in c for c in cmds)
+
+
+class TestHookClientSniff:
+    """`simba hook` sniffs a defaulted client from the payload's transcript path.
+
+    A legacy ``.codex/hooks.json`` generated before ``--client codex`` existed
+    invokes ``simba hook Stop`` flagless. Codex sets no reliable env marker in
+    hook subprocesses, so resolution falls through to the claude-code default
+    and Codex receives the claude Stop shape (top-level ``hookSpecificOutput``),
+    which its ``StopCommandOutputWire`` deserializer rejects. The payload sniff
+    only fires when resolution was genuinely defaulted -- an explicit flag or
+    env value always wins.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in (
+            "SIMBA_CLIENT",
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CODEX_SANDBOX",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def _run_stop_hook(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        payload: dict,
+        argv: list[str],
+    ) -> str:
+        import simba.harness.core as harness_core
+
+        monkeypatch.setattr(
+            cli,
+            "_dispatch_canonical",
+            lambda event, payload: harness_core.CanonicalResult(
+                additional_context="hi"
+            ),
+        )
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        rc = cli._cmd_hook([*argv, "Stop"])
+        assert rc == 0
+
+    def test_codex_transcript_path_sniffed_when_defaulted(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        payload = {
+            "transcript_path": ("/Users/x/.codex/sessions/2026/07/22/rollout-abc.jsonl")
+        }
+        self._run_stop_hook(monkeypatch, payload, [])
+        out = capsys.readouterr().out
+        assert json.loads(out) == {"stopReason": "hi"}
+        assert os.environ["SIMBA_CLIENT"] == "codex"
+
+    def test_explicit_flag_beats_sniff(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        payload = {
+            "transcript_path": ("/Users/x/.codex/sessions/2026/07/22/rollout-abc.jsonl")
+        }
+        self._run_stop_hook(monkeypatch, payload, ["--client", "claude-code"])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "hookSpecificOutput" in data
+        assert os.environ["SIMBA_CLIENT"] == "claude-code"
+
+    def test_claude_transcript_path_stays_default(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        payload = {"transcript_path": "/Users/x/.claude/projects/foo/00000000.jsonl"}
+        self._run_stop_hook(monkeypatch, payload, [])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "hookSpecificOutput" in data
+        assert os.environ["SIMBA_CLIENT"] == "claude-code"
+
+    def test_simba_client_env_beats_sniff(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("SIMBA_CLIENT", "claude-code")
+        payload = {
+            "transcript_path": ("/Users/x/.codex/sessions/2026/07/22/rollout-abc.jsonl")
+        }
+        self._run_stop_hook(monkeypatch, payload, [])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "hookSpecificOutput" in data
+        assert os.environ["SIMBA_CLIENT"] == "claude-code"
 
 
 def _write_codex_session(
@@ -2392,6 +2505,117 @@ class TestCodexProjectHooks:
         monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
         cli._cmd_install([])
         assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+class TestCodexProjectHooksHeal:
+    """Re-running install over an existing hooks.json heals, not overwrites.
+
+    An old ``simba codex-install``/``simba install`` (before ``--client
+    codex`` existed) wrote flagless ``simba hook <Event>`` commands. Codex's
+    hook subprocesses set no reliable client marker, so those commands
+    resolve to the claude-code default and get claude's Stop shape, which
+    Codex's schema rejects ("hook returned invalid stop hook JSON output").
+    Re-installing must heal the missing flag in place without clobbering an
+    already-flagged command or a non-simba command another tool registered.
+    """
+
+    def _seed_hooks_json(self, project_dir: pathlib.Path) -> pathlib.Path:
+        hooks_path = project_dir / ".codex" / "hooks.json"
+        hooks_path.parent.mkdir(parents=True, exist_ok=True)
+        hooks_path.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "Stop": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "simba hook Stop",
+                                        "timeout": 5,
+                                    }
+                                ]
+                            }
+                        ],
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash|apply_patch|Edit|Write",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": (
+                                            "simba hook PreToolUse --client codex"
+                                        ),
+                                        "timeout": 5,
+                                    }
+                                ],
+                            }
+                        ],
+                        "OtherTool": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": "other-tool run --flag",
+                                        "timeout": 10,
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        return hooks_path
+
+    def _commands_by_event(self, hooks_path: pathlib.Path) -> dict[str, str]:
+        data = json.loads(hooks_path.read_text())
+        return {
+            event: entries[0]["hooks"][0]["command"]
+            for event, entries in data["hooks"].items()
+        }
+
+    def test_flagless_simba_command_gains_flag(self, tmp_path: pathlib.Path) -> None:
+        hooks_path = self._seed_hooks_json(tmp_path)
+        cli._write_codex_project_hooks(tmp_path)
+        cmds = self._commands_by_event(hooks_path)
+        assert cmds["Stop"] == "simba hook Stop --client codex"
+
+    def test_already_flagged_simba_command_unchanged(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        hooks_path = self._seed_hooks_json(tmp_path)
+        cli._write_codex_project_hooks(tmp_path)
+        cmds = self._commands_by_event(hooks_path)
+        assert cmds["PreToolUse"] == "simba hook PreToolUse --client codex"
+
+    def test_non_simba_command_byte_identical(self, tmp_path: pathlib.Path) -> None:
+        hooks_path = self._seed_hooks_json(tmp_path)
+        cli._write_codex_project_hooks(tmp_path)
+        cmds = self._commands_by_event(hooks_path)
+        assert cmds["OtherTool"] == "other-tool run --flag"
+
+    def test_heal_preserves_non_simba_event_key(self, tmp_path: pathlib.Path) -> None:
+        # A merge must not drop structure simba didn't write, even if it
+        # isn't one of simba's own recognized hook events.
+        hooks_path = self._seed_hooks_json(tmp_path)
+        cli._write_codex_project_hooks(tmp_path)
+        data = json.loads(hooks_path.read_text())
+        assert "OtherTool" in data["hooks"]
+
+    def test_install_heals_legacy_flagless_command(
+        self, tmp_path: pathlib.Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "_install_skills", lambda d: 0)
+        hooks_path = self._seed_hooks_json(tmp_path)
+        cli._cmd_install([])
+        cmds = self._commands_by_event(hooks_path)
+        assert cmds["Stop"] == "simba hook Stop --client codex"
+        assert cmds["PreToolUse"] == "simba hook PreToolUse --client codex"
+        assert cmds["OtherTool"] == "other-tool run --flag"
 
 
 def test_apply_codex_feature_flag_skips_when_create_disabled(
