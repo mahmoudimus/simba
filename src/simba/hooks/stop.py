@@ -84,8 +84,21 @@ def run(hook_input: dict) -> CanonicalResult:
 
     cfg = _hooks_cfg()
 
+    # Claude Code's Stop payload carries NO "response" field (only Codex and
+    # tests supply one) -- diagnosed live as three false ⚠️ ENGAGEMENT nudges
+    # in a row, because every downstream consumer below (this guardian check,
+    # the engagement echo-verify, reasoning-verify, usage-signal feedback)
+    # saw "" and either silently skipped or always-failed its check. Backfill
+    # from the transcript tail ONCE here so all of them see the real
+    # last-assistant-message text. A runtime-provided response always wins;
+    # this only fires when the payload's own response is absent/empty.
+    response = hook_input.get("response") or ""
+    if not response:
+        import simba.hooks.usage_signals as usage_signals
+
+        response = usage_signals.backfill_response(hook_input, cfg)
+
     # 1. Guardian: check for [✓ rules] signal in response
-    response = hook_input.get("response", "")
     if response:
         signal_result = simba.guardian.check_signal.main(response=response, cwd=cwd)
         if signal_result:

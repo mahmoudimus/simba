@@ -203,6 +203,36 @@ def extract_last_assistant_text(
     return ""
 
 
+def backfill_response(hook_input: dict, cfg) -> str:
+    """Backfill an absent/empty ``response`` from the transcript tail.
+
+    Claude Code's Stop and SubagentStop payloads carry NO ``response`` field
+    (only Codex and tests supply one) -- without this, every downstream
+    consumer (guardian ``[✓ rules]`` signal check, engagement echo-verify,
+    reasoning-verify, this module's own ``process_turn_outcome``) always saw
+    ``""``, so the guardian check silently never ran and the engagement nudge
+    fired on every turn regardless of what the agent actually said. This
+    extracts the transcript's last assistant message as a stand-in, using
+    the same bounded-tail cap (``hooks.stop_tail_mb``) as
+    ``extract_last_assistant_text``'s other caller. Accepts either
+    ``transcript_path`` or ``transcriptPath`` in the payload (harness casing
+    varies). Fail-soft: no transcript path, an unreadable transcript, or any
+    other extraction trouble returns "" -- the behavior before this backfill
+    existed. Callers should only invoke this when the payload's own
+    ``response`` is absent/empty; a runtime-provided response always wins.
+    """
+    transcript_path = hook_input.get("transcript_path") or hook_input.get(
+        "transcriptPath", ""
+    )
+    if not transcript_path:
+        return ""
+    try:
+        cap_bytes = int(getattr(cfg, "stop_tail_mb", 16.0) * 1_000_000)
+        return extract_last_assistant_text(transcript_path, cap_bytes=cap_bytes)
+    except Exception:
+        return ""
+
+
 def process_turn_outcome(session_id: str, response: str, cfg) -> None:
     """Convert a completed turn's injections into use/noise signals.
 
