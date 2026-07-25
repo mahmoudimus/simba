@@ -158,7 +158,9 @@ def detect_used(
 
 
 def extract_last_assistant_text(
-    transcript_path: str, cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES
+    transcript_path: str,
+    cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES,
+    min_offset: int = 0,
 ) -> str:
     """Last assistant message's text parts from a transcript JSONL ("" on any
     trouble). The leftover-turn fallback's response source when Stop never
@@ -171,14 +173,31 @@ def extract_last_assistant_text(
     always near EOF, so a tail window is sufficient; one older than the
     window degrades to "" -- an empty leftover-turn fallback, an edge case
     already (Stop normally consumes the turn record before this ever runs).
+
+    ``min_offset`` (2026-07-25) scopes the scan to entries written at/after an
+    absolute file offset -- the transcript size when the turn started, per
+    ``guardian.engagement_flag.turn_offset``. Without it a turn that produced
+    no assistant output at all is credited with the PREVIOUS turn's message.
+    0 (the default) means unscoped.
     """
     if not transcript_path:
         return ""
     path = pathlib.Path(transcript_path)
     try:
-        tail, _ = simba.hooks._tail.read_tail_bytes(path, cap_bytes)
+        tail, tail_start = simba.hooks._tail.read_tail_bytes(path, cap_bytes)
     except OSError:
         return ""
+    if min_offset > tail_start:
+        # Absolute -> window-relative. The offset normally lands exactly on a
+        # line boundary (a size stamped between turns); when it lands mid-line
+        # (the transcript was being written at stamp time) drop that partial
+        # line rather than feeding a fragment to the JSON parser.
+        cut = min_offset - tail_start
+        on_boundary = tail[cut - 1 : cut] == b"\n"
+        tail = tail[cut:]
+        if not on_boundary:
+            nl = tail.find(b"\n")
+            tail = tail[nl + 1 :] if nl != -1 else b""
     lines = tail.decode("utf-8", errors="replace").strip().split("\n")
     for line in reversed(lines):
         if not line:
@@ -203,7 +222,7 @@ def extract_last_assistant_text(
     return ""
 
 
-def backfill_response(hook_input: dict, cfg) -> str:
+def backfill_response(hook_input: dict, cfg, min_offset: int = 0) -> str:
     """Backfill an absent/empty ``response`` from the transcript tail.
 
     Claude Code's Stop and SubagentStop payloads carry NO ``response`` field
@@ -220,6 +239,9 @@ def backfill_response(hook_input: dict, cfg) -> str:
     other extraction trouble returns "" -- the behavior before this backfill
     existed. Callers should only invoke this when the payload's own
     ``response`` is absent/empty; a runtime-provided response always wins.
+
+    ``min_offset`` scopes the scan to THIS turn's slice of the transcript (see
+    ``extract_last_assistant_text``); 0 means unscoped.
     """
     transcript_path = hook_input.get("transcript_path") or hook_input.get(
         "transcriptPath", ""
@@ -228,7 +250,9 @@ def backfill_response(hook_input: dict, cfg) -> str:
         return ""
     try:
         cap_bytes = int(getattr(cfg, "stop_tail_mb", 16.0) * 1_000_000)
-        return extract_last_assistant_text(transcript_path, cap_bytes=cap_bytes)
+        return extract_last_assistant_text(
+            transcript_path, cap_bytes=cap_bytes, min_offset=min_offset
+        )
     except Exception:
         return ""
 

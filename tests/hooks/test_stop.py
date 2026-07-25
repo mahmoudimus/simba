@@ -210,6 +210,42 @@ class TestStopResponseBackfill:
         reason = _stop_context(out)
         assert "🦁☑" in reason
 
+    def test_stale_prior_turn_text_is_not_this_turns_response(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # Mirror bug of the false nudge: on a turn that produced NO assistant
+        # output (client-side slash command, interrupted turn), an unscoped
+        # backfill walks back to the PREVIOUS turn's message and credits it to
+        # this turn -- silently passing the echo-verify and, worse, recording
+        # the stale "[✓ rules]" as this turn's attestation, which then gates
+        # off the next turn's CORE re-injection. The backfill must be scoped to
+        # the transcript slice this turn actually wrote.
+        import simba.guardian.engagement_flag as ef
+        import simba.guardian.signal_flag as sf
+
+        monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        monkeypatch.setattr(sf, "_TMP_DIR", tmp_path)
+        self._patch_marker_cfg(monkeypatch)
+
+        transcript = self._transcript(
+            tmp_path, "Prior turn. 🦁☑ recalled 2 (top 0.5) [✓ rules]"
+        )
+        turn_start = transcript.stat().st_size  # this turn starts here
+        ef.record_engagement(
+            "sess-stale",
+            ledger="🦁☑ recalled 2 (top 0.5)",
+            transcript_offset=turn_start,
+        )
+        simba.hooks.stop.main(
+            {
+                "transcript_path": str(transcript),
+                "cwd": str(tmp_path),
+                "session_id": "sess-stale",
+            }
+        )
+        # The prior turn's signal must NOT count as this turn's attestation.
+        assert sf.signal_present("sess-stale") is False
+
     def test_explicit_response_wins_over_transcript(self, tmp_path) -> None:
         # A runtime-provided response (Codex, or an explicit test payload)
         # always wins over the backfill -- even when the transcript

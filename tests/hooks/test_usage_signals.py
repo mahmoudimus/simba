@@ -271,6 +271,102 @@ class TestExtractLastAssistantTextBoundedTail:
         assert result == ""
 
 
+class TestExtractLastAssistantTextTurnScoped:
+    """``min_offset`` scopes the scan to THIS turn's slice of the transcript.
+
+    Without it the scan walks back to the last assistant message in the tail
+    regardless of when it was written, so a turn that produced no assistant
+    output at all (a client-side slash command, an interrupted turn) is
+    credited with the PREVIOUS turn's message -- silently passing the
+    engagement echo-verify and feeding a stale response to the guardian
+    signal check and the usage-signal citation detector.
+    """
+
+    @staticmethod
+    def _two_turn_transcript(tmp_path):
+        """Prior turn's assistant message, then this turn's user prompt.
+
+        Returns ``(path, turn_start)`` where ``turn_start`` is the file size at
+        the moment this turn began -- i.e. everything at/after it belongs to
+        this turn, and this turn produced no assistant text.
+        """
+        path = tmp_path / "t.jsonl"
+        prior = (
+            "\n".join(
+                [
+                    json.dumps({"message": {"role": "user", "content": "hi"}}),
+                    json.dumps(
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {"type": "text", "text": "Prior turn INTERR 50815."}
+                                ],
+                            }
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+        path.write_text(prior)
+        turn_start = path.stat().st_size
+        with path.open("a") as fh:
+            fh.write(json.dumps({"message": {"role": "user", "content": "/rename"}}))
+            fh.write("\n")
+        return path, turn_start
+
+    def test_prior_turn_text_excluded(self, tmp_path) -> None:
+        path, turn_start = self._two_turn_transcript(tmp_path)
+        # Unscoped: the prior turn's message is (wrongly) returned.
+        assert "INTERR 50815" in us.extract_last_assistant_text(str(path))
+        # Scoped to this turn: no assistant output this turn → "".
+        assert us.extract_last_assistant_text(str(path), min_offset=turn_start) == ""
+
+    def test_this_turn_text_included(self, tmp_path) -> None:
+        path, turn_start = self._two_turn_transcript(tmp_path)
+        with path.open("a") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "This turn answer."}],
+                        }
+                    }
+                )
+            )
+            fh.write("\n")
+        result = us.extract_last_assistant_text(str(path), min_offset=turn_start)
+        assert result == "This turn answer."
+
+    def test_offset_past_eof_yields_empty(self, tmp_path) -> None:
+        path, _ = self._two_turn_transcript(tmp_path)
+        assert us.extract_last_assistant_text(str(path), min_offset=10**9) == ""
+
+    def test_offset_inside_tail_window(self, tmp_path) -> None:
+        # The cut lands inside a tail window that starts mid-file: offset
+        # arithmetic must be absolute, not relative to the window.
+        path, turn_start = self._two_turn_transcript(tmp_path)
+        with path.open("a") as fh:
+            fh.write(json.dumps({"type": "filler", "m": "x" * 50_000}) + "\n")
+            fh.write(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "Late answer."}],
+                        }
+                    }
+                )
+                + "\n"
+            )
+        result = us.extract_last_assistant_text(
+            str(path), cap_bytes=60_000, min_offset=turn_start
+        )
+        assert result == "Late answer."
+
+
 def test_ups_leftover_turn_uses_configured_stop_tail_mb(tmp_path, monkeypatch) -> None:
     """UserPromptSubmit derives the cap from ``hooks.stop_tail_mb`` (same lever
     the Stop-side tailor/usage_signals reads) instead of hardcoding one."""

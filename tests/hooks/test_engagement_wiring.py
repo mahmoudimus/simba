@@ -95,6 +95,57 @@ class TestUserPromptSubmitMarker:
         assert "🦁☑ idle (nothing matched)" in ctx
         assert ef.engaged("sess-idle") is True
 
+    def test_on_records_turn_transcript_offset(self, tmp_path, monkeypatch) -> None:
+        # Stop's response backfill needs to know where THIS turn starts in the
+        # transcript, so a previous turn's assistant message can't be credited
+        # to a turn that produced no output of its own.
+        import simba.guardian.engagement_flag as ef
+
+        monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _MarkerCfg(), raising=False
+        )
+        transcript = tmp_path / "t.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "hi"}}) + "\n"
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            simba.hooks.user_prompt_submit.main(
+                {
+                    "prompt": "a sufficiently long prompt",
+                    "cwd": str(tmp_path),
+                    "session_id": "sess-offset",
+                    "transcript_path": str(transcript),
+                }
+            )
+        assert ef.turn_offset("sess-offset") == transcript.stat().st_size
+
+    def test_on_missing_transcript_records_zero_offset(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # No transcript path (or an unreadable one) → 0 → unfiltered backfill,
+        # exactly today's behavior. Fail-soft, never blocks the marker.
+        import simba.guardian.engagement_flag as ef
+
+        monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        monkeypatch.setattr(
+            simba.hooks.user_prompt_submit, "_cfg", lambda: _MarkerCfg(), raising=False
+        )
+        with unittest.mock.patch(
+            "simba.hooks._memory_client.recall_memories", return_value=[]
+        ):
+            simba.hooks.user_prompt_submit.main(
+                {
+                    "prompt": "a sufficiently long prompt",
+                    "cwd": str(tmp_path),
+                    "session_id": "sess-no-transcript",
+                }
+            )
+        assert ef.engaged("sess-no-transcript") is True
+        assert ef.turn_offset("sess-no-transcript") == 0
+
 
 class TestPreToolUseMarkerAppend:
     def test_off_by_default_no_marker(self, tmp_path, monkeypatch) -> None:
@@ -142,3 +193,35 @@ class TestPreToolUseMarkerAppend:
         )
         # The marker record now carries the appended gate action.
         assert "rewrote: uv run pytest" in ef.last_ledger("sess-rw")
+
+    def test_append_preserves_turn_offset(self, tmp_path, monkeypatch) -> None:
+        # PreToolUse rewrites the record mid-turn. It must carry the turn's
+        # transcript cursor forward -- re-stamping it here would cut off any
+        # assistant text written before the tool call (the "I'll check X"
+        # preamble), which is exactly the text Stop needs to verify.
+        import simba.guardian.engagement_flag as ef
+        import simba.redirect.check as rc
+
+        monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        ef.record_engagement(
+            "sess-off-rw", ledger="🦁☑ idle (nothing matched)", transcript_offset=1234
+        )
+
+        class _Decision:
+            action = "rewrite"
+            command = "uv run pytest"
+            reason = "use uv"
+
+        monkeypatch.setattr(
+            simba.hooks.pre_tool_use, "_hooks_cfg", lambda: _MarkerCfg(), raising=False
+        )
+        monkeypatch.setattr(rc, "check_command", lambda *a, **k: _Decision())
+        simba.hooks.pre_tool_use.main(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "pytest"},
+                "cwd": str(tmp_path),
+                "session_id": "sess-off-rw",
+            }
+        )
+        assert ef.turn_offset("sess-off-rw") == 1234
