@@ -29,17 +29,23 @@ def flag_path(session_id: str) -> pathlib.Path:
     return _TMP_DIR / f"{_PREFIX}{safe}.json"
 
 
-def record_engagement(session_id: str, *, ledger: str) -> None:
+def record_engagement(
+    session_id: str, *, ledger: str, transcript_offset: int | None = None
+) -> None:
     """Record that simba emitted ``ledger`` (surfaced activity) this turn.
+
+    ``transcript_offset`` is the transcript's size when the turn STARTED (see
+    ``turn_offset``); omit it (or pass 0) to leave the record turn-unscoped.
 
     Fail-soft: a write error is swallowed (Stop's verify is advisory).
     """
     if not session_id:
         return
+    record: dict = {"engaged": True, "ledger": ledger}
+    if transcript_offset:
+        record["offset"] = int(transcript_offset)
     with contextlib.suppress(OSError):
-        flag_path(session_id).write_text(
-            json.dumps({"engaged": True, "ledger": ledger})
-        )
+        flag_path(session_id).write_text(json.dumps(record))
 
 
 def engaged(session_id: str) -> bool:
@@ -68,6 +74,31 @@ def last_ledger(session_id: str) -> str:
         return ""
     ledger = data.get("ledger", "")
     return ledger if isinstance(ledger, str) else ""
+
+
+def turn_offset(session_id: str) -> int:
+    """Return the transcript byte offset at which THIS turn started (0 if none).
+
+    ``UserPromptSubmit`` stamps the transcript's size before the agent has
+    written anything, so every entry at/after this offset belongs to the
+    current turn. ``Stop`` uses it to scope its response backfill: without it
+    the scan walks back to the last assistant message in the tail *whenever it
+    was written*, so a turn that produced no assistant output at all (a
+    client-side slash command, an interrupted turn) is credited with the
+    PREVIOUS turn's message.
+
+    Missing / corrupt / non-integer → 0 (unscoped, i.e. pre-fix behavior).
+    """
+    if not session_id:
+        return 0
+    try:
+        data = json.loads(flag_path(session_id).read_text())
+    except (OSError, json.JSONDecodeError, ValueError):
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    offset = data.get("offset", 0)
+    return offset if isinstance(offset, int) and not isinstance(offset, bool) else 0
 
 
 def reset_engagement(session_id: str) -> None:

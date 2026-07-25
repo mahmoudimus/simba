@@ -12,6 +12,7 @@ import pathlib
 
 import simba.config
 import simba.guardian.check_signal
+import simba.guardian.engagement_flag
 import simba.guardian.signal_flag
 import simba.memory.continuous
 import simba.tailor.hook
@@ -54,6 +55,17 @@ def _verify_engagement_echo(response: str, session_id: str, cfg) -> str:
     Default-OFF → "" (byte-identical to today). Fail-soft (advisory)."""
     if not getattr(cfg, "engagement_marker_enabled", False) or not session_id:
         return ""
+    if not response:
+        # No assistant output this turn -> nothing could have carried the
+        # marker, so this is not a missed echo. Client-side slash commands
+        # (/rename, /clear) still fire UserPromptSubmit -- recall runs, the
+        # ledger is recorded -- but never produce an assistant turn; nudging
+        # then blames a response that does not exist and is unactionable
+        # (diagnosed live 2026-07-25 on a /rename). Mirrors the `if response:`
+        # guard the sibling guardian and reasoning-verify checks already have.
+        # Deliberately does NOT reset the record: the next UserPromptSubmit
+        # resets it at the turn boundary, and nothing reads it in between.
+        return ""
     try:
         import simba.guardian.engagement_flag as ef
         import simba.hooks.engagement as eng
@@ -92,11 +104,25 @@ def run(hook_input: dict) -> CanonicalResult:
     # from the transcript tail ONCE here so all of them see the real
     # last-assistant-message text. A runtime-provided response always wins;
     # this only fires when the payload's own response is absent/empty.
+    #
+    # The backfill is SCOPED to this turn's slice of the transcript (2026-07-25):
+    # the scan otherwise walks back to the last assistant message in the tail
+    # whenever it was written, so a turn that produced no assistant output at all
+    # (a client-side /rename, an interrupted turn) inherits the PREVIOUS turn's
+    # message -- passing the echo-verify on stale evidence, recording a stale
+    # [✓ rules] as this turn's attestation (which gates off next turn's CORE
+    # re-injection), and citing memories injected AFTER that text was written.
+    # No recorded offset (marker lever off) -> 0 -> unscoped, as before.
     response = hook_input.get("response") or ""
     if not response:
         import simba.hooks.usage_signals as usage_signals
 
-        response = usage_signals.backfill_response(hook_input, cfg)
+        turn_start = 0
+        with contextlib.suppress(Exception):
+            turn_start = simba.guardian.engagement_flag.turn_offset(session_id)
+        response = usage_signals.backfill_response(
+            hook_input, cfg, min_offset=turn_start
+        )
 
     # 1. Guardian: check for [✓ rules] signal in response
     if response:

@@ -109,6 +109,25 @@ class TestStopEchoVerify:
         reason = _stop_context(out)
         assert "🦁☑" not in reason
 
+    def test_on_no_flag_when_turn_produced_no_response(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # A turn with no assistant output is not a missed echo. Client-side
+        # slash commands (/rename, /clear) still fire UserPromptSubmit --
+        # recall runs, the ledger is recorded -- but no assistant turn is ever
+        # produced, so there is nothing to carry the marker. Diagnosed live
+        # 2026-07-25: a /rename immediately after SessionStart drew an
+        # unactionable ⚠️ ENGAGEMENT nudge blaming a response that never existed.
+        import simba.guardian.engagement_flag as ef
+
+        monkeypatch.setattr(ef, "_TMP_DIR", tmp_path)
+        _patch_cfg(monkeypatch)
+        ef.record_engagement("sess-noresp", ledger="🦁☑ recalled 3 (top 0.71)")
+        out = simba.hooks.stop.main(
+            {"response": "", "cwd": str(tmp_path), "session_id": "sess-noresp"}
+        )
+        assert "ENGAGEMENT" not in _stop_context(out)
+
     def test_on_clears_record_after_check(self, tmp_path, monkeypatch) -> None:
         # The per-turn record ages out after Stop reads it.
         import simba.guardian.engagement_flag as ef

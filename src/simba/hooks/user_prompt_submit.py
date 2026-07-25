@@ -151,12 +151,32 @@ def _reset_turn_flags(session_id: str) -> None:
         simba.guardian.preflight_flag.reset_mandate(session_id)
 
 
-def _engagement_marker(cfg, memories: list[dict], session_id: str) -> str:
+def _turn_transcript_offset(transcript_path: str) -> int:
+    """Transcript size right now — where THIS turn's entries will start.
+
+    Stamped into the engagement record so Stop can scope its response backfill
+    to the current turn (see ``guardian.engagement_flag.turn_offset``). Nothing
+    of this turn has been written yet at UserPromptSubmit time, so the current
+    size is an exact lower bound. Fail-soft: no path / unreadable → 0
+    (unscoped, i.e. the pre-2026-07-25 behavior).
+    """
+    if not transcript_path:
+        return 0
+    try:
+        return pathlib.Path(transcript_path).stat().st_size
+    except OSError:
+        return 0
+
+
+def _engagement_marker(
+    cfg, memories: list[dict], session_id: str, transcript_path: str = ""
+) -> str:
     """Tier-1 engagement ledger (spec 27): the simba-EMITTED ``🦁☑`` line.
 
     Built deterministically from THIS turn's recall (count + top similarity), so
-    even a zero-recall turn emits ``🦁☑ idle``. Records the ledger for the Stop
-    echo-verify. Default-OFF → "" (byte-identical to today). Fail-soft.
+    even a zero-recall turn emits ``🦁☑ idle``. Records the ledger — and the
+    turn's transcript cursor — for the Stop echo-verify. Default-OFF → ""
+    (byte-identical to today). Fail-soft.
     """
     if not getattr(cfg, "engagement_marker_enabled", False):
         return ""
@@ -173,7 +193,11 @@ def _engagement_marker(cfg, memories: list[dict], session_id: str) -> str:
         import simba.guardian.engagement_flag
 
         simba.guardian.engagement_flag.reset_engagement(session_id)
-        simba.guardian.engagement_flag.record_engagement(session_id, ledger=ledger)
+        simba.guardian.engagement_flag.record_engagement(
+            session_id,
+            ledger=ledger,
+            transcript_offset=_turn_transcript_offset(transcript_path),
+        )
     # The echo contract rides with the marker (config-gated, so off ⇒ byte-
     # identical). The bare ``ledger`` line is what Stop verifies the echo of.
     return (
@@ -403,7 +427,9 @@ def run(hook_input: dict) -> CanonicalResult:
     # 5. Engagement marker (spec 27): the simba-EMITTED 🦁☑ ledger of what this
     #    turn surfaced. Leads the injected context so it is the glanceable first
     #    line. Default-OFF → "" (byte-identical to today).
-    marker = _engagement_marker(cfg, memories, session_id)
+    marker = _engagement_marker(
+        cfg, memories, session_id, hook_input.get("transcript_path", "")
+    )
     if marker:
         lanes.insert(
             0,

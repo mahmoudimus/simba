@@ -548,7 +548,14 @@ def _record_gate_action(session_id: str, kind: str, detail: str) -> None:
             memory_count=0, top_similarity=0.0
         )
         action = eng.gate_action_label(kind, detail)
-        ef.record_engagement(session_id, ledger=eng.append_gate_action(base, action))
+        # Carry the turn's transcript cursor forward. Re-stamping it here would
+        # cut Stop's backfill off at the tool call, hiding any assistant text
+        # written before it -- which is exactly the text Stop verifies.
+        ef.record_engagement(
+            session_id,
+            ledger=eng.append_gate_action(base, action),
+            transcript_offset=ef.turn_offset(session_id),
+        )
 
 
 def run(hook_input: dict) -> CanonicalResult:
