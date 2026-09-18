@@ -13,14 +13,7 @@ import type {
   AgentEndEvent,
   ToolCallEvent,
   ToolCallEventResult,
-  ContextEvent,
 } from "@earendil-works/pi-coding-agent";
-// NOTE: pi (v0.76.0) re-exports `ContextEvent` from its package index but NOT
-// `ContextEventResult`, `MessageEndEvent`, or `MessageEndEventResult` (they live
-// in the internal extensions/types module). The `pi.on(...)` overloads still type
-// the handler param + return fully, so we let TS INFER those from the overload
-// rather than importing the un-exported names.
-
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
 
 /** Surface what simba did to stderr — visible even in `pi -p`. No magic. */
@@ -80,19 +73,19 @@ function lastAssistantText(messages: Array<{ role?: string; content?: unknown }>
   return "";
 }
 
-// Flatten the last few messages to a compact text blob for the daemon's recall.
-// Kept small (the `context` event fires per LLM call → latency); we only need a
-// query, not the whole transcript. Ignores non-text blocks via messageText.
-function recentMessagesText(
-  messages: Array<{ role?: string; content?: unknown }>,
-  limit = 4,
-): string {
-  return messages
-    .slice(-limit)
-    .map((m) => messageText(m?.content))
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, 2000);
+// Engagement receipts are telemetry, not user instructions. Split the tagged
+// prompt receipt here so this also works with already-running Simba daemons.
+// Actual recall and CORE guidance remain in the model-facing context.
+function promptPresentation(context: string): { guidance: string; ledger?: string } {
+  let ledger: string | undefined;
+  const guidance = context.replace(
+    /<engagement-marker>\s*([\s\S]*?)<\/engagement-marker>/g,
+    (_block, body: string) => {
+      ledger = body.split("\n").map((line) => line.trim()).find(Boolean);
+      return "";
+    },
+  ).trim();
+  return { guidance, ledger };
 }
 
 // The agent's most recent reasoning, pulled from the live session branch (pi has
@@ -160,11 +153,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (e: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     const r = await callSimba("prompt_submit", { prompt: e.prompt, cwd: ctx.cwd });
-    if (r.additional_context) {
+    const { guidance, ledger } = promptPresentation(r.additional_context ?? "");
+    if (ctx.hasUI) ctx.ui.setStatus("simba", ledger);
+    else if (ledger) note(ledger);
+    if (guidance) {
       const n = r.memory_count ?? 0;
       note(n > 0 ? `${n} memories injected` : "project rules injected");
       return {
-        message: { customType: "simba-memory", content: r.additional_context, display: true },
+        message: { customType: "simba-memory", content: guidance, display: true },
       };
     }
     note("nothing to inject");
@@ -201,39 +197,9 @@ export default function (pi: ExtensionAPI) {
     // No gate fired — allow with the original input (context injections dropped).
   });
 
-  // Tier-2 (pi-only): re-inject doctrine/recall before EVERY LLM call so the
-  // rules ride the whole reasoning chain (no mid-reasoning drift — the gap
-  // Claude/Codex cannot reach). The daemon decides what to inject (gated by
-  // engagement_marker_enabled); off → empty, we return nothing. We append the
-  // ledger as a custom message so it converts into the LLM context, keeping the
-  // existing list intact. Payload is minimal (this fires per call → latency).
-  //
-  // ⚠️ UNVERIFIED (spec-27 review M2): an UNREGISTERED `custom`-role message may be
-  // dropped by pi's `convertToLlm` — if so this re-injection is a SILENT NO-OP and
-  // the LLM never sees the ledger. MUST verify against the pi runtime before
-  // trusting this tier (and switch to a converted/user-role shape if dropped).
-  // The lever is default-OFF, so this is staged, not live.
-  pi.on("context", async (e: ContextEvent, ctx: ExtensionContext) => {
-    const r = await callSimba("context", {
-      messages_text: recentMessagesText(e.messages),
-      cwd: ctx.cwd,
-    });
-    const inject = r.additional_context;
-    if (!inject) return; // lever off / nothing to inject — leave messages untouched
-    note(`re-injected ledger (${r.memory_count ?? 0} recalled)`);
-    return {
-      messages: [
-        ...e.messages,
-        {
-          role: "custom" as const,
-          customType: "simba-context",
-          content: inject,
-          display: false,
-          timestamp: Date.now(),
-        },
-      ],
-    };
-  });
+  // No per-LLM-call context handler: Pi converts custom messages to user
+  // messages. Repeating a receipt there masquerades as fresh user input.
+  // Relevant memories and rules arrive once through before_agent_start above.
 
   // Tier-2 (pi-only): doctrine-verify the FINALIZED assistant message — the
   // tools-free-output catch (a wrong conclusion stated in prose has no tool to
