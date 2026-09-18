@@ -1,5 +1,15 @@
 # 27 — Reasoning-layer verification: the 🦁☑ engagement marker + doctrine check (harness-tiered)
 
+> Updated 2026-09-17: Pi now renders the prompt engagement receipt in its
+> `simba` status entry (stderr in headless mode), removing the tagged receipt
+> and echo instruction from model context. Real recall and CORE guidance still
+> arrive through `before_agent_start`. The per-call `context` bridge described
+> below was removed: Pi converts custom messages into user messages, so bare
+> receipts appeared to the model as repeated user input. The Python `context`
+> endpoint remains for compatibility; the updated bridge does not call it.
+> Claude/Codex marker behavior is unchanged.
+
+
 **Date:** 2026-06-16
 **Status:** TODO (design; not started)
 **Branch:** TBD off `main`
