@@ -74,42 +74,6 @@ def gather_git_status(cwd: pathlib.Path | None = None) -> str:
     return git_status
 
 
-def format_time_ago(seconds: int) -> str:
-    """Format seconds into a human-readable 'ago' string."""
-    if seconds < 3600:
-        return f"{seconds // 60}m ago"
-    elif seconds < 86400:
-        return f"{seconds // 3600}h ago"
-    else:
-        return f"{seconds // 86400}d ago"
-
-
-def gather_checkpoints(cwd: pathlib.Path | None = None) -> list[tuple[str, str]]:
-    """Find recent progress checkpoint files and return (name, time_ago) pairs."""
-    if cwd is None:
-        cwd = pathlib.Path.cwd()
-
-    memory_dir = cwd / ".simba" / "tailor"
-    if not memory_dir.is_dir():
-        return []
-
-    progress_files = sorted(
-        memory_dir.glob("progress-*.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )[:3]
-
-    marks: list[tuple[str, str]] = []
-    now = time.time()
-    for f in progress_files:
-        name = f.stem.removeprefix("progress-")
-        mod_time = f.stat().st_mtime
-        diff = int(now - mod_time)
-        marks.append((name, format_time_ago(diff)))
-
-    return marks
-
-
 def gather_context(cwd: pathlib.Path | None = None) -> str:
     """Build the full context string."""
     if cwd is None:
@@ -118,18 +82,7 @@ def gather_context(cwd: pathlib.Path | None = None) -> str:
     time_str = time.strftime("%H:%M %Z (%a)")
     git_status = gather_git_status(cwd=cwd)
 
-    context = f"Time: {time_str} | Git: {git_status}"
-
-    memory_dir = cwd / ".simba" / "tailor"
-    if memory_dir.is_dir():
-        marks = gather_checkpoints(cwd=cwd)
-        if marks:
-            marks_str = " ".join(f"{name}({ago})" for name, ago in marks)
-            context += f" | Marks: {marks_str}"
-        else:
-            context += " | Marks: none (use /mark <name> to save)"
-
-    return context
+    return f"Time: {time_str} | Git: {git_status}"
 
 
 def main(cwd: pathlib.Path | None = None) -> str:
