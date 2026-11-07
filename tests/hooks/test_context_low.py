@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import json
 import pathlib
+import threading
 import types
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 import simba.hooks.pre_tool_use as ptu
 
@@ -82,6 +86,138 @@ def test_rearms_after_a_new_compaction(tmp_path: pathlib.Path, monkeypatch) -> N
     # a NEW compaction (different offset) re-arms the warning
     _write(f, pre=80_000, post=50_000, compacted=True)
     assert ptu._check_context_low(f) is not None
+
+
+def test_interleaved_chats_keep_their_warning_state(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100)
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    for transcript in (a, b):
+        _write(transcript, pre=200, post=200, compacted=False)
+    assert ptu._check_context_low(a) is not None
+    assert ptu._check_context_low(b) is not None
+    assert ptu._check_context_low(a) is None
+    assert ptu._check_context_low(b) is None
+
+
+def test_simultaneous_hooks_emit_only_one_notice(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=False)
+    workers = 8
+    barrier = threading.Barrier(workers, timeout=10)
+    legacy_flag = tmp_path / "flag.json"
+    read_text = pathlib.Path.read_text
+
+    def synchronized_legacy_read(path, *args, **kwargs):
+        # Force the old read-then-write implementation to observe the missing
+        # flag in every worker before any worker can write it. Exclusive-create
+        # claims require no reads and therefore do not use this legacy path.
+        if path == legacy_flag:
+            try:
+                return read_text(path, *args, **kwargs)
+            finally:
+                barrier.wait()
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", synchronized_legacy_read)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(ptu._check_context_low, [transcript] * workers))
+    assert sum(result is not None for result in results) == 1
+
+
+def test_unavailable_warning_storage_stays_quiet(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100)
+    monkeypatch.setattr(
+        ptu, "_CONTEXT_LOW_FLAG", tmp_path / "missing-parent" / "flag.json"
+    )
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=False)
+    assert ptu._check_context_low(transcript) is None
+    assert ptu._check_context_low(transcript) is None
+
+
+@pytest.mark.parametrize("threshold", [0, -1])
+def test_nonpositive_threshold_disables_notices(tmp_path, monkeypatch, threshold):
+    _patch(monkeypatch, tmp_path, threshold=threshold)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=False)
+    assert ptu._check_context_low(transcript) is None
+
+
+def test_path_aliases_share_warning_state(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=False)
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(transcript)
+    assert ptu._check_context_low(transcript) is not None
+    assert ptu._check_context_low(alias) is None
+
+
+def test_marker_aging_out_of_scan_does_not_rearm(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100, pre_tool_tail_mb=0.001)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=True)
+    assert ptu._check_context_low(transcript) is not None
+    with transcript.open("a") as stream:
+        stream.write(json.dumps({"type": "assistant", "m": "z" * 2_000}) + "\n")
+    assert ptu._check_context_low(transcript) is None
+
+
+def test_unknown_boundary_stays_quiet(tmp_path, monkeypatch) -> None:
+    _patch(monkeypatch, tmp_path, threshold=100, pre_tool_tail_mb=0.001)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=2_000, compacted=True)
+    assert ptu._check_context_low(transcript) is None
+
+
+def test_interleaved_scan_snapshots_emit_only_one_notice(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path, threshold=100, pre_tool_tail_mb=0.001)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=True)
+    read_segment = ptu._post_compaction_tail_bytes
+    notices = []
+
+    def pause_detected_scan(path):
+        snapshot = read_segment(path)
+        # Schedule a second hook after the first read a known segment, but
+        # before it claims the notice. Its scan can no longer see the marker.
+        monkeypatch.setattr(ptu, "_post_compaction_tail_bytes", read_segment)
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"type": "assistant", "m": "z" * 2_000}) + "\n")
+        notices.append(ptu._check_context_low(path))
+        return snapshot
+
+    monkeypatch.setattr(ptu, "_post_compaction_tail_bytes", pause_detected_scan)
+    notices.append(ptu._check_context_low(transcript))
+    assert sum(notice is not None for notice in notices) == 1
+
+
+def test_growth_between_size_check_and_scan_stays_quiet(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path, threshold=100, pre_tool_tail_mb=0.001)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=True)
+    read_segment = ptu._post_compaction_tail_bytes
+
+    def grow_then_scan(path):
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"type": "assistant", "m": "z" * 2_000}) + "\n")
+        return read_segment(path)
+
+    monkeypatch.setattr(ptu, "_post_compaction_tail_bytes", grow_then_scan)
+    assert ptu._check_context_low(transcript) is None
+
+
+def test_notice_describes_a_heuristic_and_optional_compaction(tmp_path, monkeypatch):
+    _patch(monkeypatch, tmp_path, threshold=100)
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, pre=200, post=200, compacted=False)
+    notice = ptu._check_context_low(transcript)
+    assert notice is not None
+    assert "heuristic" in notice
+    assert "convenient stopping point" in notice
+    assert "actual context usage is unknown" in notice
+    assert "RECOMMENDED" not in notice
 
 
 def _cap_bytes(mb: float) -> int:
@@ -166,15 +302,13 @@ class TestPostCompactionTailBounded:
         expected_line_start = len(pre) + 1
         assert capped == (total - expected_line_start, expected_line_start)
 
-    def test_marker_before_tail_window_degrades_to_never_compacted(
+    def test_marker_before_tail_window_has_unknown_boundary(
         self, tmp_path: pathlib.Path, monkeypatch
     ) -> None:
         # `lead` keeps the marker OFF the file's first line -- if it were on
         # line 1, an unbounded (old) scan would also report line_start == 0,
-        # coincidentally matching this test's expectation for the wrong
         # reason. With `lead` present, an unbounded scan reports a nonzero
-        # line_start (it WOULD find the marker), so this genuinely
-        # discriminates "found, real offset" from "not found -> (total, 0)".
+        # line_start, distinguishing a known boundary from a clipped scan.
         lead = "a" * 500
         marker_line = json.dumps({"type": "user", "isCompactSummary": True, "m": "s"})
         post = "y" * 2_000_000  # marker is far outside the last cap_bytes
@@ -186,12 +320,11 @@ class TestPostCompactionTailBounded:
         self._patch_cap(monkeypatch, cap_mb)
         assert total > _cap_bytes(cap_mb)
 
-        # Degrades exactly like the never-compacted case: warn-once-at-offset-0
-        # still fires correctly because the live tail is >= the cap, which is
-        # >= the context_low_bytes threshold that gated us into this path.
-        assert ptu._post_compaction_tail_bytes(f) == (total, 0)
+        # A clipped scan cannot distinguish an old marker from a session that
+        # never compacted. Keep that uncertainty explicit so it cannot rearm.
+        assert ptu._post_compaction_tail_bytes(f) == (total, None)
 
-    def test_no_marker_over_cap_returns_total_zero(
+    def test_no_marker_over_cap_returns_unknown_boundary(
         self, tmp_path: pathlib.Path, monkeypatch
     ) -> None:
         f = tmp_path / "t.jsonl"
@@ -200,7 +333,7 @@ class TestPostCompactionTailBounded:
         cap_mb = 0.01
         self._patch_cap(monkeypatch, cap_mb)
         assert total > _cap_bytes(cap_mb)
-        assert ptu._post_compaction_tail_bytes(f) == (total, 0)
+        assert ptu._post_compaction_tail_bytes(f) == (total, None)
 
     def test_partial_line_discard_yields_correct_absolute_offset(
         self, tmp_path: pathlib.Path, monkeypatch

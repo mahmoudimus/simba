@@ -77,9 +77,10 @@ class HooksConfig:
     recall_min_query_chars: int = 10
     thinking_chars: int = 1500
     dedup_ttl: int = 60
-    # Context-low warning threshold, measured as transcript bytes SINCE the last
-    # compaction (the live-context proxy), NOT cumulative file size. Calibrated for
-    # a large (~1M-token) window; tune via `simba config set hooks.context_low_bytes`.
+    # Optional large-transcript notice threshold: bytes since the last detected
+    # compaction or session start. Unknown boundaries in a bounded scan stay quiet.
+    # A rough size heuristic only; it cannot measure context utilization.
+    # <= 0 disables notices. Tune via `simba config set hooks.context_low_bytes`.
     context_low_bytes: int = 8_000_000
     # Bounded tail window for the pre-tool inspectors (2026-07-20 incident): both
     # ``_extract_thinking`` and ``_post_compaction_tail_bytes`` used to read the

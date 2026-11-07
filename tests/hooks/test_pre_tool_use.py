@@ -760,7 +760,7 @@ class TestCheckContextLow:
         second = simba.hooks.pre_tool_use._check_context_low(transcript)
         assert second is None
 
-    def test_different_transcript_resets(self, tmp_path, monkeypatch):
+    def test_different_transcripts_each_warn_once(self, tmp_path, monkeypatch):
         low_cfg = dataclasses.replace(
             simba.hooks.config.HooksConfig(), context_low_bytes=100
         )
@@ -776,6 +776,7 @@ class TestCheckContextLow:
         assert simba.hooks.pre_tool_use._check_context_low(t1) is not None
         assert simba.hooks.pre_tool_use._check_context_low(t1) is None
         assert simba.hooks.pre_tool_use._check_context_low(t2) is not None
+        assert simba.hooks.pre_tool_use._check_context_low(t1) is None
 
     def test_nonexistent_transcript(self, tmp_path):
         assert simba.hooks.pre_tool_use._check_context_low(tmp_path / "nope") is None
@@ -827,6 +828,10 @@ class TestContextLowSystemMessage:
         )
         assert result.system_message
         assert "compact" in result.system_message.lower()
+        assert "convenient stopping point" in result.system_message
+        assert "context usage is unknown" in result.system_message
+        assert "/compact now" not in result.system_message
+        assert "will distill" not in result.system_message
 
     def test_no_fire_leaves_system_message_empty(self, tmp_path):
         transcript = tmp_path / "transcript.jsonl"
