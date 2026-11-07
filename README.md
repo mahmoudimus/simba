@@ -287,7 +287,7 @@ Once installed, simba works automatically via hooks. No manual steps needed duri
 
 1. **SessionStart** — memory daemon auto-starts, tailor context injected, project stats shown
 2. **Every prompt** — relevant memories recalled, core rules reinforced, search context injected
-3. **Every tool call** — vector DB queried based on Claude's thinking; context-low warning when approaching compaction
+3. **Every tool call** — vector DB queried based on Claude's thinking; an optional, one-time notice for large transcripts
 4. **Session end** — transcript exported for learning extraction; error patterns captured
 
 ### Managing Core Instructions
@@ -894,11 +894,23 @@ simba orchestration agents --inject
 simba orchestration agents --update
 ```
 
-## Context-Low Early Warning
+## Large-Transcript Notice
 
-The PreToolUse hook monitors the session transcript file size. When it exceeds a configurable threshold (`hooks.context_low_bytes`, default 20 MB to suit 1M-context sessions), it injects a one-time `<context-low-warning>` into Claude's context recommending that it summarize its current work state before auto-compact triggers.
+The PreToolUse hook offers a large-transcript notice at a configurable threshold
+(`hooks.context_low_bytes`, default 8,000,000 bytes; `0` disables it). It measures
+bytes since the last detected compaction or session start using a bounded scan.
+If the boundary is unknown because the scan was clipped, it stays quiet. This is
+a rough size heuristic; actual context usage is unknown. The notice suggests `/compact` at a
+convenient stopping point and requires no immediate action.
 
-This gives Claude time to document progress, pending tasks, and branch context so the pre-compact transcript export captures a clean snapshot for learning extraction.
+Notices are claimed atomically per canonical transcript path and compaction
+boundary, so concurrent hooks and interleaved chats cannot repeat the same
+notice. A new detected compaction rearms it after enough subsequent growth;
+an old marker leaving the scan window does not. Unavailable notice storage
+stays quiet. Claude shows a short human-facing notice; clients that support
+PreToolUse context injection also receive `<context-low-warning>`.
+
+Compaction continues to use the existing PreCompact export and extraction flow.
 
 ## Sync Pipeline
 

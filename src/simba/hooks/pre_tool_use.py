@@ -28,6 +28,9 @@ import simba.redirect.check
 from simba.harness.core import CanonicalResult
 
 _HASH_CACHE = pathlib.Path("/tmp/claude-memory-hash-cache.json")
+# Namespace for transcript-specific notice claim directories. The legacy single
+# flag at this exact path is intentionally unused: chats must not overwrite one
+# another's warning state.
 _CONTEXT_LOW_FLAG = pathlib.Path("/tmp/claude-context-low-flag.json")
 _TOOL_RULE_COUNT_CACHE = pathlib.Path("/tmp/claude-toolrule-count-cache.json")
 # Separate dedup cache for the pitfall gate so it fires once per reasoning turn
@@ -131,34 +134,35 @@ def _save_hash(text: str, cache_path: pathlib.Path = _HASH_CACHE) -> None:
 _COMPACT_MARKER = b'"isCompactSummary":true'
 
 
-def _post_compaction_tail_bytes(transcript_path: pathlib.Path) -> tuple[int, int]:
+def _post_compaction_tail_bytes(
+    transcript_path: pathlib.Path,
+) -> tuple[int, int | None]:
     """Bytes of the transcript *since the last compaction* (the live-context proxy).
 
     The transcript JSONL is append-only, so its total size keeps growing across
     compactions and badly overcounts the in-context window. We return
     ``(tail_bytes, last_compaction_offset)`` where the tail is measured from the
     start of the last ``isCompactSummary`` line to EOF (0 offset = never
-    compacted, tail == total).
+    compacted, tail == total). A None offset means the bounded scan could not
+    establish a boundary; callers must not treat it as a new segment.
 
     The marker scan itself is bounded to the last ``hooks.pre_tool_tail_mb`` of
     the file (2026-07-20): this used to ``read_bytes()`` the WHOLE transcript
     just to ``rfind`` the last marker -- the only caller (``_check_context_low``)
     already skips small files via its cheap path, so that whole-file read fired
     precisely and only for the giant files where it hurt most. A compaction
-    older than the tail window degrades to the never-compacted case (offset 0)
-    -- the context-low warning still fires correctly because the live tail is
-    then >= the cap, which is >= the threshold that gated us into this path.
+    older than the tail window has an unknown boundary (None offset).
     """
     try:
         total = transcript_path.stat().st_size
     except OSError:
-        return (0, 0)
+        return (0, None)
 
     cap_bytes = int(_hooks_cfg().pre_tool_tail_mb * 1_000_000)
     try:
         tail, tail_start = _read_tail_bytes(transcript_path, cap_bytes)
     except OSError:
-        return (0, 0)
+        return (0, None)
 
     idx = tail.rfind(_COMPACT_MARKER.replace(b" ", b""))
     if idx == -1:
@@ -166,20 +170,49 @@ def _post_compaction_tail_bytes(transcript_path: pathlib.Path) -> tuple[int, int
         loose = tail.rfind(b'"isCompactSummary"')
         idx = loose if loose != -1 else -1
     if idx == -1:
-        return (total, 0)
+        return (total, None if tail_start else 0)
     # 0 if the marker is on the first line kept in the tail window
     line_start = tail_start + tail.rfind(b"\n", 0, idx) + 1
     return (total - line_start, line_start)
 
 
-def _check_context_low(transcript_path: pathlib.Path) -> str | None:
-    """Warn when the *live* context (bytes since the last compaction) nears the
-    window. Re-arms after each new compaction so it can fire again per segment.
+def _claim_context_notice(transcript_path: pathlib.Path, offset: int) -> bool:
+    """Atomically claim a notice for one transcript/compaction segment.
 
-    Threshold is ``hooks.context_low_bytes`` (configurable). Cheap-gated on total
-    size — only reads the file once the total could possibly exceed the threshold.
+    Exclusive creation works across threads and processes without a shared
+    read-modify-write cache. Marker existence is authoritative, so partial or
+    unreadable claims cannot cause repeated advisory output. Storage failures
+    also stay quiet. Unknown boundaries are filtered out before claiming.
+    """
+    try:
+        canonical_path = str(transcript_path.resolve())
+        key = hashlib.sha256(canonical_path.encode()).hexdigest()
+        directory = _CONTEXT_LOW_FLAG.with_name(f"{_CONTEXT_LOW_FLAG.stem}-{key}")
+        directory.mkdir(mode=0o700, exist_ok=True)
+        with (directory / f"{offset}.json").open("x") as stream:
+            json.dump(
+                {
+                    "transcript": canonical_path,
+                    "offset": offset,
+                    "timestamp": time.time(),
+                },
+                stream,
+            )
+    except OSError:
+        return False
+    return True
+
+
+def _check_context_low(transcript_path: pathlib.Path) -> str | None:
+    """Offer optional compaction for a large transcript, once per segment.
+
+    Transcript bytes are a heuristic, not measured context utilization. Values
+    of ``hooks.context_low_bytes`` <= 0 disable this advisory. Cheap-gated on
+    total size before the bounded compaction scan.
     """
     threshold = _hooks_cfg().context_low_bytes
+    if threshold <= 0:
+        return None
     try:
         size = transcript_path.stat().st_size
     except OSError:
@@ -190,44 +223,19 @@ def _check_context_low(transcript_path: pathlib.Path) -> str | None:
         return None
 
     tail, offset = _post_compaction_tail_bytes(transcript_path)
-    if tail < threshold:
-        return None  # a compaction shrank the live context — no false alarm
+    if offset is None or tail < threshold:
+        return None  # uncertain boundary or a small post-compaction segment
 
-    # Warn once per (transcript, compaction boundary); a new compaction re-arms.
-    try:
-        flag = json.loads(_CONTEXT_LOW_FLAG.read_text())
-        if (
-            flag.get("transcript") == str(transcript_path)
-            and flag.get("offset") == offset
-        ):
-            return None
-    except (json.JSONDecodeError, OSError):
-        pass
-
-    with contextlib.suppress(OSError):
-        _CONTEXT_LOW_FLAG.write_text(
-            json.dumps(
-                {
-                    "transcript": str(transcript_path),
-                    "offset": offset,
-                    "timestamp": time.time(),
-                }
-            )
-        )
+    if not _claim_context_notice(transcript_path, offset):
+        return None
 
     tail_mb = tail / 1_000_000
     return (
         "<context-low-warning>\n"
-        f"~{tail_mb:.1f}MB of transcript since last compaction — "
-        "the live context is getting large.\n\n"
-        "RECOMMENDED: Prepare for context compaction now.\n"
-        "1. Summarize your current work state "
-        "(what's done, what's pending)\n"
-        "2. Note the current branch, files being modified, "
-        "and any in-progress changes\n"
-        "3. If there are pending tasks, document them clearly\n"
-        "4. The pre-compact hook will automatically export the "
-        "transcript for learning extraction\n"
+        f"~{tail_mb:.1f}MB of transcript since last compaction or session start.\n"
+        "Transcript size is a rough heuristic; actual context usage is unknown.\n"
+        "Consider /compact at a convenient stopping point if useful. "
+        "Continue the current task normally; no immediate action is required.\n"
         "</context-low-warning>"
     )
 
@@ -601,7 +609,7 @@ def run(hook_input: dict) -> CanonicalResult:
     escalated_block: str | None = None
     system_message = ""
 
-    # --- Context-low check (fires for any tool, once per session) ---
+    # --- Large-transcript notice (any tool, once per compaction segment) ---
     if transcript_path_str:
         warning = _check_context_low(pathlib.Path(transcript_path_str))
         if warning:
@@ -614,8 +622,8 @@ def run(hook_input: dict) -> CanonicalResult:
             # compaction-boundary arming (_check_context_low's own), not
             # re-implemented here.
             system_message = (
-                "simba: context is filling up -- /compact now will distill + "
-                "relay learnings across the boundary"
+                "simba: large transcript; context usage is unknown. "
+                "Consider /compact at a convenient stopping point."
             )
 
     # --- Tool-rule check (fires before thinking recall) ---
