@@ -344,6 +344,64 @@ class TestExtractLastAssistantTextTurnScoped:
         path, _ = self._two_turn_transcript(tmp_path)
         assert us.extract_last_assistant_text(str(path), min_offset=10**9) == ""
 
+    def _tool_using_turn(self, tmp_path):
+        """A turn shaped like a real tool-using one: the 🦁☑ echo opens it in the
+        message carrying the tool_use, the ``[✓ rules]`` signal closes it in a
+        separate message after the tool_result.
+        """
+        path, turn_start = self._two_turn_transcript(tmp_path)
+        with path.open("a") as fh:
+            for entry in (
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "🦁☑ recalled 3 (top 0.70)"},
+                            {"type": "tool_use", "name": "Bash", "input": {}},
+                        ],
+                    }
+                },
+                {"message": {"role": "user", "content": "tool result"}},
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Answer.\n\n[✓ rules]"}],
+                    }
+                },
+            ):
+                fh.write(json.dumps(entry) + "\n")
+        return path, turn_start
+
+    def test_last_message_alone_cannot_see_both_markers(self, tmp_path) -> None:
+        """The bug: markers sit at opposite ends, one message holds only one."""
+        path, turn_start = self._tool_using_turn(tmp_path)
+        last = us.extract_last_assistant_text(str(path), min_offset=turn_start)
+        assert "[✓ rules]" in last
+        assert "🦁☑" not in last  # ← the false ENGAGEMENT nudge
+
+    def test_turn_text_sees_both_markers(self, tmp_path) -> None:
+        path, turn_start = self._tool_using_turn(tmp_path)
+        turn = us.extract_turn_assistant_text(str(path), min_offset=turn_start)
+        assert "🦁☑" in turn
+        assert "[✓ rules]" in turn
+
+    def test_turn_text_excludes_prior_turn(self, tmp_path) -> None:
+        """Concatenation must not reach back and inherit a STALE attestation."""
+        path, turn_start = self._tool_using_turn(tmp_path)
+        turn = us.extract_turn_assistant_text(str(path), min_offset=turn_start)
+        assert "INTERR 50815" not in turn
+
+    def test_turn_text_unscoped_degrades_to_last_message(self, tmp_path) -> None:
+        """Without a turn boundary there is no way to bound the concatenation."""
+        path, _ = self._tool_using_turn(tmp_path)
+        assert us.extract_turn_assistant_text(
+            str(path)
+        ) == us.extract_last_assistant_text(str(path))
+
+    def test_turn_text_empty_when_turn_produced_nothing(self, tmp_path) -> None:
+        path, turn_start = self._two_turn_transcript(tmp_path)
+        assert us.extract_turn_assistant_text(str(path), min_offset=turn_start) == ""
+
     def test_offset_inside_tail_window(self, tmp_path) -> None:
         # The cut lands inside a tail window that starts mid-file: offset
         # arithmetic must be absolute, not relative to the window.

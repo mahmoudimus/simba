@@ -157,36 +157,28 @@ def detect_used(
     return used
 
 
-def extract_last_assistant_text(
-    transcript_path: str,
-    cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES,
-    min_offset: int = 0,
-) -> str:
-    """Last assistant message's text parts from a transcript JSONL ("" on any
-    trouble). The leftover-turn fallback's response source when Stop never
-    delivered one.
+def _scan_window_lines(
+    transcript_path: str, cap_bytes: int, min_offset: int
+) -> list[str]:
+    """Decoded transcript lines in the scan window, oldest -> newest ([] on any
+    trouble).
 
     Bounded to the tail ``cap_bytes`` of the file (2026-07-20, shares
     ``hooks.stop_tail_mb`` with ``tailor.hook.process_hook``): this used to
     ``read_text()`` the WHOLE transcript, the same shape that co-caused a live
-    30GB daemon RSS balloon on the Stop path. The last assistant message is
-    always near EOF, so a tail window is sufficient; one older than the
-    window degrades to "" -- an empty leftover-turn fallback, an edge case
-    already (Stop normally consumes the turn record before this ever runs).
+    30GB daemon RSS balloon on the Stop path.
 
-    ``min_offset`` (2026-07-25) scopes the scan to entries written at/after an
+    ``min_offset`` (2026-07-25) scopes the window to entries written at/after an
     absolute file offset -- the transcript size when the turn started, per
-    ``guardian.engagement_flag.turn_offset``. Without it a turn that produced
-    no assistant output at all is credited with the PREVIOUS turn's message.
-    0 (the default) means unscoped.
+    ``guardian.engagement_flag.turn_offset``. 0 means unscoped.
     """
     if not transcript_path:
-        return ""
+        return []
     path = pathlib.Path(transcript_path)
     try:
         tail, tail_start = simba.hooks._tail.read_tail_bytes(path, cap_bytes)
     except OSError:
-        return ""
+        return []
     if min_offset > tail_start:
         # Absolute -> window-relative. The offset normally lands exactly on a
         # line boundary (a size stamped between turns); when it lands mid-line
@@ -198,28 +190,92 @@ def extract_last_assistant_text(
         if not on_boundary:
             nl = tail.find(b"\n")
             tail = tail[nl + 1 :] if nl != -1 else b""
-    lines = tail.decode("utf-8", errors="replace").strip().split("\n")
-    for line in reversed(lines):
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        message = entry.get("message", {})
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        content = message.get("content", [])
-        if not isinstance(content, list):
-            continue
-        parts = [
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
-        if parts:
-            return "\n".join(parts)
+    return tail.decode("utf-8", errors="replace").strip().split("\n")
+
+
+def _assistant_text(line: str) -> str:
+    """The text parts of one assistant-message JSONL line ("" if it isn't one)."""
+    if not line:
+        return ""
+    try:
+        entry = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    message = entry.get("message", {})
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return ""
+    content = message.get("content", [])
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text"
+    ]
+    return "\n".join(parts) if parts else ""
+
+
+def extract_last_assistant_text(
+    transcript_path: str,
+    cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES,
+    min_offset: int = 0,
+) -> str:
+    """Last assistant message's text parts from a transcript JSONL ("" on any
+    trouble). The leftover-turn fallback's response source when Stop never
+    delivered one.
+
+    The last assistant message is always near EOF, so a tail window is
+    sufficient; one older than the window degrades to "" -- an empty
+    leftover-turn fallback, an edge case already (Stop normally consumes the
+    turn record before this ever runs).
+
+    Single-message by design: use ``extract_turn_assistant_text`` when the
+    caller needs everything the turn said, not just its final message.
+    """
+    for line in reversed(_scan_window_lines(transcript_path, cap_bytes, min_offset)):
+        text = _assistant_text(line)
+        if text:
+            return text
     return ""
+
+
+def extract_turn_assistant_text(
+    transcript_path: str,
+    cap_bytes: int = _DEFAULT_TAIL_CAP_BYTES,
+    min_offset: int = 0,
+) -> str:
+    """EVERY assistant message's text in the turn window, oldest -> newest.
+
+    A turn that calls tools splits its prose across several assistant messages:
+    the opening text ships alongside the first tool_use, the closing text lands
+    in a separate message after the last tool_result. Taking only the LAST
+    message (2026-07-25) therefore saw a fraction of what the turn actually
+    said -- measured live at 138 characters of tool preamble for a
+    multi-thousand-character response. Both marker checks read this text, and
+    the markers sit at opposite ends of a response (the 🦁☑ engagement echo
+    opens it, ``[✓ rules]`` closes it), so a single-message read structurally
+    could not see both: the echo-verify false-fired on every tool-using turn
+    while the guardian check passed, and on a turn ending mid-tool-call both
+    failed. Concatenating the window makes the check see the whole turn.
+
+    Requires a real turn boundary: with ``min_offset`` <= 0 there is nothing
+    separating this turn's messages from the previous turn's, and concatenating
+    the whole tail would both blow up the text and let a STALE ``[✓ rules]``
+    satisfy this turn's attestation -- so it degrades to
+    ``extract_last_assistant_text``'s single-message behavior, exactly as
+    before this function existed.
+    """
+    if min_offset <= 0:
+        return extract_last_assistant_text(transcript_path, cap_bytes, min_offset)
+    blocks = [
+        text
+        for text in (
+            _assistant_text(line)
+            for line in _scan_window_lines(transcript_path, cap_bytes, min_offset)
+        )
+        if text
+    ]
+    return "\n".join(blocks)
 
 
 def backfill_response(hook_input: dict, cfg, min_offset: int = 0) -> str:
@@ -231,8 +287,8 @@ def backfill_response(hook_input: dict, cfg, min_offset: int = 0) -> str:
     reasoning-verify, this module's own ``process_turn_outcome``) always saw
     ``""``, so the guardian check silently never ran and the engagement nudge
     fired on every turn regardless of what the agent actually said. This
-    extracts the transcript's last assistant message as a stand-in, using
-    the same bounded-tail cap (``hooks.stop_tail_mb``) as
+    extracts what the turn's assistant messages said as a stand-in, using the
+    same bounded-tail cap (``hooks.stop_tail_mb``) as
     ``extract_last_assistant_text``'s other caller. Accepts either
     ``transcript_path`` or ``transcriptPath`` in the payload (harness casing
     varies). Fail-soft: no transcript path, an unreadable transcript, or any
@@ -240,8 +296,10 @@ def backfill_response(hook_input: dict, cfg, min_offset: int = 0) -> str:
     existed. Callers should only invoke this when the payload's own
     ``response`` is absent/empty; a runtime-provided response always wins.
 
-    ``min_offset`` scopes the scan to THIS turn's slice of the transcript (see
-    ``extract_last_assistant_text``); 0 means unscoped.
+    ``min_offset`` scopes the scan to THIS turn's slice of the transcript. Given
+    a real boundary this returns the WHOLE turn (see
+    ``extract_turn_assistant_text`` for why a single message was not enough);
+    0 means unscoped and degrades to the last message alone.
     """
     transcript_path = hook_input.get("transcript_path") or hook_input.get(
         "transcriptPath", ""
@@ -250,7 +308,7 @@ def backfill_response(hook_input: dict, cfg, min_offset: int = 0) -> str:
         return ""
     try:
         cap_bytes = int(getattr(cfg, "stop_tail_mb", 16.0) * 1_000_000)
-        return extract_last_assistant_text(
+        return extract_turn_assistant_text(
             transcript_path, cap_bytes=cap_bytes, min_offset=min_offset
         )
     except Exception:
