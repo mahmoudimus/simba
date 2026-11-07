@@ -1,1 +1,1 @@
-"""Tailor: Error memory and persistent patterns via JSONL reflections."""
+"""Tailor: Error memory and persistent patterns via the ``reflections`` table."""
