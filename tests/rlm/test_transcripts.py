@@ -38,6 +38,16 @@ def test_load_caches_into_store(tmp_path):
     assert p.store.get("s1").text == "hello world"
 
 
+def test_transcript_id_cannot_escape_transcript_root(tmp_path):
+    p = tr.TranscriptProvider(_Cfg(), root=tmp_path / "exports")
+    (tmp_path / "exports").mkdir()
+    _make_transcript(tmp_path, "other", "private file")
+    (tmp_path / "exports" / "linked").symlink_to(tmp_path / "other")
+    assert p.path_for("../other") is None
+    assert p.path_for(str(tmp_path / "other")) is None
+    assert p.path_for("linked") is None
+
+
 def test_load_missing_raises(tmp_path):
     p = tr.TranscriptProvider(_Cfg(), root=tmp_path)
     with pytest.raises(ctx.DocumentNotFoundError):

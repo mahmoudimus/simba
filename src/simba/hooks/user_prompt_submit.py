@@ -6,13 +6,18 @@ queries memory daemon for relevant memories, outputs combined context.
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
+import contextvars
+import itertools
 import pathlib
 import sys
 
 import simba.guardian.extract_core
+import simba.harness.client
 import simba.hooks._memory_client
 import simba.hooks.context_lanes
+import simba.hooks.quoted_reply
 import simba.hooks.recall_triage
 import simba.search.rag_context
 from simba.harness.core import CanonicalResult
@@ -37,7 +42,10 @@ def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
     if not simba.config.load("rlm").inject_pointers:
         return ""
     pointers = simba.rlm.recall.pointers_from_memories(memories, cwd_str)
-    nav = [p for p in pointers if p.available]
+    nav = {}
+    for pointer in pointers:
+        if pointer.available and pointer.transcript_id:
+            nav.setdefault(pointer.transcript_id, pointer)
     if not nav:
         return ""
     lines = [
@@ -45,7 +53,10 @@ def _rlm_pointer_context(memories: list[dict], cwd_str: str | None) -> str:
         "Lossless transcripts available — call rlm_grep/rlm_peek on these ids "
         "if the recalled snippets aren't enough:",
     ]
-    lines += [f"  - {p.transcript_id} :: {p.snippet[:70]}" for p in nav[:3]]
+    lines += [
+        f"  - {p.transcript_id} :: {p.snippet[:70]}"
+        for p in itertools.islice(nav.values(), 3)
+    ]
     lines.append("</rlm-pointers>")
     return "\n".join(lines)
 
@@ -251,6 +262,47 @@ def _should_inject_core(cfg, session_id: str) -> bool:
         return True
 
 
+def _recall_prompt(prompt: str, project_path: str | None, cfg) -> list[dict]:
+    def recall(query: str) -> list[dict]:
+        return simba.hooks._memory_client.recall_memories(
+            query, project_path=project_path, min_similarity=cfg.prompt_min_similarity
+        )
+
+    client = (
+        simba.harness.client.get_origin_client() or simba.harness.client.detect_client()
+    )
+    if client != simba.harness.client.PI:
+        return recall(prompt)
+
+    limit = cfg.default_max_results
+    queries = simba.hooks.quoted_reply.recall_queries(
+        prompt, min_length=cfg.prompt_min_length, limit=limit
+    )
+    if len(queries) == 1:
+        return recall(queries[0])
+
+    # Pi has one hook deadline. Query in parallel and preserve daemon attribution
+    # by propagating the caller's request context into each worker.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as executor:
+        futures = [
+            executor.submit(contextvars.copy_context().run, recall, query)
+            for query in queries
+        ]
+        batches = [future.result() for future in futures]
+
+    # Interleave by rank so each question contributes before any fills the
+    # budget. A memory relevant to two questions still takes only one slot.
+    selected = {}
+    for rank in itertools.zip_longest(*batches):
+        for memory in rank:
+            if memory is not None:
+                key = memory.get("id") or (memory.get("type"), memory.get("content"))
+                selected.setdefault(key, memory)
+                if len(selected) >= limit:
+                    return list(selected.values())
+    return list(selected.values())
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the UserPromptSubmit hook pipeline. Returns a CanonicalResult."""
     prompt = hook_input.get("prompt", "")
@@ -322,9 +374,7 @@ def run(hook_input: dict) -> CanonicalResult:
     memories: list[dict] = []
     if retrieval_allowed and prompt and len(prompt) >= cfg.prompt_min_length:
         project_path = str(cwd) if cwd_str else None
-        memories = simba.hooks._memory_client.recall_memories(
-            prompt, project_path=project_path, min_similarity=cfg.prompt_min_similarity
-        )
+        memories = _recall_prompt(prompt, project_path, cfg)
         formatted = simba.hooks._memory_client.format_memories(
             memories, source="user-prompt", query=prompt
         )

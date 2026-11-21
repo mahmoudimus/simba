@@ -1193,6 +1193,8 @@ async def _recall_memories_impl(body: RecallRequest, request: fastapi.Request) -
             "content": m["content"],
             **({"context": m["context"]} if m.get("context") else {}),
             "similarity": round(m["similarity"], 2),
+            **({"matchKind": m["matchKind"]} if m.get("matchKind") else {}),
+            **({"matchedTerm": m["matchedTerm"]} if m.get("matchedTerm") else {}),
             "confidence": m.get("confidence", 0),
             "createdAt": m.get("createdAt"),
             **(

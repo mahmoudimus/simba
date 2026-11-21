@@ -15,9 +15,9 @@ Usage:
     simba codex-recall     Query semantic memory (/recall) for a text query
     simba codex-finalize   Run end-of-task signal/error checks
     simba codex-automation Print suggested Codex automation directive
-    simba pi-install       Install bundled bridge extension for pi (~/.pi/agent)
+    simba pi-install       Install the Pi bridge and transcript tools (~/.pi/agent)
     simba pi-install --remove
-                           Remove the pi bridge extension
+                           Remove Simba's Pi bridge and transcript lookup tools
     simba server [opts]    Start the memory daemon
     simba memory store     Store a memory (--type, --content, --context, --confidence)
     simba memory recall    Recall memories for a query text
@@ -1607,14 +1607,17 @@ def _pi_agent_home() -> pathlib.Path:
 
 
 def _cmd_pi_install(args: list[str]) -> int:
-    """Install or remove the bundled pi bridge extension."""
+    """Install or remove the Pi bridge and read-only transcript tools."""
     import importlib.resources
+
+    import simba.pi.install
 
     remove = "--remove" in args
     home = _pi_agent_home()
     ext_dir = home / "extensions"
     ext_path = ext_dir / "simba.ts"
     settings_path = home / "settings.json"
+    mcp_path = home / "mcp.json"
 
     settings: dict = {}
     if settings_path.exists():
@@ -1624,6 +1627,12 @@ def _cmd_pi_install(args: list[str]) -> int:
             settings = {}
     extensions = settings.setdefault("extensions", [])
 
+    try:
+        managed_rlm = simba.pi.install.sync_rlm_server(mcp_path, remove=remove)
+    except (OSError, ValueError) as exc:
+        print(f"Could not update {mcp_path}: {exc}", file=sys.stderr)
+        return 1
+
     if remove:
         if ext_path.exists():
             ext_path.unlink()
@@ -1632,6 +1641,8 @@ def _cmd_pi_install(args: list[str]) -> int:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         print(f"pi extension removed from {settings_path}")
+        if managed_rlm:
+            print(f"Simba RLM server removed from {mcp_path}")
         return 0
 
     ext_dir.mkdir(parents=True, exist_ok=True)
@@ -1643,6 +1654,8 @@ def _cmd_pi_install(args: list[str]) -> int:
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     print(f"pi extension installed: {ext_path}")
     print(f"  registered in {settings_path}")
+    if managed_rlm:
+        print(f"  Simba RLM server registered in {mcp_path}")
     print("  daemon URL: $SIMBA_DAEMON_URL or http://localhost:8741")
     return 0
 

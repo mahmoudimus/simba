@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 
 import simba.__main__ as cli
 import simba.config
@@ -50,6 +51,66 @@ def test_pi_install_remove(tmp_path, monkeypatch):
     cli._cmd_pi_install(["--remove"])
     settings = json.loads((home / "settings.json").read_text())
     assert str(home / "extensions" / "simba.ts") not in settings.get("extensions", [])
+    assert not (home / "extensions" / "simba.ts").exists()
+
+
+def test_pi_install_updates_and_removes_only_its_rlm_server(tmp_path, monkeypatch):
+    home = _pi_home(tmp_path, monkeypatch)
+    home.mkdir(parents=True)
+    mcp = home / "mcp.json"
+    existing = {"mcpServers": {"other": {"command": "other", "args": []}}}
+    mcp.write_text(json.dumps(existing))
+
+    assert cli._cmd_pi_install([]) == 0
+    config = json.loads(mcp.read_text())
+    server = config["mcpServers"]["simba-rlm"]
+    assert server["command"] == sys.executable
+    assert server["args"] == [
+        "-m",
+        "simba",
+        "neuron",
+        "run",
+        "--root-dir",
+        ".",
+        "--rlm-only",
+    ]
+    assert server["exposure"] == "direct"
+    assert config["mcpServers"]["other"] == existing["mcpServers"]["other"]
+
+    first_install = mcp.read_bytes()
+    assert cli._cmd_pi_install([]) == 0
+    assert mcp.read_bytes() == first_install
+
+    monkeypatch.setattr(sys, "executable", "/new/simba/install/python")
+    assert cli._cmd_pi_install([]) == 0
+    assert (
+        json.loads(mcp.read_text())["mcpServers"]["simba-rlm"]["command"]
+        == sys.executable
+    )
+    assert cli._cmd_pi_install(["--remove"]) == 0
+    assert json.loads(mcp.read_text()) == existing
+
+
+def test_pi_preserves_user_owned_server_with_same_name(tmp_path, monkeypatch):
+    home = _pi_home(tmp_path, monkeypatch)
+    home.mkdir(parents=True)
+    mcp = home / "mcp.json"
+    original = '{"mcpServers":{"simba-rlm":{"command":"my-launcher"}}}'
+    mcp.write_text(original)
+
+    assert cli._cmd_pi_install([]) == 0
+    assert cli._cmd_pi_install(["--remove"]) == 0
+    assert mcp.read_text() == original
+
+
+def test_pi_install_keeps_invalid_mcp_config_intact(tmp_path, monkeypatch):
+    home = _pi_home(tmp_path, monkeypatch)
+    home.mkdir(parents=True)
+    mcp = home / "mcp.json"
+    mcp.write_text('{"mcpServers":')
+
+    assert cli._cmd_pi_install([]) == 1
+    assert mcp.read_text() == '{"mcpServers":'
     assert not (home / "extensions" / "simba.ts").exists()
 
 

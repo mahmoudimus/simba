@@ -132,8 +132,10 @@ class TestRecallHybrid:
         )
         assert resp.status_code == 200
         memories = resp.json()["memories"]
-        contents = [m["content"] for m in memories]
-        assert any("unique_zeta_marker" in c for c in contents)
+        assert len(memories) == 1
+        assert "unique_zeta_marker" in memories[0]["content"]
+        assert memories[0]["matchKind"] == "keyword"
+        assert memories[0]["matchedTerm"] == "unique_zeta_marker"
 
 
 class TestRecallIntentAwareFloor:

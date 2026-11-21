@@ -82,6 +82,9 @@ def main() -> int:
     # --- run ---
     run_parser = subparsers.add_parser("run", help="Run the MCP server (internal use)")
     run_parser.add_argument("--root-dir", type=Path, required=True, help="Project root")
+    run_parser.add_argument(
+        "--rlm-only", action="store_true", help="Expose only transcript navigation"
+    )
 
     # --- proxy ---
     proxy_parser = subparsers.add_parser(
@@ -138,7 +141,9 @@ def main() -> int:
         import simba.neuron.server
 
         root_dir = getattr(args, "root_dir", None)
-        simba.neuron.server.run_server(root_dir=root_dir)
+        simba.neuron.server.run_server(
+            root_dir=root_dir, rlm_only=getattr(args, "rlm_only", False)
+        )
         return 0
 
     parser.print_help()

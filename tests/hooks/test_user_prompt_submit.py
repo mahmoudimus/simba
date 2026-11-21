@@ -5,7 +5,69 @@ from __future__ import annotations
 import json
 import unittest.mock
 
+import simba.harness.client
 import simba.hooks.user_prompt_submit
+
+
+class TestPiQuotedReplyRecall:
+    prompt = (
+        "> Launch the application when ready.\n\n"
+        "I will log in.\n\n"
+        "> Costs: two images and a control channel.\n"
+        " GenerationManager must own per-generation teardown.\n\n"
+        "Should the core expose core_shutdown()? Would it have the same issue?\n\n"
+        "> ExampleDriver.sys is ours.\n"
+        " Built from tools/packaging/driver.cpp.\n"
+        " It is test-signed.\n\n"
+        "Do we need this guy anymore?"
+    )
+
+    def test_searches_questions_separately_and_shares_the_injection_budget(
+        self, monkeypatch, tmp_path
+    ):
+        def memory(memory_id):
+            return {"id": memory_id, "type": "PATTERN", "content": memory_id}
+
+        calls = {}
+
+        def recall(query, **kwargs):
+            calls[query] = kwargs
+            if query.startswith("Should"):
+                return [memory("shared"), memory("shutdown evidence")]
+            if query.startswith("ExampleDriver.sys"):
+                return [memory("shared"), memory("driver evidence")]
+            return [memory("unrelated gate logging")]
+
+        monkeypatch.setattr("simba.hooks._memory_client.recall_memories", recall)
+        monkeypatch.setattr("simba.search.rag_context.build_context", lambda *_: "")
+        token = simba.harness.client.set_origin_client("pi")
+        try:
+            result = simba.hooks.user_prompt_submit.run(
+                {"prompt": self.prompt, "cwd": str(tmp_path)}
+            )
+        finally:
+            simba.harness.client.reset_origin_client(token)
+
+        assert set(calls) == {
+            "Should the core expose core_shutdown()? Would it have the same issue?",
+            "ExampleDriver.sys Do we need this guy anymore?",
+        }
+        assert all(call["project_path"] == str(tmp_path) for call in calls.values())
+        assert result.memory_count == 3
+        assert result.additional_context.count("    shared\n") == 1
+        assert "shutdown evidence" in result.additional_context
+        assert "driver evidence" in result.additional_context
+        assert "unrelated gate logging" not in result.additional_context
+
+    def test_preserves_prompt_for_other_harnesses(self, monkeypatch):
+        recall = unittest.mock.Mock(return_value=[])
+        monkeypatch.setattr("simba.hooks._memory_client.recall_memories", recall)
+        token = simba.harness.client.set_origin_client("codex")
+        try:
+            simba.hooks.user_prompt_submit.run({"prompt": self.prompt})
+        finally:
+            simba.harness.client.reset_origin_client(token)
+        assert recall.call_args.args == (self.prompt,)
 
 
 class TestUserPromptSubmitHook:
@@ -497,6 +559,7 @@ class TestRlmPointerInjection:
             "simba.rlm.recall.pointers_from_memories",
             lambda mems, cwd, **k: [
                 rlm_recall.Pointer("decided X", "sid-1", "/p", 0.8, True),
+                rlm_recall.Pointer("also decided Y", "sid-1", "/p", 0.7, True),
                 rlm_recall.Pointer("no transcript", None, "/p", 0.7, False),
             ],
         )
@@ -504,7 +567,7 @@ class TestRlmPointerInjection:
             [{"content": "x"}], "/p"
         )
         assert "<rlm-pointers>" in out
-        assert "sid-1" in out
+        assert out.count("sid-1") == 1
         assert "no transcript" not in out  # unavailable filtered out
 
     def test_on_but_none_available(self, monkeypatch):

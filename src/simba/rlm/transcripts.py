@@ -27,13 +27,24 @@ class TranscriptProvider:
         return self._store
 
     def path_for(self, transcript_id: str) -> pathlib.Path | None:
+        if (
+            not transcript_id
+            or pathlib.Path(transcript_id).name != transcript_id
+            or transcript_id == ".."
+        ):
+            return None
         name = (
             "transcript.md"
             if self._cfg.transcript_source == "md"
             else "transcript.jsonl"
         )
         path = self._root / transcript_id / name
-        return path if path.is_file() else None
+        try:
+            if path.is_file() and path.resolve().is_relative_to(self._root.resolve()):
+                return path
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return None
 
     def available(self, transcript_id: str) -> bool:
         return self.path_for(transcript_id) is not None

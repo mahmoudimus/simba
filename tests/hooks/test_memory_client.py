@@ -258,6 +258,25 @@ class TestFormatMemories:
     def test_empty_returns_empty_string(self):
         assert simba.hooks._memory_client.format_memories([], source="test") == ""
 
+    def test_keyword_only_hit_has_match_reason_without_cosine_label(self):
+        result = simba.hooks._memory_client.format_memories(
+            [
+                {
+                    "type": "GOTCHA",
+                    "content": "Older logging issue",
+                    "similarity": 0.0,
+                    "matchKind": "keyword",
+                    "matchedTerm": "old-tools",
+                },
+                {"type": "PATTERN", "content": "Teardown", "similarity": 0.78},
+            ],
+            source="user-prompt",
+        )
+        assert 'match="keyword"' in result
+        assert 'matched-term="old-tools"' in result
+        assert 'similarity="0.00"' not in result
+        assert 'similarity="0.78"' in result
+
     def test_xml_structure(self):
         memories = [
             {"type": "GOTCHA", "content": "watch out for X", "similarity": 0.85},

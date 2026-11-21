@@ -209,10 +209,16 @@ def rlm_tail(transcript_id: str, n_lines: int = 20) -> str:
 # --- Server entry point ---
 
 
-def run_server(root_dir: Path | None = None) -> None:
+def run_server(root_dir: Path | None = None, *, rlm_only: bool = False) -> None:
     """Configure and start the FastMCP server."""
     if root_dir is not None:
         resolved = root_dir.resolve()
         os.chdir(resolved)
 
-    mcp.run()
+    if rlm_only:
+        navigation = FastMCP("Simba RLM")
+        for tool in (rlm_grep, rlm_peek, rlm_window):
+            navigation.add_tool(tool)
+        navigation.run()
+    else:
+        mcp.run()

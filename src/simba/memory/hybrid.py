@@ -107,6 +107,7 @@ def _from_keyword(item: dict[str, typing.Any]) -> dict[str, typing.Any]:
         "content": item.get("content"),
         "context": item.get("context", ""),
         "similarity": item.get("similarity", 0.0),
+        "matchKind": "keyword",
         "confidence": item.get("confidence", 0.0),
         "createdAt": item.get("createdAt"),
         "projectPath": item.get("projectPath", ""),
@@ -590,12 +591,21 @@ async def hybrid_search(
 
     # Score-adaptive truncation: a token budget (when set) overrides fixed-k so
     # co-required evidence isn't dropped at a hard count cap. Off by default.
-    return simba.memory.scoring.truncate_to_budget(
+    selected = simba.memory.scoring.truncate_to_budget(
         fused,
         max_results=max_results,
         token_budget=getattr(cfg, "recall_token_budget", 0),
         chars_per_token=getattr(cfg, "recall_chars_per_token", 4),
     )
+    for record in selected:
+        if record.get("matchKind") == "keyword":
+            content = record.get("content") or ""
+            context = record.get("context") or ""
+            text = f"{content}\n{context}".casefold()
+            term = next((term for term in kw_terms if term.casefold() in text), None)
+            if term:
+                record["matchedTerm"] = term
+    return selected
 
 
 async def _bg_rerank(

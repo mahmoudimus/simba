@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import simba.neuron.server as server
@@ -36,3 +37,14 @@ def test_rlm_tools_serialize_service_output(monkeypatch):
     assert json.loads(server.rlm_window("s1", 3))["text"] == "windowed"
     assert json.loads(server.rlm_head("s1"))["text"] == "head"
     assert json.loads(server.rlm_tail("s1"))["text"] == "tail"
+
+
+def test_rlm_only_server_exposes_transcript_navigation(monkeypatch):
+    names = []
+
+    def run(mcp):
+        names.extend(tool.name for tool in asyncio.run(mcp.list_tools()))
+
+    monkeypatch.setattr(server.FastMCP, "run", run)
+    server.run_server(rlm_only=True)
+    assert set(names) == {"rlm_grep", "rlm_peek", "rlm_window"}

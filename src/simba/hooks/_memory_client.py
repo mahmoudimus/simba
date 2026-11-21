@@ -5,6 +5,8 @@ Used by user_prompt_submit, pre_tool_use, and session_start hooks.
 
 from __future__ import annotations
 
+import html
+
 import httpx
 
 # Lazy-loaded config — read at call time, not import time.
@@ -348,7 +350,17 @@ def format_memories(
     if not memories:
         return ""
 
-    similarities = "-".join(f"{m.get('similarity', 0):.2f}" for m in memories)
+    if any(m.get("matchKind") == "keyword" for m in memories):
+        scores = ", ".join(
+            "keyword"
+            if m.get("matchKind") == "keyword"
+            else f"cosine {m.get('similarity', 0):.2f}"
+            for m in memories
+        )
+        summary = f"matches: {scores}"
+    else:
+        similarities = "-".join(f"{m.get('similarity', 0):.2f}" for m in memories)
+        summary = f"similarity: {similarities}"
     # Flag the most-recently-created memory (ISO-8601 sorts chronologically) so
     # the model can prefer fresher info when memories conflict. Relevance order
     # (RRF) is left untouched — we only annotate.
@@ -358,14 +370,20 @@ def format_memories(
         if any(d for _, d in dates):
             newest_idx = max(dates, key=lambda t: t[1])[0]
     lines = [
-        f"[Recalled {len(memories)} memories | similarity: {similarities}]",
+        f"[Recalled {len(memories)} memories | {summary}]",
         f'<recalled-memories source="{source}">',
     ]
     for i, m in enumerate(memories):
         mtype = m.get("type", "UNKNOWN")
         sim = m.get("similarity", 0)
         content = m.get("content", "")
-        attrs = f'type="{mtype}" similarity="{sim:.2f}"'
+        attrs = f'type="{mtype}"'
+        if m.get("matchKind") == "keyword":
+            attrs += ' match="keyword"'
+            if term := m.get("matchedTerm"):
+                attrs += f' matched-term="{html.escape(term)}"'
+        else:
+            attrs += f' similarity="{sim:.2f}"'
         created = (m.get("createdAt") or "")[:10]
         if created:
             attrs += f' created="{created}"'

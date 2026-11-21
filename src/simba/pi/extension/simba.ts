@@ -50,6 +50,10 @@ function claudeToolName(piName: string): string {
   return PI_TOOL_TO_CLAUDE[piName] ?? piName.charAt(0).toUpperCase() + piName.slice(1);
 }
 
+function rlmOperation(name: string): string | undefined {
+  return /(?:^|_)rlm_(grep|peek|window)$/.exec(name)?.[1];
+}
+
 // Flatten an assistant message's content to text. Handles a plain string and the
 // structured `{type:"text",text}[]` shape; ignores tool-call / non-text blocks.
 function messageText(content: unknown): string {
@@ -130,12 +134,15 @@ function viaCli(event: string, payload: Record<string, unknown>): Promise<Canoni
 }
 
 async function callSimba(event: string, payload: Record<string, unknown>): Promise<Canonical> {
+  // Prompt submission can run recall, conflict checking, and project search
+  // before returning context. Keep the shorter deadline for other hooks.
+  const timeoutMs = event === "prompt_submit" ? 15_000 : 3_000;
   try {
     const resp = await fetch(`${DAEMON}/hook/${event}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-simba-client": "pi" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (resp.ok) return (await resp.json()) as Canonical;
   } catch {
@@ -145,6 +152,8 @@ async function callSimba(event: string, payload: Record<string, unknown>): Promi
 }
 
 export default function (pi: ExtensionAPI) {
+  let offeredTranscripts = new Set<string>();
+
   pi.on("session_start", async (_e, ctx: ExtensionContext) => {
     const r = await callSimba("session_start", { cwd: ctx.cwd });
     note(r.additional_context ? "session ready — memory active" : "daemon unavailable");
@@ -153,9 +162,32 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (e: BeforeAgentStartEvent, ctx: ExtensionContext) => {
     const r = await callSimba("prompt_submit", { prompt: e.prompt, cwd: ctx.cwd });
-    const { guidance, ledger } = promptPresentation(r.additional_context ?? "");
+    const presentation = promptPresentation(r.additional_context ?? "");
+    const { ledger } = presentation;
+    let guidance = presentation.guidance;
     if (ctx.hasUI) ctx.ui.setStatus("simba", ledger);
     else if (ledger) note(ledger);
+    const previousHadPointers = offeredTranscripts.size > 0;
+    const pointerBlock = /<rlm-pointers>([\s\S]*?)<\/rlm-pointers>/.exec(guidance)?.[1] ?? "";
+    offeredTranscripts = new Set(
+      Array.from(pointerBlock.matchAll(/^\s*- ([\w.-]+) ::/gm), (match) => match[1]),
+    );
+    const count = offeredTranscripts.size;
+    if (count) {
+      const tools = pi.getActiveTools?.() ?? [];
+      const grep = tools.find((name) => rlmOperation(name) === "grep");
+      const peek = tools.find((name) => rlmOperation(name) === "peek");
+      if (grep && peek) {
+        guidance = guidance.replace(
+          pointerBlock, () => pointerBlock.replace("rlm_grep/rlm_peek", `${grep}/${peek}`),
+        );
+      }
+      const status = `RLM: ${count} pointer${count === 1 ? "" : "s"} available, 0 followed`;
+      if (ctx.hasUI) ctx.ui.setStatus("simba-rlm", status);
+      else note(status);
+    } else if (ctx.hasUI && previousHadPointers) {
+      ctx.ui.setStatus("simba-rlm", undefined);
+    }
     if (guidance) {
       const n = r.memory_count ?? 0;
       note(n > 0 ? `${n} memories injected` : "project rules injected");
@@ -164,6 +196,32 @@ export default function (pi: ExtensionAPI) {
       };
     }
     note("nothing to inject");
+  });
+
+  pi.on("tool_result", (e, ctx) => {
+    const operation = rlmOperation(e.toolName);
+    const transcriptId = (e.input as { transcript_id?: unknown }).transcript_id;
+    if (!operation || typeof transcriptId !== "string" || !offeredTranscripts.has(transcriptId)) return;
+
+    let status = `RLM: lookup failed for ${transcriptId}`;
+    if (!e.isError) {
+      try {
+        const result = JSON.parse(messageText(e.content)) as { matches?: unknown; text?: unknown };
+        if (operation === "grep" && Array.isArray(result.matches)) {
+          const count = result.matches.length;
+          status = `RLM: searched ${transcriptId} (${count} match${count === 1 ? "" : "es"})`;
+        } else if (typeof result.text === "string") {
+          status = result.text ?
+            `RLM: read ${transcriptId} (${result.text.length} chars)` :
+            `RLM: empty read from ${transcriptId}`;
+        }
+      } catch {
+        // An unrecognized result is not evidence that the pointer was read.
+        status = `RLM: lookup result unverified for ${transcriptId}`;
+      }
+    }
+    if (ctx.hasUI) ctx.ui.setStatus("simba-rlm", status);
+    else note(status);
   });
 
   // Tool gate: before a tool runs, ask simba's PreToolUse path whether to block
