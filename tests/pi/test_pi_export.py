@@ -121,8 +121,12 @@ def test_exports_at_context_boundaries(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake = bin_dir / "simba"
+    # Write to a temp file and rename, so the test never reads a half-written
+    # marker (the file exists before `cat` finishes writing it).
     fake.write_text(
-        f'#!/bin/sh\n[ "$1 $2" = "hook-canonical pre_compact" ] && cat > "{marker}"\n'
+        "#!/bin/sh\n"
+        f'[ "$1 $2" = "hook-canonical pre_compact" ] || exit 0\n'
+        f'cat > "{marker}.tmp" && mv "{marker}.tmp" "{marker}"\n'
     )
     fake.chmod(0o755)
     result = subprocess.run(
