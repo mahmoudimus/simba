@@ -467,6 +467,15 @@ def run(hook_input: dict) -> CanonicalResult:
         with contextlib.suppress(Exception):
             simba.guardian.signal_flag.reset_signal(session_id)
 
+    # Billion Context: turn on its rules feature once, so CORE rules can be
+    # kept through folds (no-op unless an installed agent uses bili).
+    import contextlib as _contextlib
+
+    with _contextlib.suppress(Exception):
+        import simba.integrations.billion_context as _bili
+
+        _bili.ensure_rules_enabled()
+
     parts: list[str] = []
 
     # 1. Memory daemon health check + auto-start

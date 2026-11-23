@@ -275,9 +275,12 @@ registration under pi are future work.
 host, simba notices its folds at each turn end (bili's plugin `status`
 endpoint, or its SQLite store read-only; for Codex, bili's compaction marker in
 the rollout) and reacts as it would to a compaction: it re-injects CORE rules
-and exports the transcript. If bili's `acp_rule` tool is enabled
-(`compress.rules: true`), CORE rules are also recorded as `[simba]` rules,
-which bili keeps through folds. The context-low notice is skipped while bili
+and exports the transcript. CORE rules are also recorded as `[simba]` rules
+through bili's `acp_rule` tool, which bili keeps through folds. That tool needs
+`compress.rules: true`; simba sets it once, at session start or with
+`simba bili setup`, when an installed agent (`~/.pi`, `~/.claude`, `~/.codex`)
+routes through bili, keeping a backup of bili's config and never flipping it
+back if you turn it off. The context-low notice is skipped while bili
 manages a session. Design:
 [`docs/adr/2026-11-23-billion-context-adapter.md`](docs/adr/2026-11-23-billion-context-adapter.md).
 

@@ -6,6 +6,7 @@ Usage:
     simba install --remove Remove hooks (add --global for global)
     simba codex-install    Install bundled skills for Codex (~/.codex/skills)
     simba update-qmd       Install/upgrade qmd (@tobilu/qmd); --dry-run, --backup
+    simba bili setup       Enable Billion Context rules for agents that use it
     simba codex-install --remove
                            Remove bundled Codex skills
     simba codex-status     Check daemon health + transcript extraction status
@@ -5354,6 +5355,28 @@ def _cmd_transcript(args: list[str]) -> int:
     return 1
 
 
+def _cmd_bili(args: list[str]) -> int:
+    """`simba bili setup [--dry-run]` -- configure Billion Context for simba.
+
+    Detects which installed agents (~/.pi, ~/.claude, ~/.codex) route through
+    Billion Context and turns on its rules feature (``compress.rules: true``)
+    so simba can keep CORE rules through folds. Runs once; see
+    simba.integrations.billion_context.ensure_rules_enabled.
+    """
+    if not args or args[0] != "setup":
+        print("usage: simba bili setup [--dry-run]", file=sys.stderr)
+        return 1
+    import simba.integrations.billion_context as bili
+
+    result = bili.ensure_rules_enabled(dry_run="--dry-run" in args)
+    print(f"agents using Billion Context: {', '.join(result['agents']) or 'none'}")
+    print(f"config: {result['config']}")
+    if result.get("backup"):
+        print(f"backup: {result['backup']}")
+    print(result["status"])
+    return 0
+
+
 def _cmd_update_qmd(args: list[str]) -> int:
     """`simba update-qmd [--dry-run] [--backup]` -- install or upgrade qmd.
 
@@ -5925,6 +5948,8 @@ def main() -> None:
         sys.exit(_cmd_pi_install(rest))
     elif cmd == "update-qmd":
         sys.exit(_cmd_update_qmd(rest))
+    elif cmd == "bili":
+        sys.exit(_cmd_bili(rest))
     elif cmd == "memory":
         sys.exit(_cmd_memory(rest))
     elif cmd == "server":

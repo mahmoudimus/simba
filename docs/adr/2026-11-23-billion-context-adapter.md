@@ -57,6 +57,16 @@ model's context does not.
    only when the CORE text changes; while `acp_rule` is off, simba re-checks
    at most hourly.
 
+   simba turns the feature on itself (`ensure_rules_enabled`, run once from
+   SessionStart and by `simba bili setup`): when an installed agent routes
+   through bili (pi's `packages`, Claude's `ANTHROPIC_BASE_URL` or plugin, or
+   Codex's `[mcp_servers.bili]`), it sets `compress.rules: true` in bili's
+   config, after backing it up. It records that it did so and never flips the
+   setting back if the user turns it off. A JSONC config (bili accepts
+   comments) is left alone so no comment is lost. Note bili's own caveat:
+   with rules on, the model may also delete or clear rules; simba's are
+   re-added when CORE changes.
+
 5. **Skip the context-low notice while bili manages the session** (seen in
    the last 6 hours).
 

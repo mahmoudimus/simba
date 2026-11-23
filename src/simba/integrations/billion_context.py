@@ -397,3 +397,98 @@ def on_turn_end(hook_input: dict[str, typing.Any]) -> dict[str, typing.Any]:
                 state["rules_checked_at"] = time.time()
     _save(conversation_id, state)
     return {"bili": True, "folded": folded, "rules_added": rules_added}
+
+
+# ---------------------------------------------------------------------------
+# Setup: turn on bili's rules feature for the agents that use bili
+# ---------------------------------------------------------------------------
+
+
+def bili_config_path() -> pathlib.Path:
+    """bili's config file (``BILI_CONFIG_FILE`` or the XDG config dir)."""
+    explicit = os.environ.get("BILI_CONFIG_FILE")
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    base = os.environ.get("XDG_CONFIG_HOME") or str(pathlib.Path.home() / ".config")
+    return pathlib.Path(base) / "billion-context" / "billion-context.json"
+
+
+def detect_agents(home: pathlib.Path | None = None) -> list[str]:
+    """Installed agents that route through bili: pi, claude, codex."""
+    home = home or pathlib.Path.home()
+    found: list[str] = []
+    pi_dir = pathlib.Path(
+        os.environ.get("PI_CODING_AGENT_DIR") or home / ".pi" / "agent"
+    )
+    with contextlib.suppress(OSError, ValueError):
+        packages = json.loads((pi_dir / "settings.json").read_text()).get(
+            "packages", []
+        )
+        if any("billion-context" in str(p) for p in packages):
+            found.append("pi")
+    with contextlib.suppress(OSError, ValueError):
+        claude = json.loads((home / ".claude" / "settings.json").read_text())
+        base_url = str((claude.get("env") or {}).get("ANTHROPIC_BASE_URL", ""))
+        plugins = (home / ".claude" / "plugins" / "installed_plugins.json").read_text()
+        if "/bili/" in base_url or "billion-context" in plugins:
+            found.append("claude")
+    with contextlib.suppress(OSError):
+        codex = (home / ".codex" / "config.toml").read_text()
+        if re.search(r"^\s*\[mcp_servers\.bili\]\s*$", codex, re.M):
+            found.append("codex")
+    return found
+
+
+def ensure_rules_enabled(
+    *, dry_run: bool = False, home: pathlib.Path | None = None
+) -> dict[str, typing.Any]:
+    """Set ``compress.rules: true`` in bili's config, once.
+
+    Only when an installed agent uses bili. simba records that it made the
+    change and never flips the setting back if the user turns it off later.
+    A config that is not plain JSON (bili also accepts JSONC) is left alone,
+    so comments are never lost. The previous file is kept as a backup.
+    """
+    agents = detect_agents(home)
+    path = bili_config_path()
+    result: dict[str, typing.Any] = {"agents": agents, "config": str(path)}
+    if not agents:
+        return {**result, "status": "bili not used by any installed agent"}
+    marker = state_dir() / "setup.json"
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(marker.read_text()).get("rules_enabled_at"):
+            return {**result, "status": "already set by simba once; left as is"}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raw = "{}"
+    except OSError as exc:
+        return {**result, "status": f"unreadable: {exc}"}
+    try:
+        config = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        return {**result, "status": "not plain JSON (JSONC?); edit it by hand"}
+    if not isinstance(config, dict):
+        return {**result, "status": "unexpected config shape; edit it by hand"}
+    compress = config.setdefault("compress", {})
+    if not isinstance(compress, dict):
+        return {**result, "status": "unexpected compress section; edit it by hand"}
+    if compress.get("rules") is True:
+        status = "rules already on"
+    elif dry_run:
+        return {**result, "status": "would set compress.rules: true"}
+    else:
+        compress["rules"] = True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            backup = path.with_name(f"{path.name}.bak-simba-{int(time.time())}")
+            backup.write_text(raw, encoding="utf-8")
+            result["backup"] = str(backup)
+        tmp = path.with_name(path.name + ".simba-tmp")
+        tmp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
+        status = "set compress.rules: true"
+    if not dry_run:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"rules_enabled_at": time.time()}))
+    return {**result, "status": status}

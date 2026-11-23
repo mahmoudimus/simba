@@ -109,6 +109,7 @@ testpaths = ["tests"]
 addopts = "-ra -q -m 'not gguf'"
 markers = [
     "gguf: opt-in tests that download/load a real GGUF model (skipped by default; run with `-m gguf`)",
+    "bili_setup: tests that exercise Billion Context agent detection (exempt from the global stub)",
     "background_extraction: tests that exercise PreCompact's background transcript-extraction queue (exempt from the global block)",
     "real_daemon_spawn: tests that intentionally exercise _auto_start_daemon's real body (isolated via tmp_path + a mocked subprocess.Popen) -- exempt from the global auto-start-blocking fixture",
 ]
