@@ -95,12 +95,54 @@ class _TranscriptScan:
         self.msg_count = 0
 
 
+# Codex injects these as user-role input_text items; they are instructions and
+# environment, not something the user said.
+_CODEX_INJECTED_PREFIXES = (
+    "<environment_context",
+    "<user_instructions",
+    "<permissions",
+    "# AGENTS.md instructions",
+)
+
+
+def _codex_entry_to_block(payload: object) -> str | None:
+    """Markdown block for a Codex rollout ``response_item`` message, or None.
+
+    Codex rollouts put messages under ``payload`` with ``input_text`` /
+    ``output_text`` content items; ``developer`` messages (system
+    instructions) and reasoning, tool calls and telemetry are skipped.
+    """
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return None
+    role = payload.get("role")
+    if role not in {"user", "assistant"}:
+        return None
+    parts: list[str] = []
+    for item in payload.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if role == "user" and text.lstrip().startswith(_CODEX_INJECTED_PREFIXES):
+            continue
+        parts.append(text)
+    body = "\n".join(parts)
+    if not body:
+        return None
+    if role == "user":
+        return f"<user>\n{body}\n</user>"
+    return f"<assistant>\n<response>\n{body}\n</response>\n</assistant>"
+
+
 def _entry_to_block(entry: dict) -> str | None:
     """Build one markdown message block for a decoded transcript entry, or
     None if the entry doesn't contribute a message (tool results, unknown
     roles, blank content, ...). Shared by the legacy list-based parser and
     the streaming writer so both produce byte-identical output.
     """
+    if entry.get("type") == "response_item":
+        return _codex_entry_to_block(entry.get("payload"))
     message = entry.get("message", {})
     if not isinstance(message, dict):
         # Check for top-level content/text

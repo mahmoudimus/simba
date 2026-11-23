@@ -415,3 +415,35 @@ def test_hooks_disabled_env_makes_hooks_no_ops(monkeypatch, capsys):
     assert cli._cmd_hook(["PreCompact"]) == 0
     assert cli._cmd_hook_canonical(["pre_compact"]) == 0
     assert capsys.readouterr().out.strip() in {"", "{}"}
+
+
+class TestCodexRollout:
+    """Codex rollout lines become markdown (they used to export header-only)."""
+
+    def _line(self, role, text, kind="input_text"):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": role,
+                "content": [{"type": kind, "text": text}],
+            },
+        }
+
+    def test_user_and_assistant_messages_are_exported(self):
+        to_block = simba.hooks.pre_compact._entry_to_block
+        user = to_block(self._line("user", "fix the parser"))
+        assert user == "<user>\nfix the parser\n</user>"
+        reply = to_block(self._line("assistant", "done", "output_text"))
+        assert reply == "<assistant>\n<response>\ndone\n</response>\n</assistant>"
+
+    def test_instructions_reasoning_and_telemetry_are_skipped(self):
+        to_block = simba.hooks.pre_compact._entry_to_block
+        assert to_block(self._line("developer", "system rules")) is None
+        assert to_block(self._line("user", "<environment_context>cwd</x>")) is None
+        assert to_block(self._line("user", "# AGENTS.md instructions for /p")) is None
+        reasoning = {"type": "response_item", "payload": {"type": "reasoning"}}
+        assert to_block(reasoning) is None
+        assert (
+            to_block({"type": "event_msg", "payload": {"type": "token_count"}}) is None
+        )

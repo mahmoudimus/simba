@@ -629,6 +629,7 @@ def extract(
     markdown = pathlib.Path(meta.get("transcript_path") or directory / "transcript.md")
     if markdown.suffix != ".md":
         markdown = directory / "transcript.md"
+    _rebuild_empty_markdown(directory, markdown)
     try:
         end = markdown.stat().st_size
     except OSError as exc:
@@ -642,10 +643,56 @@ def extract(
         project_path=str(meta.get("project_path", "")),
         jobs=jobs,
     )
+    if (
+        result["status"] == "extracted"
+        and result["chunks"] == 0
+        and start == 0
+        and _jsonl_size(directory) > _EMPTY_EXPORT_BYTES
+    ):
+        # Nothing readable came out of a real transcript: the export format is
+        # not understood. Never mark that extracted.
+        result["status"] = "no_content"
+        result["errors"].append("no transcript text in a non-empty export")
+        return result
     if result["status"] == "extracted":
         _write_cursor(directory, end)
         _tr.mark_extracted(meta["_metadata_path"])
     return result
+
+
+_EMPTY_EXPORT_BYTES = 4096
+
+
+def _jsonl_size(directory: pathlib.Path) -> int:
+    try:
+        return (directory / "transcript.jsonl").stat().st_size
+    except OSError:
+        return 0
+
+
+def _rebuild_empty_markdown(directory: pathlib.Path, markdown: pathlib.Path) -> None:
+    """Regenerate a header-only ``transcript.md`` from the export's JSONL copy.
+
+    Exports made before simba understood a host's format (Codex rollouts) have
+    markdown with no messages. The JSONL copy is streamed (bounded memory).
+    """
+    try:
+        md_size = markdown.stat().st_size
+    except OSError:
+        md_size = 0
+    if md_size > 1024 or _jsonl_size(directory) <= _EMPTY_EXPORT_BYTES:
+        return
+    if md_size and any(_has_text(chunk) for chunk in iter_chunks(markdown)):
+        return
+    import simba.hooks.pre_compact as pre_compact
+
+    tmp = markdown.with_name(markdown.name + ".rebuild")
+    try:
+        pre_compact._stream_transcript_to_markdown(directory / "transcript.jsonl", tmp)
+        tmp.replace(markdown)
+    except OSError:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
 
 
 # ---------------------------------------------------------------------------
