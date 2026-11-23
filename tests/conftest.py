@@ -133,6 +133,24 @@ def _block_background_extraction(request, monkeypatch):
     monkeypatch.setattr(_pre_compact, "_auto_extract_enabled", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_billion_context(request, monkeypatch, tmp_path_factory):
+    """Keep the Stop hook's Billion Context step off this machine's real bili.
+
+    ``simba.integrations.billion_context`` reads bili's SQLite store and proxy
+    origin from the home directory and writes per-conversation state under
+    ``~/.cache``. Point all three at an empty temp directory and clear the
+    proxy env var, so no test reads a developer's live bili sessions.
+    """
+    import simba.integrations.billion_context as bili
+
+    root = tmp_path_factory.mktemp("bili")
+    monkeypatch.delenv("BILLION_CONTEXT_PROXY", raising=False)
+    monkeypatch.setattr(bili, "state_dir", lambda: root / "simba-state")
+    monkeypatch.setattr(bili, "bili_state_dir", lambda: root / "bili-state")
+    monkeypatch.setattr(bili, "bili_db_path", lambda: root / "index.db")
+
+
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a temporary project directory structure."""

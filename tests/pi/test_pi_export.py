@@ -28,7 +28,9 @@ AbortSignal.timeout = (ms) => {
 let daemon = "up";
 let release;
 let hold = false;
+const stops = [];
 globalThis.fetch = async (url, init) => {
+  if (String(url).endsWith("/hook/stop")) stops.push(JSON.parse(init.body));
   if (String(url).endsWith("/hook/pre_compact")) {
     if (daemon === "down") throw new TypeError("fetch failed");
     exports.push(JSON.parse(init.body));
@@ -67,6 +69,9 @@ assert.equal(exports.length, 1);
 await handlers.get("agent_end")({messages: []}, ctx);
 await settle();
 assert.equal(exports.length, 1);
+// The turn-end call carries what the Billion Context adapter needs.
+assert.equal(stops.at(-1).session_id, "pi-session");
+assert.equal(stops.at(-1).bili_origin, "http://127.0.0.1:63437");
 appendFileSync(sessionFile, "x".repeat(4_000_000));
 await handlers.get("agent_end")({messages: []}, ctx);
 await settle();
@@ -139,6 +144,7 @@ def test_exports_at_context_boundaries(tmp_path):
             "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
             "SESSION_FILE": str(session_file),
             "CLI_MARKER": str(marker),
+            "BILLION_CONTEXT_PROXY": "http://127.0.0.1:63437",
         },
         timeout=60,
     )

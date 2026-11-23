@@ -581,7 +581,11 @@ def run(hook_input: dict) -> CanonicalResult:
         )
         return CanonicalResult(suppress_output=True)
     try:
-        source = _export_source()
+        source = (
+            hook_input.get("source")
+            if hook_input.get("source") in _CLIENT_SOURCES.values()
+            else _export_source()
+        )
         queued = bool(source) and _auto_extract_enabled()
         msg_count, system_message = _export_transcript(
             session_id, transcript_path, cwd_str, custom_instructions, source, queued
