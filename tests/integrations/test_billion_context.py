@@ -259,3 +259,73 @@ def test_http_and_store_signatures_match(monkeypatch, calls) -> None:
     bili.on_turn_end(hook)
     reachable[0] = False
     assert bili.on_turn_end(hook)["folded"] is False
+
+
+# -- setup ------------------------------------------------------------------
+
+
+@pytest.fixture
+def home(tmp_path) -> pathlib.Path:
+    h = tmp_path / "home"
+    (h / ".pi" / "agent").mkdir(parents=True)
+    (h / ".pi" / "agent" / "settings.json").write_text(
+        json.dumps({"packages": ["npm:pi-subagents", "npm:billion-context"]})
+    )
+    return h
+
+
+@pytest.mark.bili_setup
+def test_detects_agents_that_route_through_bili(home, monkeypatch) -> None:
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    assert bili.detect_agents(home) == ["pi"]
+    (home / ".codex").mkdir()
+    (home / ".codex" / "config.toml").write_text('[mcp_servers.bili]\ncommand = "x"\n')
+    (home / ".claude" / "plugins").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787/bili/x"}})
+    )
+    (home / ".claude" / "plugins" / "installed_plugins.json").write_text("{}")
+    assert bili.detect_agents(home) == ["pi", "claude", "codex"]
+
+
+@pytest.mark.bili_setup
+def test_enables_rules_once_with_a_backup(home, monkeypatch) -> None:
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    config = bili.bili_config_path()
+    config.write_text(json.dumps({"providers": {}, "compress": {"tiers": True}}))
+    result = bili.ensure_rules_enabled(home=home)
+    assert result["status"] == "set compress.rules: true"
+    data = json.loads(config.read_text())
+    assert data == {"providers": {}, "compress": {"tiers": True, "rules": True}}
+    assert json.loads(pathlib.Path(result["backup"]).read_text())["providers"] == {}
+    # The user turns it off again: simba leaves it alone.
+    data["compress"]["rules"] = False
+    config.write_text(json.dumps(data))
+    again = bili.ensure_rules_enabled(home=home)
+    assert again["status"].startswith("already set by simba once")
+    assert json.loads(config.read_text())["compress"]["rules"] is False
+
+
+@pytest.mark.bili_setup
+def test_setup_dry_run_and_guards(home, monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    config = bili.bili_config_path()
+    config.write_text('{"providers": {}, // a comment\n}')
+    assert "not plain JSON" in bili.ensure_rules_enabled(home=home)["status"]
+    assert "// a comment" in config.read_text()
+    config.write_text("{}")
+    assert bili.ensure_rules_enabled(home=home, dry_run=True)["status"] == (
+        "would set compress.rules: true"
+    )
+    assert json.loads(config.read_text()) == {}
+    nobody = tmp_path / "empty-home"
+    nobody.mkdir()
+    assert "not used" in bili.ensure_rules_enabled(home=nobody)["status"]
+
+
+def test_session_start_never_touches_the_real_config() -> None:
+    """The autouse fixture stubs agent detection, so setup is a no-op here."""
+    import simba.hooks.session_start as session_start
+
+    session_start.run({"session_id": "s", "cwd": ""})
+    assert not bili.bili_config_path().exists()

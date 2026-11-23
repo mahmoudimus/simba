@@ -149,6 +149,11 @@ def _isolate_billion_context(request, monkeypatch, tmp_path_factory):
     monkeypatch.setattr(bili, "state_dir", lambda: root / "simba-state")
     monkeypatch.setattr(bili, "bili_state_dir", lambda: root / "bili-state")
     monkeypatch.setattr(bili, "bili_db_path", lambda: root / "index.db")
+    # SessionStart turns on bili's rules feature: never touch the real config
+    # or detect the developer's real agents.
+    monkeypatch.setattr(bili, "bili_config_path", lambda: root / "bili-config.json")
+    if not request.node.get_closest_marker("bili_setup"):
+        monkeypatch.setattr(bili, "detect_agents", lambda home=None: [])
 
 
 @pytest.fixture
