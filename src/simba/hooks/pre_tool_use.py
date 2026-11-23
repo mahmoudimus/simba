@@ -203,6 +203,17 @@ def _claim_context_notice(transcript_path: pathlib.Path, offset: int) -> bool:
     return True
 
 
+def _bili_manages(session_id: str) -> bool:
+    """Billion Context folds this session's context, so its transcript size says
+    nothing about how full the model's context is: skip the context-low notice."""
+    try:
+        import simba.integrations.billion_context as _bili
+
+        return _bili.is_active(session_id)
+    except Exception:
+        return False
+
+
 def _check_context_low(transcript_path: pathlib.Path) -> str | None:
     """Offer optional compaction for a large transcript, once per segment.
 
@@ -610,7 +621,7 @@ def run(hook_input: dict) -> CanonicalResult:
     system_message = ""
 
     # --- Large-transcript notice (any tool, once per compaction segment) ---
-    if transcript_path_str:
+    if transcript_path_str and not _bili_manages(session_id):
         warning = _check_context_low(pathlib.Path(transcript_path_str))
         if warning:
             parts.append(warning)

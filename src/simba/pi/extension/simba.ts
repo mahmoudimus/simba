@@ -364,6 +364,9 @@ export default function (pi: ExtensionAPI) {
       response: lastAssistantText(e.messages),
       cwd: ctx.cwd,
       transcript_path: ctx.sessionManager.getSessionFile() ?? "",
+      session_id: ctx.sessionManager.getSessionId(),
+      // Billion Context's pi-native bootstrap exports its in-process proxy here.
+      bili_origin: process.env.BILLION_CONTEXT_PROXY ?? "",
     });
     note("session captured");
     const file = ctx.sessionManager.getSessionFile();

@@ -271,6 +271,16 @@ health, transcript export) with command-level enforcement. The
 pitfall/doctrine gate (which keys on the agent's reasoning) and skill
 registration under pi are future work.
 
+**Billion Context.** When Billion Context compresses the context instead of the
+host, simba notices its folds at each turn end (bili's plugin `status`
+endpoint, or its SQLite store read-only; for Codex, bili's compaction marker in
+the rollout) and reacts as it would to a compaction: it re-injects CORE rules
+and exports the transcript. If bili's `acp_rule` tool is enabled
+(`compress.rules: true`), CORE rules are also recorded as `[simba]` rules,
+which bili keeps through folds. The context-low notice is skipped while bili
+manages a session. Design:
+[`docs/adr/2026-11-23-billion-context-adapter.md`](docs/adr/2026-11-23-billion-context-adapter.md).
+
 **Transcripts are extracted in the background.** After an export, simba queues
 it and a single background worker extracts it with that host's own CLI and a
 small model: pi exports with `pi -p` (`deepseek/deepseek-flash`), Claude Code

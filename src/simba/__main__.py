@@ -1777,6 +1777,13 @@ def _cmd_hook(args: list[str]) -> int:
             client = sniffed
             os.environ["SIMBA_CLIENT"] = client
 
+    # Billion Context's launchers (`bili claude`, `bili codex`) export the proxy
+    # origin to the host, and hooks inherit it; the daemon does not, so carry it
+    # in the payload (see simba.integrations.billion_context).
+    bili_origin = os.environ.get("BILLION_CONTEXT_PROXY", "")
+    if bili_origin and isinstance(payload, dict):
+        payload.setdefault("bili_origin", bili_origin)
+
     import simba.harness.adapters.claude as claude
 
     # Canonicalized (MVP) events: daemon-first, inline fallback, render to envelope.

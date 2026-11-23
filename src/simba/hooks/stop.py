@@ -174,6 +174,13 @@ def run(hook_input: dict) -> CanonicalResult:
             hook_input, simba.config.load("memory"), cwd=cwd
         )
 
+    # 4. Billion Context: notice its folds (export + CORE re-injection) and keep
+    #    CORE rules as bili rules. No-op when bili is not managing the session.
+    with contextlib.suppress(Exception):
+        import simba.integrations.billion_context as _bili
+
+        _bili.on_turn_end(hook_input)
+
     # Rendering (see simba.harness.adapters.claude): claude (default) renders
     # non-empty additional_context as hookSpecificOutput.additionalContext;
     # codex keeps the legacy top-level stopReason. The tailor error capture
