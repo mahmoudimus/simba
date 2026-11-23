@@ -195,6 +195,32 @@ class TestPreCompactMain:
             assert not sf.flag_path("compact-session").exists()
 
 
+    def test_checkpoint_export_keeps_signal_flag(self, tmp_path):
+        """A pi checkpoint export is not a context loss, so CORE is not re-injected."""
+        import simba.guardian.signal_flag as sf
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "test"}}) + "\n"
+        )
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+
+        with unittest.mock.patch.object(sf, "_TMP_DIR", tmp_path):
+            for trigger in ("checkpoint", "shutdown"):
+                sf.record_signal("checkpoint-session", present=True)
+                with unittest.mock.patch("pathlib.Path.home", return_value=fake_home):
+                    simba.hooks.pre_compact.main(
+                        {
+                            "session_id": "checkpoint-session",
+                            "transcript_path": str(transcript),
+                            "cwd": str(tmp_path),
+                            "trigger": trigger,
+                        }
+                    )
+                assert sf.flag_path("checkpoint-session").exists(), trigger
+
+
 class TestCompactRelaySystemMessage:
     """Leg A: PreCompact's ``run()`` populates CanonicalResult.system_message
     on a real export, and leaves it empty when nothing happened."""

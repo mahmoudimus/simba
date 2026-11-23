@@ -234,6 +234,29 @@ and rule logic stays in Python; the extension is pure marshalling.
 | `tool_call` | `pre_tool` | **Tool gate**: block a forbidden command or silently rewrite a redirect, before the tool runs |
 | `agent_end` | `stop` | Capture error patterns / rule signal from the response |
 | `session_before_compact` | `pre_compact` | Export the transcript for learning extraction |
+| `tool_result` (Billion Context `compress`), `agent_end` (every 4 MB of session growth), `session_shutdown` | `pre_compact` | Export at context boundaries that bypass Pi compaction (Billion Context, Jev). The bridge only hands the request to the daemon and never waits for the export. |
+
+**Transcript exports never block pi.** Context managers such as Billion Context
+and Jev keep pi from compacting, so `session_before_compact` alone would almost
+never export a session. The bridge also exports after Billion Context's
+`compress` tool, whenever the session file has grown 4 MB since the last
+export, and at shutdown. Each export is a handoff, not a wait:
+
+- The daemon runs the export on a worker thread and finishes it even after the
+  caller disconnects. The bridge waits at most 2 seconds for the handoff.
+- A handoff timeout means the daemon already has the request, so the bridge
+  does not retry through the CLI (which would export the same file twice).
+- Only an unreachable daemon falls back to `simba hook-canonical pre_compact`,
+  run as a detached process.
+- Compaction, `compress` and growth exports do not wait at all; shutdown waits
+  only for the handoff. Pi's session file is append-only, so nothing needs the
+  export to finish first.
+- The daemon skips a transcript that has not changed since its last export and
+  runs one export per session at a time. A 28.8 MB pi session took 0.58 s to
+  export and 0.29 s to skip unchanged (measured 2026-11-23).
+- `trigger` in the payload says why the export ran. `checkpoint` (growth) and
+  `shutdown` keep the rules-signal flag, because the model's context is
+  unchanged; compaction and `compress` reset it so CORE is re-injected.
 
 The **tool gate** reuses the same redirect and `TOOL_RULE` rules as Claude Code
 and Codex's `PreToolUse` hook. Before a tool runs, simba can **block** a forbidden

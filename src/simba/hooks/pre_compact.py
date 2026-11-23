@@ -507,6 +507,10 @@ def _export_transcript(
     return msg_count, system_message
 
 
+# Export triggers that are not a context loss (see run()).
+_CHECKPOINT_TRIGGERS = frozenset({"checkpoint", "shutdown"})
+
+
 def run(hook_input: dict) -> CanonicalResult:
     """Run the PreCompact hook pipeline. Returns a CanonicalResult."""
     session_id = hook_input.get("session_id") or hook_input.get("sessionId") or ""
@@ -528,7 +532,9 @@ def run(hook_input: dict) -> CanonicalResult:
 
     # Reset the rules-signal flag (spec 25): the model loses context across a
     # compaction, so the next prompt must re-inject the CORE block. Fail-soft.
-    if session_id:
+    # A checkpoint export (pi: transcript growth or session shutdown) leaves the
+    # model's context intact, so it keeps the flag.
+    if session_id and hook_input.get("trigger") not in _CHECKPOINT_TRIGGERS:
         with contextlib.suppress(Exception):
             simba.guardian.signal_flag.reset_signal(session_id)
 

@@ -6,6 +6,7 @@
  * recall/ranking/guardian logic lives here — it all runs in Python.
  */
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -15,6 +16,17 @@ import type {
   ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 const DAEMON = process.env.SIMBA_DAEMON_URL || "http://localhost:8741";
+
+// Context managers such as Billion Context and Jev shrink the live context
+// without Pi compaction, so session_before_compact rarely fires. Export the
+// transcript at those boundaries too: after Billion Context's `compress` tool,
+// whenever the session file has grown by this many bytes, and at shutdown.
+const CONTEXT_COMPRESS_TOOL = "compress";
+const CHECKPOINT_GROWTH_BYTES = 4_000_000;
+// An export streams the whole session file, which can take seconds. The daemon
+// runs it on its own worker thread and keeps going after the caller stops
+// waiting, so the bridge only waits long enough to hand the request over.
+const EXPORT_HANDOFF_MS = 2_000;
 
 /** Surface what simba did to stderr — visible even in `pi -p`. No magic. */
 function note(msg: string): void {
@@ -111,6 +123,44 @@ function lastAssistantReasoning(sessionManager: { getBranch(): unknown[] }): str
   return "";
 }
 
+function sessionBytes(file: string): number {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+// Hand an export to the daemon without waiting for it to finish. A handoff
+// timeout means the daemon has the request and is still exporting, so it must
+// not fall back to the CLI, which would export the same file a second time.
+// Only an unreachable or failing daemon falls back, to a detached CLI process.
+async function sendExport(payload: Record<string, unknown>): Promise<void> {
+  try {
+    const resp = await fetch(`${DAEMON}/hook/pre_compact`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-simba-client": "pi" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(EXPORT_HANDOFF_MS),
+    });
+    if (resp.ok) return;
+  } catch (err) {
+    if ((err as { name?: string } | undefined)?.name === "TimeoutError") return;
+  }
+  try {
+    const child = spawn("simba", ["hook-canonical", "pre_compact"], {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, SIMBA_CLIENT: "pi" },
+    });
+    child.on("error", () => {});
+    child.stdin?.end(JSON.stringify(payload));
+    child.unref();
+  } catch {
+    /* no simba on PATH: nothing to export with */
+  }
+}
+
 function viaCli(event: string, payload: Record<string, unknown>): Promise<Canonical> {
   return new Promise((resolve) => {
     // SIMBA_CLIENT=pi so the CLI fallback (and any daemon call it makes)
@@ -153,6 +203,29 @@ async function callSimba(event: string, payload: Record<string, unknown>): Promi
 
 export default function (pi: ExtensionAPI) {
   let offeredTranscripts = new Set<string>();
+  let exportedBytes = 0;
+  let exporting: Promise<unknown> | undefined;
+
+  // Hand the transcript to simba's PreCompact export. The daemon skips a file
+  // that has not changed since its last export, and runs one export per session
+  // at a time. `trigger` tells it whether the model's context was reduced.
+  // Pi's session file is append-only, so nothing has to wait for the export.
+  function exportTranscript(ctx: ExtensionContext, trigger: string): Promise<unknown> {
+    const transcript_path = ctx.sessionManager.getSessionFile() ?? "";
+    if (!transcript_path) return Promise.resolve();
+    exportedBytes = sessionBytes(transcript_path);
+    const run = sendExport({
+      cwd: ctx.cwd,
+      transcript_path,
+      session_id: ctx.sessionManager.getSessionId(),
+      trigger,
+    }).then(() => note(`transcript export queued (${trigger})`));
+    const tracked: Promise<unknown> = run.finally(() => {
+      if (exporting === tracked) exporting = undefined;
+    });
+    exporting = tracked;
+    return tracked;
+  }
 
   pi.on("session_start", async (_e, ctx: ExtensionContext) => {
     const r = await callSimba("session_start", { cwd: ctx.cwd });
@@ -199,6 +272,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", (e, ctx) => {
+    if (e.toolName === CONTEXT_COMPRESS_TOOL && !e.isError && !exporting) {
+      void exportTranscript(ctx, "context_compress");
+    }
     const operation = rlmOperation(e.toolName);
     const transcriptId = (e.input as { transcript_id?: unknown }).transcript_id;
     if (!operation || typeof transcriptId !== "string" || !offeredTranscripts.has(transcriptId)) return;
@@ -290,14 +366,19 @@ export default function (pi: ExtensionAPI) {
       transcript_path: ctx.sessionManager.getSessionFile() ?? "",
     });
     note("session captured");
+    const file = ctx.sessionManager.getSessionFile();
+    if (file && !exporting && sessionBytes(file) - exportedBytes >= CHECKPOINT_GROWTH_BYTES) {
+      void exportTranscript(ctx, "checkpoint");
+    }
   });
 
-  pi.on("session_before_compact", async (_e, ctx: ExtensionContext) => {
-    await callSimba("pre_compact", {
-      cwd: ctx.cwd,
-      transcript_path: ctx.sessionManager.getSessionFile() ?? "",
-      session_id: ctx.sessionManager.getSessionId(),
-    });
-    note("transcript exported");
+  // Compaction appends to the session file, so it does not wait for the export.
+  pi.on("session_before_compact", (_e, ctx: ExtensionContext) => {
+    void exportTranscript(ctx, "compaction");
+  });
+
+  // Shutdown waits only for the handoff, so the request leaves before Pi exits.
+  pi.on("session_shutdown", async (_e, ctx: ExtensionContext) => {
+    await exportTranscript(ctx, "shutdown");
   });
 }
