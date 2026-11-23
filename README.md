@@ -271,6 +271,28 @@ health, transcript export) with command-level enforcement. The
 pitfall/doctrine gate (which keys on the agent's reasoning) and skill
 registration under pi are future work.
 
+**Transcripts are extracted in the background.** After an export, simba queues
+it and a single background worker extracts it with that host's own CLI and a
+small model: pi exports with `pi -p` (`deepseek/deepseek-flash`), Claude Code
+exports with `claude -p` (`claude-haiku-5-5`), Codex exports with `codex exec`
+(`gpt-5.6-luna`, reasoning `max`). The model gets no tools, MCP servers or
+context files and returns JSON; simba validates it and stores learnings through
+`/store`. simba's own hooks are disabled inside these runs
+(`SIMBA_HOOKS_DISABLED=1`). Memory stays bounded: the transcript is streamed,
+one ~240K-character chunk per model call, one extraction at a time
+machine-wide. Only new exports are queued; extract the backlog explicitly:
+
+```bash
+simba transcript extract --all --source pi            # pending pi exports
+simba transcript extract --session 01a1f0ef --dry-run # print candidates only
+simba transcript extract --project /path/to/repo --model deepseek/deepseek-flash
+simba config set transcripts.auto_extract false       # stop the background path
+```
+
+Design and the reasons behind each choice (no tools, per-host providers, memory
+limits, incremental cursor):
+[`docs/adr/2026-11-23-headless-transcript-extraction.md`](docs/adr/2026-11-23-headless-transcript-extraction.md).
+
 ```bash
 simba pi-install            # Write the bridge extension + register it in pi's settings.json
 simba pi-install --remove   # Remove the extension and its registration

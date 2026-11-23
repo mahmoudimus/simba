@@ -116,6 +116,23 @@ def _block_real_daemon_spawn(request, monkeypatch):
     monkeypatch.setattr(_session_start, "_auto_start_daemon", _stub)
 
 
+@pytest.fixture(autouse=True)
+def _block_background_extraction(request, monkeypatch):
+    """Globally keep PreCompact from queueing or spawning the background
+    transcript-extraction worker (``transcripts/llm_extract.py``).
+
+    The hook detects its host from the environment, so a test run inside
+    Claude Code would otherwise mark exports ``queued_extraction`` and start a
+    real worker that calls a model CLI. Tests that exercise the auto path mark
+    themselves ``background_extraction`` and stub the spawn themselves.
+    """
+    if request.node.get_closest_marker("background_extraction"):
+        return
+    import simba.hooks.pre_compact as _pre_compact
+
+    monkeypatch.setattr(_pre_compact, "_auto_extract_enabled", lambda: False)
+
+
 @pytest.fixture
 def tmp_project(tmp_path: pathlib.Path) -> pathlib.Path:
     """Create a temporary project directory structure."""

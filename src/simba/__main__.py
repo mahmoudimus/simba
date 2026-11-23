@@ -1558,8 +1558,22 @@ def _dispatch_canonical(
     return simba.harness.core.dispatch(event, payload)
 
 
+def _hooks_disabled() -> bool:
+    """``SIMBA_HOOKS_DISABLED=1`` turns every hook into a no-op.
+
+    simba's own headless runs (``simba transcript extract`` through ``claude -p``
+    or ``codex exec``) set it so the host's simba hooks do not recall memories
+    into the extraction prompt, export the extraction session, or start another
+    extraction from it.
+    """
+    return os.environ.get("SIMBA_HOOKS_DISABLED") == "1"
+
+
 def _cmd_hook_canonical(args: list[str]) -> int:
     """Run a canonical hook and print its CanonicalResult as JSON."""
+    if _hooks_disabled():
+        print("{}")
+        return 0
     if not args:
         print("Usage: simba hook-canonical <canonical_event>", file=sys.stderr)
         return 1
@@ -1729,6 +1743,8 @@ def _sniff_codex_client(payload: dict) -> str | None:
 
 def _cmd_hook(args: list[str]) -> int:
     """Dispatch a hook event. Called by Claude Code / Codex, not users."""
+    if _hooks_disabled():
+        return 0
     # Resolve client identity, then export it so BOTH the daemon path
     # (X-Simba-Client header) and the inline fallback (recall via _memory_client)
     # attribute this process consistently. A defaulted resolution gets one
@@ -5289,11 +5305,15 @@ def _cmd_transcript(args: list[str]) -> int:
         return 1
     if sub == "distill":
         return _cmd_transcript_distill(args[1:])
+    if sub == "extract":
+        return _cmd_transcript_extract(args[1:])
     print(
         "usage: simba transcript {pending [--project P] [--json] "
         "| mark-extracted <session_id> "
         "| distill <jsonl> [--session-id X] [--out DIR] [--project-path P] "
-        "[--focus TEXT]}"
+        "[--focus TEXT] "
+        "| extract (--all | --session ID | --project P) [--source all|pi] "
+        "[--model M] [--jobs N] [--dry-run]}"
     )
     return 1
 
@@ -5316,6 +5336,145 @@ def _cmd_update_qmd(args: list[str]) -> int:
     if result.message:
         print(result.message)
     return 0 if result.ok else 1
+
+
+def _cmd_transcript_extract(args: list[str]) -> int:
+    """`simba transcript extract` -- extract pending exports headlessly.
+
+    Selects waiting exports (``--all``, ``--session <id prefix>`` or
+    ``--project <path>``, narrowed by ``--source all|pi|claude|codex``) and
+    sends each, in streamed chunks, to its host's CLI with no tools: pi exports
+    to ``pi -p``, Claude Code exports to ``claude -p``, Codex exports to
+    ``codex exec`` (models in the ``transcripts`` config; ``--model`` overrides).
+    simba validates the JSON and stores learnings through the daemon.
+    ``--dry-run`` prints candidates without storing or marking anything.
+    ``--worker`` drains the background queue (one export and one model call
+    at a time, machine-wide lock); the export hook starts it.
+    See docs/adr/2026-11-23-headless-transcript-extraction.md.
+    """
+    import simba.hooks._memory_client
+    import simba.memory.config
+    import simba.transcripts as _tr
+    import simba.transcripts.llm_extract as _llm
+
+    cfg = _llm._cfg()
+    daemon = simba.hooks._memory_client.daemon_url()
+
+    def run_one(meta: dict, *, model: str | None, jobs: int, dry_run: bool) -> dict:
+        session_id = str(meta.get("session_id", ""))
+        project_path = str(meta.get("project_path", ""))
+        source = _llm.source_of(meta)
+        if source is None:
+            return {"status": "unknown_source", "errors": ["unknown host"]}
+        maxlen = simba.memory.config.resolve_max_content_length(
+            pathlib.Path(project_path) if project_path else None
+        )
+
+        def storer(learning: _llm.Learning) -> str:
+            return _llm.store(
+                learning, session_id=session_id, project_path=project_path,
+                daemon=daemon,
+            )  # fmt: skip
+
+        result = _llm.extract(
+            meta,
+            runner=_llm.runner_for(source, cfg, model),
+            storer=None if dry_run else storer,
+            maxlen=maxlen,
+            jobs=jobs,
+            chunk_chars=int(cfg.chunk_chars),
+        )
+        result["source"] = source
+        return result
+
+    def report(meta: dict, result: dict) -> None:
+        print(
+            f"{meta.get('session_id', '')} [{result.get('source', '?')} "
+            f"{meta.get('project_path', '')}] {result['status']}: "
+            f"chunks={result.get('chunks', 0)} learnings={result.get('learnings', 0)} "
+            f"stored={result.get('stored', 0)} "
+            f"duplicates={result.get('duplicates', 0)} "
+            f"pending_confirmation={result.get('pending_confirmation', 0)} "
+            f"rejected={result.get('rejected', 0)}",
+            flush=True,
+        )
+        for error in result.get("errors", [])[:5]:
+            print(f"  error: {error}", flush=True)
+
+    if "--worker" in args:
+        by_id = {str(m.get("session_id")): m for m in _llm.list_pending()}
+
+        def handle(session_id: str) -> None:
+            meta = by_id.get(session_id) or next(
+                (
+                    m
+                    for m in _llm.list_pending()
+                    if str(m.get("session_id")) == session_id
+                ),
+                None,
+            )
+            if meta is None:
+                return
+            try:
+                result = run_one(meta, model=None, jobs=1, dry_run=False)
+            except Exception as exc:  # keep draining the queue
+                result = {"status": "errors", "errors": [repr(exc)]}
+            if result["status"] != "extracted":
+                # Fall back to the regular pending path (Claude's session-start
+                # directive, or a later manual run).
+                _llm.set_status(meta["_metadata_path"], _tr.PENDING)
+            report(meta, result)
+
+        _llm.drain_queue(handle)
+        return 0
+
+    session = _parse_opt_value(args, "--session")
+    project = _parse_opt_value(args, "--project")
+    if not (session or project or "--all" in args):
+        print(
+            "usage: simba transcript extract (--all | --session ID | --project P) "
+            "[--source all|pi|claude|codex] [--model M] [--jobs N] [--dry-run]",
+            file=sys.stderr,
+        )
+        return 1
+    source_filter = _parse_opt_value(args, "--source") or "all"
+    if source_filter not in {"all", *_llm.SOURCES}:
+        print("--source must be all, pi, claude or codex", file=sys.stderr)
+        return 1
+    model = _parse_opt_value(args, "--model")
+    try:
+        jobs = int(_parse_opt_value(args, "--jobs") or cfg.manual_jobs)
+    except ValueError:
+        print("--jobs must be an integer", file=sys.stderr)
+        return 1
+    dry_run = "--dry-run" in args
+
+    selected = [
+        m
+        for m in _llm.list_pending()
+        if (not session or str(m.get("session_id", "")).startswith(session))
+        and (
+            not project
+            or _tr._norm(str(m.get("project_path", "")))
+            == _tr._norm(str(pathlib.Path(project).expanduser()))
+        )
+        and (source_filter == "all" or _llm.source_of(m) == source_filter)
+    ]
+    if not selected:
+        print("No pending transcripts match.")
+        return 0
+
+    failed = 0
+    with _llm.worker_lock(blocking=True):
+        for meta in selected:
+            result = run_one(meta, model=model, jobs=jobs, dry_run=dry_run)
+            report(meta, result)
+            if dry_run:
+                for cand in result.get("candidates", []):
+                    print(f"  {cand['type']} ({cand['confidence']}): {cand['content']}")
+            if result["status"] not in {"extracted", "dry_run"}:
+                failed += 1
+    return 1 if failed else 0
 
 
 def _cmd_transcript_distill(args: list[str]) -> int:

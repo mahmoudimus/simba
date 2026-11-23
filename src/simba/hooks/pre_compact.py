@@ -397,6 +397,8 @@ def _export_transcript(
     transcript_path: pathlib.Path,
     cwd_str: str,
     custom_instructions: str = "",
+    source: str | None = None,
+    queued: bool = False,
 ) -> tuple[int | None, str]:
     """Export transcript.jsonl/.md/metadata.json for one PreCompact firing.
 
@@ -483,8 +485,12 @@ def _export_transcript(
         "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "transcript_path": str(dest_md),
         "daemon_url": simba.hooks._memory_client.daemon_url(),
-        "status": "pending_extraction",
+        # Queued exports belong to the background extraction worker; it sets
+        # them back to pending if extraction fails.
+        "status": "queued_extraction" if queued else "pending_extraction",
     }
+    if source:
+        metadata["source"] = source
     if custom_instructions:
         metadata["compactFocus"] = custom_instructions
     metadata_path = session_dir / "metadata.json"
@@ -505,6 +511,26 @@ def _export_transcript(
 
     system_message = f"simba: exported {msg_count} messages -> {session_dir}"
     return msg_count, system_message
+
+
+_CLIENT_SOURCES = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
+
+
+def _export_source() -> str | None:
+    """The host whose transcript is being exported (claude, codex or pi)."""
+    import simba.harness.client as client
+
+    name = client.get_origin_client() or client.detect_client(default="")
+    return _CLIENT_SOURCES.get(name)
+
+
+def _auto_extract_enabled() -> bool:
+    try:
+        import simba.transcripts.llm_extract as _llm
+
+        return bool(_llm._cfg().auto_extract)
+    except Exception:
+        return False
 
 
 # Export triggers that are not a context loss (see run()).
@@ -555,11 +581,22 @@ def run(hook_input: dict) -> CanonicalResult:
         )
         return CanonicalResult(suppress_output=True)
     try:
+        source = _export_source()
+        queued = bool(source) and _auto_extract_enabled()
         msg_count, system_message = _export_transcript(
-            session_id, transcript_path, cwd_str, custom_instructions
+            session_id, transcript_path, cwd_str, custom_instructions, source, queued
         )
     finally:
         _release_export_slot(session_id)
+
+    # 4b. Background extraction: one worker, one model call at a time
+    #     (transcripts/llm_extract.py). Never blocks the hook.
+    if msg_count is not None and queued:
+        with contextlib.suppress(Exception):
+            import simba.transcripts.llm_extract as _llm
+
+            _llm.enqueue(session_id)
+            _llm.spawn_worker()
 
     # 5/6. Opt-in helpers — only when the export actually ran (msg_count is
     #      not None) and the payload carried a cwd. A skipped export (cap,

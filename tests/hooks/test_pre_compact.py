@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import unittest.mock
 
+import pytest
+
 import simba.hooks.pre_compact
 
 
@@ -194,7 +196,6 @@ class TestPreCompactMain:
                 )
             assert not sf.flag_path("compact-session").exists()
 
-
     def test_checkpoint_export_keeps_signal_flag(self, tmp_path):
         """A pi checkpoint export is not a context loss, so CORE is not re-injected."""
         import simba.guardian.signal_flag as sf
@@ -351,3 +352,58 @@ class TestRlmDigestTrigger:
         monkeypatch.setattr(simba.rlm.engine, "get_engine", lambda cfg: _Engine())
         monkeypatch.setattr(simba.rlm.jobs, "claim", lambda *a, **k: False)
         pc._maybe_dispatch_rlm_digest("s1", "/p", msg_count=40)  # claim False -> skip
+
+
+@pytest.mark.background_extraction
+class TestBackgroundExtraction:
+    """With auto extraction on, an export is queued for the background worker."""
+
+    def _export(self, tmp_path, monkeypatch, source):
+        import simba.transcripts.llm_extract as le
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "hi"}}) + "\n"
+        )
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        calls = []
+        monkeypatch.setattr(
+            simba.hooks.pre_compact, "_auto_extract_enabled", lambda: True
+        )
+        monkeypatch.setattr(simba.hooks.pre_compact, "_export_source", lambda: source)
+        monkeypatch.setattr(le, "enqueue", lambda sid: calls.append(("enqueue", sid)))
+        monkeypatch.setattr(le, "spawn_worker", lambda: calls.append(("spawn",)))
+        with unittest.mock.patch("pathlib.Path.home", return_value=fake_home):
+            simba.hooks.pre_compact.main(
+                {
+                    "session_id": "bg-session",
+                    "transcript_path": str(transcript),
+                    "cwd": str(tmp_path),
+                }
+            )
+        meta_path = (
+            fake_home / ".claude" / "transcripts" / "bg-session" / "metadata.json"
+        )
+        return json.loads(meta_path.read_text()), calls
+
+    def test_known_host_is_queued_and_worker_started(self, tmp_path, monkeypatch):
+        meta, calls = self._export(tmp_path, monkeypatch, "claude")
+        assert meta["status"] == "queued_extraction"
+        assert meta["source"] == "claude"
+        assert calls == [("enqueue", "bg-session"), ("spawn",)]
+
+    def test_unknown_host_stays_pending_for_the_directive(self, tmp_path, monkeypatch):
+        meta, calls = self._export(tmp_path, monkeypatch, None)
+        assert meta["status"] == "pending_extraction"
+        assert "source" not in meta
+        assert calls == []
+
+
+def test_hooks_disabled_env_makes_hooks_no_ops(monkeypatch, capsys):
+    import simba.__main__ as cli
+
+    monkeypatch.setenv("SIMBA_HOOKS_DISABLED", "1")
+    assert cli._cmd_hook(["PreCompact"]) == 0
+    assert cli._cmd_hook_canonical(["pre_compact"]) == 0
+    assert capsys.readouterr().out.strip() in {"", "{}"}
