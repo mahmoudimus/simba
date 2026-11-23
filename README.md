@@ -1198,6 +1198,25 @@ Optional external tools for enhanced search:
 - [ripgrep](https://github.com/BurntSushi/ripgrep) — fast file discovery
 - [fzf](https://github.com/junegunn/fzf) — fuzzy filtering for file suggestions
 - [qmd](https://github.com/tobi/qmd) — semantic markdown search
+  (`simba update-qmd` installs or upgrades it: `bun install -g @tobilu/qmd@latest`,
+  npm when bun is missing; a major-version upgrade first backs up qmd's index,
+  which the new version migrates on open; `--dry-run` shows what it would do)
+
+**qmd context is scoped to the current project.** On each prompt, simba
+searches only the qmd collection whose directory contains the working
+directory (the innermost one wins) and passes it as `qmd search -c`. qmd's
+index is global, so an unscoped search would return other repositories'
+documents. A directory with no collection gets no code context.
+
+**Missing collections are created lazily.** When a prompt in a git project finds
+no collection, simba runs `qmd collection add <git root> --name <dir name>
+--mask '**/*.md'` once in a detached, low-priority process (log:
+`~/.cache/simba/qmd-autoindex/<name>.log`). It never indexes a non-git
+directory, the home directory or its ancestors, or anything on a network
+filesystem (SMB, NFS, AFP, ...; an unreadable mount table counts as network).
+Each root is tried at most once a day. Only keyword (BM25) indexing runs; run
+`qmd embed` yourself for vectors. Turn it off with
+`simba config set search.qmd_auto_index false`.
 
 ## CLI Reference
 

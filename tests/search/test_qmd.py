@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import unittest
 import unittest.mock
@@ -116,3 +117,85 @@ class TestFormatFileSuggestions:
     def test_returns_empty_string_for_empty_list(self) -> None:
         output = simba.search.qmd.format_file_suggestions([])
         assert output == ""
+
+
+# ---------------------------------------------------------------------------
+# Collection scoping
+# ---------------------------------------------------------------------------
+
+INDEX_YML = """\
+collections:
+  kirafin:
+    path: {kirafin}
+    pattern: "**/*.md"
+  examples:
+    path: "{examples}"
+    pattern: "**/*.md"
+  pi-stuff:
+    path: {pi}
+contexts: {{}}
+"""
+
+
+def _index(tmp_path: pathlib.Path) -> tuple[pathlib.Path, dict[str, pathlib.Path]]:
+    dirs = {
+        "kirafin": tmp_path / "kirafin",
+        "examples": tmp_path / "kirafin" / "docs" / "examples",
+        "pi": tmp_path / "pi-stuff",
+    }
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+    config = tmp_path / "index.yml"
+    config.write_text(INDEX_YML.format(**{k: str(v) for k, v in dirs.items()}))
+    return config, dirs
+
+
+class TestCollectionScoping:
+    def test_reads_collection_paths(self, tmp_path: pathlib.Path) -> None:
+        config, dirs = _index(tmp_path)
+        assert simba.search.qmd.collection_paths(config) == {
+            "kirafin": str(dirs["kirafin"]),
+            "examples": str(dirs["examples"]),
+            "pi-stuff": str(dirs["pi"]),
+        }
+
+    def test_missing_config_has_no_collections(self, tmp_path: pathlib.Path) -> None:
+        assert simba.search.qmd.collection_paths(tmp_path / "absent.yml") == {}
+
+    def test_innermost_collection_containing_cwd_wins(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        config, dirs = _index(tmp_path)
+        inner = dirs["examples"] / "deep"
+        inner.mkdir()
+        assert simba.search.qmd.collection_for(inner, config) == "examples"
+        assert simba.search.qmd.collection_for(dirs["kirafin"], config) == "kirafin"
+        assert simba.search.qmd.collection_for(dirs["pi"], config) == "pi-stuff"
+
+    def test_unrelated_or_parent_directory_has_no_collection(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        config, _ = _index(tmp_path)
+        other = tmp_path / "simba"
+        other.mkdir()
+        assert simba.search.qmd.collection_for(other, config) is None
+        assert simba.search.qmd.collection_for(tmp_path, config) is None
+
+    def test_symlinked_cwd_matches_its_target(self, tmp_path: pathlib.Path) -> None:
+        config, dirs = _index(tmp_path)
+        link = tmp_path / "link"
+        link.symlink_to(dirs["pi"])
+        assert simba.search.qmd.collection_for(link, config) == "pi-stuff"
+
+    def test_search_filters_by_collection_and_reads_file_field(self) -> None:
+        mock_result = unittest.mock.Mock()
+        mock_result.stdout = json.dumps(
+            [{"file": "qmd://proj/docs/a.md", "snippet": "s", "score": 1}]
+        )
+        with unittest.mock.patch(
+            "simba.search.qmd.subprocess.run", return_value=mock_result
+        ) as run:
+            results = simba.search.qmd.search("terms", collection="proj")
+        cmd = run.call_args.args[0]
+        assert cmd[cmd.index("-c") + 1] == "proj"
+        assert results[0]["path"] == "proj/docs/a.md"

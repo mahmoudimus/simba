@@ -112,6 +112,7 @@ class TestBuildContext:
         # No DB seeded -- get_connection returns None when file doesn't exist
         with (
             unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
+            unittest.mock.patch("simba.search.qmd.collection_for", return_value="proj"),
             unittest.mock.patch("simba.search.qmd.search", return_value=qmd_results),
         ):
             result = simba.search.rag_context.build_context(
@@ -121,6 +122,36 @@ class TestBuildContext:
         assert "src/auth.py" in result
         assert "relevance: 0.85" in result
         assert "def authenticate(user):" in result
+
+    def test_skips_code_search_without_a_project_collection(
+        self, cwd: pathlib.Path
+    ) -> None:
+        """qmd's index is global; with no collection for this project, the
+        prompt must not receive other repositories' documents."""
+        with (
+            unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
+            unittest.mock.patch("simba.search.qmd.collection_for", return_value=None),
+            unittest.mock.patch("simba.search.qmd_index.schedule_index"),
+            unittest.mock.patch("simba.search.qmd.search") as search,
+        ):
+            result = simba.search.rag_context.build_context(
+                "how does the authentication module work", cwd
+            )
+        search.assert_not_called()
+        assert "# Code Context" not in result
+
+    def test_scopes_code_search_to_the_project_collection(
+        self, cwd: pathlib.Path
+    ) -> None:
+        with (
+            unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
+            unittest.mock.patch("simba.search.qmd.collection_for", return_value="proj"),
+            unittest.mock.patch("simba.search.qmd.search", return_value=[]) as search,
+        ):
+            simba.search.rag_context.build_context(
+                "how does the authentication module work", cwd
+            )
+        assert search.call_args.kwargs["collection"] == "proj"
 
     def test_combines_both_sources(self, cwd: pathlib.Path) -> None:
         _seed_db(cwd)
@@ -133,6 +164,7 @@ class TestBuildContext:
         ]
         with (
             unittest.mock.patch("simba.search.qmd.is_available", return_value=True),
+            unittest.mock.patch("simba.search.qmd.collection_for", return_value="proj"),
             unittest.mock.patch("simba.search.qmd.search", return_value=qmd_results),
         ):
             result = simba.search.rag_context.build_context(

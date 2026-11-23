@@ -5,6 +5,7 @@ Usage:
     simba install --global Register hooks globally (~/.claude/settings.json)
     simba install --remove Remove hooks (add --global for global)
     simba codex-install    Install bundled skills for Codex (~/.codex/skills)
+    simba update-qmd       Install/upgrade qmd (@tobilu/qmd); --dry-run, --backup
     simba codex-install --remove
                            Remove bundled Codex skills
     simba codex-status     Check daemon health + transcript extraction status
@@ -5297,6 +5298,26 @@ def _cmd_transcript(args: list[str]) -> int:
     return 1
 
 
+def _cmd_update_qmd(args: list[str]) -> int:
+    """`simba update-qmd [--dry-run] [--backup]` -- install or upgrade qmd.
+
+    Installs the latest ``@tobilu/qmd`` globally with bun (npm fallback). A
+    major-version upgrade (or ``--backup``) first copies qmd's index aside,
+    because qmd migrates the index the first time the new version opens it.
+    """
+    import simba.search.qmd_update as qu
+
+    result = qu.update(dry_run="--dry-run" in args, force_backup="--backup" in args)
+    print(f"qmd: {result.before or 'not installed'} -> {result.after or 'unknown'}")
+    if result.latest:
+        print(f"latest published: {result.latest}")
+    if result.backup:
+        print(f"index backup: {result.backup}")
+    if result.message:
+        print(result.message)
+    return 0 if result.ok else 1
+
+
 def _cmd_transcript_distill(args: list[str]) -> int:
     """`simba transcript distill <jsonl> [--session-id X] [--out DIR]
     [--project-path P] [--focus TEXT]` -- bounded single-pass distillation
@@ -5707,6 +5728,8 @@ def main() -> None:
         sys.exit(_cmd_hook_canonical(rest))
     elif cmd == "pi-install":
         sys.exit(_cmd_pi_install(rest))
+    elif cmd == "update-qmd":
+        sys.exit(_cmd_update_qmd(rest))
     elif cmd == "memory":
         sys.exit(_cmd_memory(rest))
     elif cmd == "server":

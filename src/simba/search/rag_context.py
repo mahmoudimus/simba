@@ -12,6 +12,7 @@ import simba.config
 import simba.db
 import simba.search.project_memory
 import simba.search.qmd
+import simba.search.qmd_index
 
 if TYPE_CHECKING:
     import pathlib
@@ -62,11 +63,18 @@ def build_context(prompt: str, cwd: pathlib.Path) -> str:
         memory_context = ""
 
     # -- Phase 2: Query QMD -------------------------------------------------
+    # Only search the collection that indexes this project. qmd's index is
+    # global, so an unscoped search returns other repositories' documents.
     code_context = ""
     try:
-        if simba.search.qmd.is_available():
+        available = simba.search.qmd.is_available()
+        collection = simba.search.qmd.collection_for(cwd) if available else None
+        if available and collection is None and cfg.qmd_auto_index:
+            # Index this project in the background; later prompts can use it.
+            simba.search.qmd_index.schedule_index(cwd)
+        if collection:
             results = simba.search.qmd.search(
-                search_terms, max_results=cfg.max_code_results
+                search_terms, max_results=cfg.max_code_results, collection=collection
             )
             if results:
                 lines: list[str] = []
