@@ -410,3 +410,44 @@ def test_spawn_worker_is_skipped_while_one_runs(state, monkeypatch) -> None:
     assert le.spawn_worker() is True
     cmd = spawned[0][0]
     assert cmd[-3:] == ["transcript", "extract", "--worker"]
+
+
+def _codex_export(base: pathlib.Path, sid: str) -> dict:
+    meta = _export(base, sid, "<session-transcript>\n<metadata></metadata>\n")
+    lines = [
+        {"type": "session_meta", "payload": {"id": sid}},
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "always run ruff " * 400}],
+            },
+        },
+    ]
+    (base / sid / "transcript.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n"
+    )
+    return meta
+
+
+def test_header_only_codex_export_is_rebuilt_from_its_jsonl(tmp_path) -> None:
+    meta = _codex_export(tmp_path, "cx1")
+    prompts: list[str] = []
+    result = le.extract(
+        meta,
+        runner=lambda p: prompts.append(p) or _reply(GOOD),
+        storer=lambda x: "stored",
+        maxlen=200,
+    )
+    assert result["status"] == "extracted"
+    assert "always run ruff" in prompts[0]
+    assert "<user>" in (tmp_path / "cx1" / "transcript.md").read_text()
+
+
+def test_unreadable_export_is_never_marked_extracted(tmp_path, monkeypatch) -> None:
+    meta = _codex_export(tmp_path, "cx2")
+    monkeypatch.setattr(le, "_rebuild_empty_markdown", lambda d, m: None)
+    result = le.extract(meta, runner=lambda p: "[]", storer=lambda x: "x", maxlen=200)
+    assert result["status"] == "no_content"
+    assert _status(meta) == _tr.PENDING

@@ -119,3 +119,26 @@ every chunk succeeded. A learning held for supersession review
 
 `simba config set transcripts.auto_extract false` stops the background path;
 manual `simba transcript extract` still works.
+
+## Codex exports were empty (fixed 2026-11-23)
+
+The PreCompact markdown export only understood Claude and pi entries
+(`message.role`). Codex rollouts put messages under
+`{"type": "response_item", "payload": {"type": "message", "role", "content":
+[{"type": "input_text" | "output_text", "text"}]}}`, so 43 of 49 pending
+Codex exports had header-only `transcript.md` (132 bytes) while their JSONL
+copies held 146 KB to 252 MB. Extraction would have found no text and marked
+them extracted. Now:
+
+- The export reads Codex user and assistant messages, skipping `developer`
+  messages and the instruction/environment blocks Codex injects as user
+  input (`<environment_context`, `<user_instructions`, `<permissions`,
+  `# AGENTS.md instructions`), plus reasoning, tool calls and telemetry.
+- Extraction rebuilds a header-only `transcript.md` from the export's JSONL
+  copy (streamed) before chunking, which repairs the existing backlog.
+- An export whose transcript yields no text but whose JSONL is over 4 KB is
+  reported `no_content` and never marked extracted.
+
+Live: a Codex export (chernobog) went from a 132-byte to an 83,989-byte
+transcript (47 user, 96 assistant turns) and extracted through `codex exec`
+(gpt-5.6-luna, reasoning max): 22 learnings stored, peak RSS 205.0 MB.
