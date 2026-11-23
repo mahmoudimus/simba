@@ -2838,6 +2838,27 @@ def _memory_feedback(args: list[str]) -> int:
     return 0
 
 
+def _daemon_db_root() -> pathlib.Path | None:
+    """Repo root whose ``.simba/simba.db`` the running daemon writes audits to.
+
+    The supersession audit lives in the daemon's repo DB, not the caller's cwd
+    DB; derive it from ``/health`` ``dbPath`` (``<root>/.simba/memory/*.lance``).
+    Fail-soft: ``None`` when the daemon is unreachable or the path is unusual.
+    """
+    try:
+        import httpx
+
+        import simba.hooks._memory_client as mc
+
+        resp = httpx.get(f"{mc.daemon_url()}/health", timeout=2.0)
+        db_path = pathlib.Path(str(resp.json().get("dbPath", "")))
+    except Exception:
+        return None
+    if len(db_path.parents) > 2 and db_path.parents[1].name == ".simba":
+        return db_path.parents[2]
+    return None
+
+
 def _memory_supersession(args: list[str]) -> int:
     """Inspect the append-only supersession chain for a memory."""
     if not args or args[0].startswith("--"):
@@ -2893,8 +2914,16 @@ def _memory_supersession(args: list[str]) -> int:
     with simba.db.connect(pathlib.Path.cwd()):
         rows = simba.memory.supersession.chain(memory_id)
         events = simba.memory.supersession.events_for(memory_id)
+    searched = simba.db.get_db_path(pathlib.Path.cwd())
     if not rows and not events:
-        print(f"no supersession chain for {memory_id}")
+        daemon_root = _daemon_db_root()
+        if daemon_root is not None and (simba.db.get_db_path(daemon_root) != searched):
+            searched = simba.db.get_db_path(daemon_root)
+            with simba.db.connect(daemon_root):
+                rows = simba.memory.supersession.chain(memory_id)
+                events = simba.memory.supersession.events_for(memory_id)
+    if not rows and not events:
+        print(f"no supersession chain for {memory_id} (searched {searched})")
         return 0
 
     if rows:
