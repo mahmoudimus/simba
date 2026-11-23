@@ -44,6 +44,7 @@ interface Canonical {
   // A directive that block-only harnesses (pi tool_call) enforce as a hard block
   // — a strong TOOL_RULE match. Claude/Codex inject it as context instead.
   escalated_block?: string | null;
+  system_message?: string;
 }
 
 // pi lowercases tool names ("bash", "edit", …); simba's PreToolUse speaks the
@@ -231,6 +232,11 @@ export default function (pi: ExtensionAPI) {
     const r = await callSimba("session_start", { cwd: ctx.cwd });
     note(r.additional_context ? "session ready — memory active" : "daemon unavailable");
     if (r.additional_context && ctx.hasUI) ctx.ui.notify(r.additional_context, "info");
+    // Human-facing notes (e.g. "ran simba bili setup automatically").
+    if (r.system_message) {
+      if (ctx.hasUI) ctx.ui.notify(r.system_message, "info");
+      else note(r.system_message);
+    }
   });
 
   pi.on("before_agent_start", async (e: BeforeAgentStartEvent, ctx: ExtensionContext) => {

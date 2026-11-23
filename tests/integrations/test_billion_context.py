@@ -288,44 +288,185 @@ def test_detects_agents_that_route_through_bili(home, monkeypatch) -> None:
     assert bili.detect_agents(home) == ["pi", "claude", "codex"]
 
 
+@pytest.fixture
+def setup_mod():
+    import simba.integrations.billion_context_setup as setup
+
+    return setup
+
+
 @pytest.mark.bili_setup
-def test_enables_rules_once_with_a_backup(home, monkeypatch) -> None:
+def test_auto_setup_enables_rules_once_and_notifies(home, setup_mod, monkeypatch):
     monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    monkeypatch.setattr(bili, "detect_agents", lambda h=None: ["pi"])
     config = bili.bili_config_path()
     config.write_text(json.dumps({"providers": {}, "compress": {"tiers": True}}))
-    result = bili.ensure_rules_enabled(home=home)
-    assert result["status"] == "set compress.rules: true"
+    result = setup_mod.apply(auto=True)
+    assert result["changes"] == ["compress.rules"]
+    assert "Detected Billion Context (pi)" in result["notice"]
+    assert "run `simba bili restore` to restore settings" in result["notice"]
+    assert "--summary-key-from-pi" in result["notice"]
     data = json.loads(config.read_text())
     assert data == {"providers": {}, "compress": {"tiers": True, "rules": True}}
     assert json.loads(pathlib.Path(result["backup"]).read_text())["providers"] == {}
-    # The user turns it off again: simba leaves it alone.
+    # Never again automatically, even if the user turns it off.
     data["compress"]["rules"] = False
     config.write_text(json.dumps(data))
-    again = bili.ensure_rules_enabled(home=home)
-    assert again["status"].startswith("already set by simba once")
+    again = setup_mod.apply(auto=True)
+    assert again["status"] == "already handled" and again["notice"] == ""
     assert json.loads(config.read_text())["compress"]["rules"] is False
 
 
 @pytest.mark.bili_setup
-def test_setup_dry_run_and_guards(home, monkeypatch, tmp_path) -> None:
-    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+def test_restore_reverts_exactly_simbas_keys(home, setup_mod, monkeypatch):
+    monkeypatch.setattr(bili, "detect_agents", lambda h=None: ["pi"])
+    config = bili.bili_config_path()
+    config.write_text(json.dumps({"providers": {}, "compress": {"rules": False}}))
+    setup_mod.apply()
+    data = json.loads(config.read_text())
+    data["compress"]["tiers"] = True  # a later change of the user's
+    config.write_text(json.dumps(data))
+    result = setup_mod.restore()
+    assert result["status"] == "restored compress.rules"
+    assert json.loads(config.read_text()) == {
+        "providers": {},
+        "compress": {"rules": False, "tiers": True},
+    }
+    assert setup_mod.apply(auto=True)["status"] == "already handled"
+    assert setup_mod.restore()["status"] == "nothing to restore"
+
+
+@pytest.mark.bili_setup
+def test_summary_key_from_pi_adds_the_chain_and_restore_removes_it(
+    home, setup_mod, monkeypatch
+):
+    import os
+    import stat
+
+    monkeypatch.setattr(bili, "detect_agents", lambda h=None: ["pi"])
+    setup_mod.pi_auth_path().write_text(
+        json.dumps({"deepseek": {"type": "api_key", "key": "sk-test-123"}})
+    )
+    config = bili.bili_config_path()
+    config.write_text(json.dumps({"providers": {}}))
+    result = setup_mod.apply(summary_key_from_pi=True)
+    assert result["credential"] == "copied"
+    data = json.loads(config.read_text())
+    assert data["compress"]["externalSummary"] == setup_mod.SUMMARY_CHAIN
+    assert data["providers"]["simba-deepseek"]["credentialRef"] == "simba-deepseek"
+    store = setup_mod.credentials_path(config)
+    assert json.loads(store.read_text()) == {"simba-deepseek": "sk-test-123"}
+    assert stat.S_IMODE(os.stat(store).st_mode) == 0o600
+    setup_mod.restore()
+    assert json.loads(config.read_text()) == {"providers": {}, "compress": {}}
+    assert json.loads(store.read_text()) == {}
+
+
+@pytest.mark.bili_setup
+def test_setup_dry_run_and_guards(home, setup_mod, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(bili, "detect_agents", lambda h=None: ["pi"])
     config = bili.bili_config_path()
     config.write_text('{"providers": {}, // a comment\n}')
-    assert "not plain JSON" in bili.ensure_rules_enabled(home=home)["status"]
+    assert "not plain JSON" in setup_mod.apply()["status"]
     assert "// a comment" in config.read_text()
     config.write_text("{}")
-    assert bili.ensure_rules_enabled(home=home, dry_run=True)["status"] == (
-        "would set compress.rules: true"
-    )
+    assert setup_mod.apply(dry_run=True)["status"] == "would change compress.rules"
     assert json.loads(config.read_text()) == {}
-    nobody = tmp_path / "empty-home"
-    nobody.mkdir()
-    assert "not used" in bili.ensure_rules_enabled(home=nobody)["status"]
+    monkeypatch.setattr(bili, "detect_agents", lambda h=None: [])
+    assert "not used" in setup_mod.apply()["status"]
+
+
+def test_legacy_marker_is_restorable(setup_mod) -> None:
+    setup_mod.state_path().parent.mkdir(parents=True, exist_ok=True)
+    setup_mod.state_path().write_text(json.dumps({"rules_enabled_at": 1.0}))
+    bili.bili_config_path().write_text(json.dumps({"compress": {"rules": True}}))
+    assert setup_mod.restore()["status"] == "restored compress.rules"
+    assert json.loads(bili.bili_config_path().read_text()) == {"compress": {}}
+
+
+# -- summaries ----------------------------------------------------------------
+
+
+def _summary_db(path: pathlib.Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE blocks (session_id TEXT, block_id TEXT, ord INT, active INT,"
+        " summary_hash TEXT, payload_json TEXT)"
+    )
+    conn.execute("CREATE TABLE content (hash TEXT, bytes BLOB)")
+    conn.execute(
+        "CREATE TABLE conversations (namespace TEXT, conversation_id TEXT,"
+        " session_id TEXT)"
+    )
+    rows = [
+        (SID, "b1", 1, 1, None, json.dumps({"topic": "ports", "summary": "port 8741"})),
+        (SID, "b2", 2, 1, "h2", json.dumps({"topic": "uv"})),
+        (SID, "b3", 3, 0, None, json.dumps({"summary": "inactive"})),
+    ]
+    conn.executemany("INSERT INTO blocks VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.execute(
+        "INSERT INTO content VALUES ('h2', ?)",
+        (json.dumps({"text": "use uv run", "count": 3}).encode(),),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_summary_rows_read_active_blocks_with_content_fallback() -> None:
+    _summary_db(bili.bili_db_path())
+    rows = list(bili.summary_rows(SID, set(), 1000))
+    assert rows == [("b1", "ports", "port 8741"), ("b2", "uv", "use uv run")]
+    assert list(bili.summary_rows(SID, {"b1"}, 1000)) == [("b2", "uv", "use uv run")]
+    assert next(iter(bili.summary_rows(SID, set(), 4)))[2] == "port"
+
+
+def test_summary_chunks_pack_and_record_ids() -> None:
+    rows = [("b1", "t", "x" * 50), ("b2", "t", "y" * 50), ("b3", "t", "z" * 50)]
+    seen: list[str] = []
+    chunks = list(bili.summary_chunks(rows, 200, seen))
+    assert seen == ["b1", "b2", "b3"]
+    assert all(len(c) <= 200 for c in chunks) and len(chunks) == 2
+    assert 'block="b1"' in chunks[0]
+
+
+def test_extracted_blocks_accumulate() -> None:
+    bili.mark_extracted_blocks(SID, ["b1"])
+    bili.mark_extracted_blocks(SID, ["b2"])
+    assert bili.extracted_blocks(SID) == {"b1", "b2"}
+
+
+@pytest.mark.background_extraction
+def test_fold_and_first_sighting_queue_summary_extraction(calls, monkeypatch):
+    queued: list[str] = []
+    monkeypatch.setattr(bili, "_queue_summary_extraction", queued.append)
+    db = bili.bili_db_path()
+    _db(db, [(SID, "b1", 1)])
+    hook = {"session_id": SID, "transcript_path": "", "cwd": "/p", "source": "pi"}
+    bili.on_turn_end(hook)
+    assert queued == [SID]  # first sighting covers earlier folds
+    bili.on_turn_end(hook)
+    assert queued == [SID]
+    db.unlink()
+    _db(db, [(SID, "b1", 1), (SID, "b2", 1)])
+    bili.on_turn_end(hook)
+    assert queued == [SID, SID]
+    assert bili.session_info(SID) == {"source": "pi", "cwd": "/p"}
 
 
 def test_session_start_never_touches_the_real_config() -> None:
     """The autouse fixture stubs agent detection, so setup is a no-op here."""
     import simba.hooks.session_start as session_start
 
-    session_start.run({"session_id": "s", "cwd": ""})
+    result = session_start.run({"session_id": "s", "cwd": ""})
     assert not bili.bili_config_path().exists()
+    assert result.system_message == ""
+
+
+def test_session_start_surfaces_the_setup_notice(monkeypatch) -> None:
+    import simba.hooks.session_start as session_start
+    import simba.integrations.billion_context_setup as setup
+
+    monkeypatch.setattr(setup, "auto_setup", lambda: "Detected Billion Context")
+    result = session_start.run({"session_id": "s", "cwd": ""})
+    assert result.system_message == "Detected Billion Context"

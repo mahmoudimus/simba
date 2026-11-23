@@ -151,9 +151,19 @@ def _isolate_billion_context(request, monkeypatch, tmp_path_factory):
     monkeypatch.setattr(bili, "bili_db_path", lambda: root / "index.db")
     # SessionStart turns on bili's rules feature: never touch the real config
     # or detect the developer's real agents.
+    import simba.integrations.billion_context_setup as bili_setup
+
     monkeypatch.setattr(bili, "bili_config_path", lambda: root / "bili-config.json")
+    monkeypatch.setattr(bili_setup, "pi_auth_path", lambda: root / "pi-auth.json")
     if not request.node.get_closest_marker("bili_setup"):
         monkeypatch.setattr(bili, "detect_agents", lambda home=None: [])
+    # Fold handling queues summary extraction; never touch the real queue or
+    # start a real worker.
+    import simba.transcripts.llm_extract as llm
+
+    monkeypatch.setattr(llm, "state_dir", lambda: root / "extract")
+    if not request.node.get_closest_marker("background_extraction"):
+        monkeypatch.setattr(bili, "_queue_summary_extraction", lambda cid: None)
 
 
 @pytest.fixture

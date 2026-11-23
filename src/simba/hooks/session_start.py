@@ -467,14 +467,15 @@ def run(hook_input: dict) -> CanonicalResult:
         with contextlib.suppress(Exception):
             simba.guardian.signal_flag.reset_signal(session_id)
 
-    # Billion Context: turn on its rules feature once, so CORE rules can be
-    # kept through folds (no-op unless an installed agent uses bili).
+    # Billion Context: the first time an installed agent is seen using it,
+    # configure it for simba and tell the user how to undo that.
+    bili_notice = ""
     import contextlib as _contextlib
 
     with _contextlib.suppress(Exception):
-        import simba.integrations.billion_context as _bili
+        import simba.integrations.billion_context_setup as _bili_setup
 
-        _bili.ensure_rules_enabled()
+        bili_notice = _bili_setup.auto_setup()
 
     parts: list[str] = []
 
@@ -550,7 +551,7 @@ def run(hook_input: dict) -> CanonicalResult:
             parts.append(arc_block)
 
     combined = "\n\n".join(parts)
-    return CanonicalResult(additional_context=combined)
+    return CanonicalResult(additional_context=combined, system_message=bili_notice)
 
 
 def main(hook_input: dict) -> str:

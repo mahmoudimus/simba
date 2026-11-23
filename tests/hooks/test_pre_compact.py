@@ -358,7 +358,7 @@ class TestRlmDigestTrigger:
 class TestBackgroundExtraction:
     """With auto extraction on, an export is queued for the background worker."""
 
-    def _export(self, tmp_path, monkeypatch, source):
+    def _export(self, tmp_path, monkeypatch, source, trigger=""):
         import simba.transcripts.llm_extract as le
 
         transcript = tmp_path / "transcript.jsonl"
@@ -380,6 +380,7 @@ class TestBackgroundExtraction:
                     "session_id": "bg-session",
                     "transcript_path": str(transcript),
                     "cwd": str(tmp_path),
+                    "trigger": trigger,
                 }
             )
         meta_path = (
@@ -392,6 +393,13 @@ class TestBackgroundExtraction:
         assert meta["status"] == "queued_extraction"
         assert meta["source"] == "claude"
         assert calls == [("enqueue", "bg-session"), ("spawn",)]
+
+    @pytest.mark.parametrize("trigger", ["bili_fold", "context_compress"])
+    def test_bili_exports_are_not_queued_twice(self, tmp_path, monkeypatch, trigger):
+        """A bili fold's learnings come from bili's summaries instead."""
+        meta, calls = self._export(tmp_path, monkeypatch, "pi", trigger)
+        assert meta["status"] == "pending_extraction"
+        assert calls == []
 
     def test_unknown_host_stays_pending_for_the_directive(self, tmp_path, monkeypatch):
         meta, calls = self._export(tmp_path, monkeypatch, None)
