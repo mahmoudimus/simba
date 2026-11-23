@@ -1,62 +1,38 @@
 """Configure Billion Context (bili) for simba, and undo it.
 
 ``simba bili setup`` (and SessionStart, automatically, the first time bili is
-detected) changes bili's config so simba can work with its folds:
+detected) turns on bili's rules feature (``compress.rules: true``), which
+simba uses to keep CORE rules through folds as ``acp_rule`` entries.
 
-- ``compress.rules: true`` turns on bili's ``acp_rule`` tool, which simba uses
-  to keep CORE rules through folds.
-- With a summary credential available, a ``simba-deepseek`` provider recipe and
-  ``compress.externalSummary`` make deepseek-flash write fold summaries instead
-  of the main model. pi's DeepSeek key lives in pi's ``auth.json``, which bili
-  deliberately never imports, so simba copies it into bili's private
-  credential store only on the explicit ``--summary-key-from-pi`` flag.
+simba needs no model credentials here: it extracts learnings from the
+summaries bili already stores, with each host's own CLI and login. Who writes
+those summaries (bili's ``compress.externalSummary``) is bili tuning, left to
+the user; simba never copies API keys between tools.
 
 Every key simba changes is recorded with its previous value in
 ``~/.cache/simba/bili/setup.json``; ``simba bili restore`` puts exactly those
-keys back (and removes a credential simba added). After a restore, or once
-setup has run, SessionStart never re-applies it, so the user's later changes
-stand. A config bili accepts but simba cannot round-trip (JSONC with comments)
-is never edited. See docs/adr/2026-11-23-billion-context-adapter.md.
+keys back. After a restore, or once setup has run, SessionStart never
+re-applies it, so the user's later changes stand. A config bili accepts but
+simba cannot round-trip (JSONC with comments) is never edited. See
+docs/adr/2026-11-23-billion-context-adapter.md.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
-import os
 import pathlib
 import time
 import typing
 
 import simba.integrations.billion_context as _bili
 
-SUMMARY_PROVIDER = "simba-deepseek"
-SUMMARY_MODEL = "deepseek-v4-flash"
-SUMMARY_RECIPE = {
-    "baseUrl": "https://api.deepseek.com",
-    "api": "openai",
-    "credentialRef": SUMMARY_PROVIDER,
-    "models": {SUMMARY_MODEL: {}},
-}
-SUMMARY_CHAIN = {"enabled": True, "targets": [f"{SUMMARY_PROVIDER}/{SUMMARY_MODEL}"]}
 RESTORE_HINT = "run `simba bili restore` to restore settings"
 _ABSENT: dict[str, bool] = {"absent": True}
 
 
 def state_path() -> pathlib.Path:
     return _bili.state_dir() / "setup.json"
-
-
-def credentials_path(config: pathlib.Path | None = None) -> pathlib.Path:
-    config = config or _bili.bili_config_path()
-    return config.with_name(config.name + ".summary-credentials.json")
-
-
-def pi_auth_path() -> pathlib.Path:
-    root = os.environ.get("PI_CODING_AGENT_DIR") or str(
-        pathlib.Path.home() / ".pi" / "agent"
-    )
-    return pathlib.Path(root) / "auth.json"
 
 
 # ---------------------------------------------------------------------------
@@ -148,51 +124,6 @@ def _write_config(path: pathlib.Path, raw: str, config: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Summary credential
-# ---------------------------------------------------------------------------
-
-
-def _read_store(path: pathlib.Path) -> dict[str, str]:
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_store(path: pathlib.Path, data: dict[str, str]) -> None:
-    """Write bili's credential store with mode 600, as bili requires."""
-    tmp = path.with_name(path.name + ".simba-tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(data, handle)
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
-
-
-def summary_ready(config: pathlib.Path | None = None) -> bool:
-    return bool(_read_store(credentials_path(config)).get(SUMMARY_PROVIDER))
-
-
-def copy_pi_key(config: pathlib.Path | None = None) -> str:
-    """Copy pi's stored DeepSeek API key into bili's credential store."""
-    try:
-        entry = json.loads(pi_auth_path().read_text()).get("deepseek") or {}
-    except (OSError, ValueError):
-        return "pi's auth.json is unreadable"
-    key = entry.get("key") if entry.get("type") == "api_key" else None
-    if not isinstance(key, str) or not key or any(ord(c) <= 0x20 for c in key):
-        return "pi has no stored DeepSeek API key"
-    store = credentials_path(config)
-    data = _read_store(store)
-    if data.get(SUMMARY_PROVIDER) == key:
-        return "already copied"
-    data[SUMMARY_PROVIDER] = key
-    _write_store(store, data)
-    return "copied"
-
-
-# ---------------------------------------------------------------------------
 # Setup and restore
 # ---------------------------------------------------------------------------
 
@@ -201,7 +132,6 @@ def apply(
     *,
     auto: bool = False,
     dry_run: bool = False,
-    summary_key_from_pi: bool = False,
     home: pathlib.Path | None = None,
 ) -> dict[str, typing.Any]:
     """Configure bili for simba; returns what happened and a user notice."""
@@ -218,17 +148,7 @@ def apply(
     if config is None:
         return {**result, "status": problem, "notice": ""}
 
-    credential = None
-    if summary_key_from_pi and not dry_run:
-        credential = copy_pi_key(path)
-        result["credential"] = credential
     wanted: list[tuple[str, typing.Any]] = [("compress.rules", True)]
-    with_summary = summary_ready(path) or (summary_key_from_pi and dry_run)
-    if with_summary:
-        wanted += [
-            (f"providers.{SUMMARY_PROVIDER}", SUMMARY_RECIPE),
-            ("compress.externalSummary", SUMMARY_CHAIN),
-        ]
     changes = [
         {"key": key, "before": _get(config, key), "after": value}
         for key, value in wanted
@@ -252,8 +172,6 @@ def apply(
         recorded.setdefault(
             change["key"], {"key": change["key"], "before": change["before"]}
         )
-    if credential == "copied":
-        state["credential_added"] = SUMMARY_PROVIDER
     state.update(
         applied_at=time.time(),
         agents=agents,
@@ -271,17 +189,11 @@ def apply(
             f"Detected Billion Context ({', '.join(agents)}): ran `simba bili setup` "
             f"automatically ({applied}); {RESTORE_HINT}."
         )
-        if not with_summary:
-            notice += (
-                " Fold summaries still come from the main model; "
-                "`simba bili setup --summary-key-from-pi` lets deepseek-flash "
-                "write them."
-            )
     return {**result, "status": status, "notice": notice}
 
 
 def restore(*, dry_run: bool = False) -> dict[str, typing.Any]:
-    """Undo exactly the keys simba changed (and a credential it added)."""
+    """Undo exactly the keys simba changed."""
     state = load_state()
     changes = state.get("changes") or []
     path = pathlib.Path(state.get("config") or _bili.bili_config_path())
@@ -289,7 +201,7 @@ def restore(*, dry_run: bool = False) -> dict[str, typing.Any]:
         "config": str(path),
         "changes": [c["key"] for c in changes],
     }
-    if not changes and not state.get("credential_added"):
+    if not changes:
         return {**result, "status": "nothing to restore"}
     config, raw, problem = _read_config(path)
     if config is None:
@@ -298,16 +210,9 @@ def restore(*, dry_run: bool = False) -> dict[str, typing.Any]:
         return {**result, "status": "would restore " + ", ".join(result["changes"])}
     for change in reversed(changes):
         _set(config, change["key"], change["before"])
-    if changes:
-        result["backup"] = _write_config(path, raw, config)
-    if state.get("credential_added"):
-        store = credentials_path(path)
-        data = _read_store(store)
-        if data.pop(state["credential_added"], None) is not None:
-            _write_store(store, data)
+    result["backup"] = _write_config(path, raw, config)
     _save_state({"restored_at": time.time(), "config": str(path)})
-    restored = ", ".join(result["changes"]) or "credential"
-    return {**result, "status": f"restored {restored}"}
+    return {**result, "status": "restored " + ", ".join(result["changes"])}
 
 
 def auto_setup() -> str:

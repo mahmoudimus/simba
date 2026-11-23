@@ -305,7 +305,6 @@ def test_auto_setup_enables_rules_once_and_notifies(home, setup_mod, monkeypatch
     assert result["changes"] == ["compress.rules"]
     assert "Detected Billion Context (pi)" in result["notice"]
     assert "run `simba bili restore` to restore settings" in result["notice"]
-    assert "--summary-key-from-pi" in result["notice"]
     data = json.loads(config.read_text())
     assert data == {"providers": {}, "compress": {"tiers": True, "rules": True}}
     assert json.loads(pathlib.Path(result["backup"]).read_text())["providers"] == {}
@@ -334,32 +333,6 @@ def test_restore_reverts_exactly_simbas_keys(home, setup_mod, monkeypatch):
     }
     assert setup_mod.apply(auto=True)["status"] == "already handled"
     assert setup_mod.restore()["status"] == "nothing to restore"
-
-
-@pytest.mark.bili_setup
-def test_summary_key_from_pi_adds_the_chain_and_restore_removes_it(
-    home, setup_mod, monkeypatch
-):
-    import os
-    import stat
-
-    monkeypatch.setattr(bili, "detect_agents", lambda h=None: ["pi"])
-    setup_mod.pi_auth_path().write_text(
-        json.dumps({"deepseek": {"type": "api_key", "key": "sk-test-123"}})
-    )
-    config = bili.bili_config_path()
-    config.write_text(json.dumps({"providers": {}}))
-    result = setup_mod.apply(summary_key_from_pi=True)
-    assert result["credential"] == "copied"
-    data = json.loads(config.read_text())
-    assert data["compress"]["externalSummary"] == setup_mod.SUMMARY_CHAIN
-    assert data["providers"]["simba-deepseek"]["credentialRef"] == "simba-deepseek"
-    store = setup_mod.credentials_path(config)
-    assert json.loads(store.read_text()) == {"simba-deepseek": "sk-test-123"}
-    assert stat.S_IMODE(os.stat(store).st_mode) == 0o600
-    setup_mod.restore()
-    assert json.loads(config.read_text()) == {"providers": {}, "compress": {}}
-    assert json.loads(store.read_text()) == {}
 
 
 @pytest.mark.bili_setup

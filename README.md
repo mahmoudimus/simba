@@ -284,12 +284,10 @@ the host's model, instead of re-reading the transcript.
 The first time a session starts with an installed agent (`~/.pi`, `~/.claude`,
 `~/.codex`) routing through bili, simba configures bili and says so: "Detected
 Billion Context: ran `simba bili setup` automatically ...; run `simba bili
-restore` to restore settings." Setup turns on `compress.rules`. With
-`simba bili setup --summary-key-from-pi`, it also copies pi's stored DeepSeek
-key into bili's private credential store (bili never imports pi's `auth.json`)
-and makes deepseek-flash write fold summaries (`compress.externalSummary`).
-Every key simba changes is recorded with its previous value; `simba bili
-restore` reverts exactly those keys and removes the copied credential. A bili
+restore` to restore settings." Setup turns on `compress.rules`; simba needs
+no API keys, because it extracts from the summaries bili already stores using
+each host's own CLI and login. Every key simba changes is recorded with its previous value; `simba bili
+restore` reverts exactly those keys. A bili
 config with comments (JSONC) is never edited. The context-low notice is skipped while bili
 manages a session. Design:
 [`docs/adr/2026-11-23-billion-context-adapter.md`](docs/adr/2026-11-23-billion-context-adapter.md).

@@ -99,15 +99,16 @@ model's context does not.
 
 ## Contributing to bili's summaries (sim-5f4u)
 
-Decided 2026-11-23: no relay, no upstream change. Setup can point bili's
-`compress.externalSummary` at deepseek-flash through a `simba-deepseek`
-provider recipe, so a cheap model writes fold summaries, and simba extracts
-from those summaries (decision 9). The catch is the key: pi keeps its DeepSeek
-key in `auth.json`, and bili's pi lane never reports stored credentials
-(`src/agent/pi.ts:226`). `simba bili setup --summary-key-from-pi` copies it
-into bili's own private store (`<config>.summary-credentials.json`, mode 600,
-referenced as `secret:simba-deepseek`). Copying a secret between tools is an
-explicit opt-in, never automatic; restore removes it.
+Decided 2026-11-23: no relay, no upstream change, no API keys. simba's goals
+are met without changing who writes bili's summaries: CORE rules survive
+folds through `acp_rule` (decision 4), and learnings come from the summaries
+bili already stores, extracted with each host's own CLI and login
+(decision 9). Pointing bili's `compress.externalSummary` at a cheaper model
+is bili tuning, not something simba needs. It was briefly built (copying
+pi's stored DeepSeek key from `auth.json`, which bili deliberately never
+imports, into bili's credential store) and removed before merge: simba does
+not move credentials between tools. A user who wants a cheaper summarizer
+can set `DEEPSEEK_API_KEY` and configure bili directly.
 
 ## Superseded proposal
 

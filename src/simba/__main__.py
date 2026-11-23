@@ -5358,18 +5358,13 @@ def _cmd_transcript(args: list[str]) -> int:
 def _cmd_bili(args: list[str]) -> int:
     """`simba bili setup|restore` -- configure Billion Context for simba, or undo it.
 
-    ``setup [--dry-run] [--summary-key-from-pi]`` detects which installed agents
-    (~/.pi, ~/.claude, ~/.codex) route through Billion Context and turns on its
-    rules feature (``compress.rules``). With a summary credential (copied from
-    pi's stored DeepSeek key by ``--summary-key-from-pi``) it also makes
-    deepseek-flash write fold summaries. ``restore [--dry-run]`` reverts exactly
-    the keys setup changed. SessionStart runs setup once automatically. See
+    ``setup [--dry-run]`` detects which installed agents (~/.pi, ~/.claude,
+    ~/.codex) route through Billion Context and turns on its rules feature
+    (``compress.rules``). ``restore [--dry-run]`` reverts exactly the keys setup
+    changed. SessionStart runs setup once automatically. See
     simba.integrations.billion_context_setup.
     """
-    usage = (
-        "usage: simba bili setup [--dry-run] [--summary-key-from-pi]\n"
-        "       simba bili restore [--dry-run]"
-    )
+    usage = "usage: simba bili setup [--dry-run]\n       simba bili restore [--dry-run]"
     if not args or args[0] not in {"setup", "restore"}:
         print(usage, file=sys.stderr)
         return 1
@@ -5379,13 +5374,9 @@ def _cmd_bili(args: list[str]) -> int:
     if args[0] == "restore":
         result = setup.restore(dry_run=dry_run)
     else:
-        result = setup.apply(
-            dry_run=dry_run, summary_key_from_pi="--summary-key-from-pi" in args
-        )
+        result = setup.apply(dry_run=dry_run)
         agents = ", ".join(result.get("agents") or []) or "none"
         print(f"agents using Billion Context: {agents}")
-        if result.get("credential"):
-            print(f"summary key: {result['credential']}")
     print(f"config: {result['config']}")
     if result.get("backup"):
         print(f"backup: {result['backup']}")
