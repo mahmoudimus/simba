@@ -80,7 +80,37 @@ model's context does not.
    running two would compress everything twice. simba only observes and
    reacts.
 
-## Open: contributing to bili's summaries (sim-5f4u)
+8. **Automatic setup, recorded and reversible** (sim-r899). SessionStart runs
+   `billion_context_setup.apply(auto=True)` once: when an installed agent uses
+   bili, it changes bili's config and returns a user-facing notice ("Detected
+   Billion Context ...; run `simba bili restore` to restore settings"), shown
+   as the hook's `systemMessage` (pi: a UI notification). Each changed key is
+   recorded with its previous value in `~/.cache/simba/bili/setup.json`;
+   `simba bili restore` reverts exactly those keys, leaving the user's other
+   edits, and SessionStart never re-applies after setup or restore.
+
+9. **Learnings from bili's summaries** (sim-ezyi). On the first sighting of a
+   session and on every fold, simba queues a `bili:<session>` job for the
+   background extraction worker. It reads the session's active block
+   summaries read-only, one row at a time and each cut to one chunk in SQL,
+   skips blocks already extracted (recorded per session), and sends them to
+   the host's extraction CLI. The transcript export a fold triggers is not
+   queued for extraction too (triggers `bili_fold`, `context_compress`).
+
+## Contributing to bili's summaries (sim-5f4u)
+
+Decided 2026-11-23: no relay, no upstream change, no API keys. simba's goals
+are met without changing who writes bili's summaries: CORE rules survive
+folds through `acp_rule` (decision 4), and learnings come from the summaries
+bili already stores, extracted with each host's own CLI and login
+(decision 9). Pointing bili's `compress.externalSummary` at a cheaper model
+is bili tuning, not something simba needs. It was briefly built (copying
+pi's stored DeepSeek key from `auth.json`, which bili deliberately never
+imports, into bili's credential store) and removed before merge: simba does
+not move credentials between tools. A user who wants a cheaper summarizer
+can set `DEEPSEEK_API_KEY` and configure bili directly.
+
+## Superseded proposal
 
 bili has no hook for adding text to its summaries. Two options:
 

@@ -539,27 +539,18 @@ Runner = typing.Callable[[str], str]
 Storer = typing.Callable[[Learning], str]
 
 
-def extract(
-    meta: dict[str, typing.Any],
+def extract_chunks(
+    chunks: typing.Iterable[str],
     *,
     runner: Runner,
     storer: Storer | None,
     maxlen: int,
+    project_path: str,
     jobs: int = 1,
-    chunk_chars: int = CHUNK_CHARS,
 ) -> dict[str, typing.Any]:
-    """Extract one export. ``storer=None`` is a dry run. At most *jobs* chunks
-    are in flight (and in memory) at once."""
-    directory = pathlib.Path(meta["_metadata_path"]).parent
-    markdown = pathlib.Path(meta.get("transcript_path") or directory / "transcript.md")
-    if markdown.suffix != ".md":
-        markdown = directory / "transcript.md"
-    try:
-        end = markdown.stat().st_size
-    except OSError as exc:
-        return {"status": "unreadable", "error": str(exc), "errors": [str(exc)]}
-    start = _read_cursor(directory, markdown)
-    project_path = str(meta.get("project_path", ""))
+    """Send *chunks* to the model and store the learnings. ``storer=None`` is a
+    dry run. At most *jobs* chunks are in flight (and in memory) at once; the
+    status is ``errors`` if any chunk or store failed."""
     result: dict[str, typing.Any] = {
         "status": "extracted",
         "chunks": 0,
@@ -592,7 +583,7 @@ def extract(
                 continue
             try:
                 status = storer(learning)
-            except Exception as exc:  # report it and keep the transcript pending
+            except Exception as exc:  # report it and keep the work pending
                 result["errors"].append(f"store failed: {exc}")
                 continue
             if status in {"stored", "superseded"}:
@@ -607,7 +598,7 @@ def extract(
 
     in_flight: collections.deque[concurrent.futures.Future] = collections.deque()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        for index, chunk in enumerate(iter_chunks(markdown, start, chunk_chars)):
+        for index, chunk in enumerate(chunks):
             result["chunks"] += 1
             in_flight.append(pool.submit(one, index, chunk))
             del chunk
@@ -620,7 +611,38 @@ def extract(
         result["status"] = "errors"
     elif storer is None:
         result["status"] = "dry_run"
-    else:
+    return result
+
+
+def extract(
+    meta: dict[str, typing.Any],
+    *,
+    runner: Runner,
+    storer: Storer | None,
+    maxlen: int,
+    jobs: int = 1,
+    chunk_chars: int = CHUNK_CHARS,
+) -> dict[str, typing.Any]:
+    """Extract one export from its cursor; mark it extracted when every chunk
+    succeeded. ``storer=None`` is a dry run."""
+    directory = pathlib.Path(meta["_metadata_path"]).parent
+    markdown = pathlib.Path(meta.get("transcript_path") or directory / "transcript.md")
+    if markdown.suffix != ".md":
+        markdown = directory / "transcript.md"
+    try:
+        end = markdown.stat().st_size
+    except OSError as exc:
+        return {"status": "unreadable", "error": str(exc), "errors": [str(exc)]}
+    start = _read_cursor(directory, markdown)
+    result = extract_chunks(
+        iter_chunks(markdown, start, chunk_chars),
+        runner=runner,
+        storer=storer,
+        maxlen=maxlen,
+        project_path=str(meta.get("project_path", "")),
+        jobs=jobs,
+    )
+    if result["status"] == "extracted":
         _write_cursor(directory, end)
         _tr.mark_extracted(meta["_metadata_path"])
     return result

@@ -533,6 +533,9 @@ def _auto_extract_enabled() -> bool:
         return False
 
 
+# Exports caused by Billion Context; their learnings come from bili's summaries.
+_BILI_TRIGGERS = frozenset({"bili_fold", "context_compress"})
+
 # Export triggers that are not a context loss (see run()).
 _CHECKPOINT_TRIGGERS = frozenset({"checkpoint", "shutdown"})
 
@@ -586,7 +589,13 @@ def run(hook_input: dict) -> CanonicalResult:
             if hook_input.get("source") in _CLIENT_SOURCES.values()
             else _export_source()
         )
-        queued = bool(source) and _auto_extract_enabled()
+        # A bili fold or compress is extracted from bili's own summaries
+        # (integrations/billion_context.py), not by re-reading the transcript.
+        queued = (
+            bool(source)
+            and _auto_extract_enabled()
+            and hook_input.get("trigger") not in _BILI_TRIGGERS
+        )
         msg_count, system_message = _export_transcript(
             session_id, transcript_path, cwd_str, custom_instructions, source, queued
         )

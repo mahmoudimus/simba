@@ -310,6 +310,119 @@ def sync_rules(
 
 
 # ---------------------------------------------------------------------------
+# Learnings from bili's summaries
+# ---------------------------------------------------------------------------
+
+
+def summary_rows(
+    conversation_id: str, done: set[str], max_chars: int, db: pathlib.Path | None = None
+) -> typing.Iterator[tuple[str, str, str]]:
+    """(block id, topic, summary) for active blocks not in *done*, oldest first.
+
+    Read-only, one row at a time; each summary is cut to *max_chars* in SQL so
+    no row is larger than one extraction chunk.
+    """
+    path = db or bili_db_path()
+    if not path.exists():
+        return
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=0.5)
+    except sqlite3.Error:
+        return
+    try:
+        conn.execute("PRAGMA query_only = 1")
+        session_ids = [conversation_id]
+        with contextlib.suppress(sqlite3.Error):
+            session_ids += [
+                row[0]
+                for row in conn.execute(
+                    "SELECT session_id FROM conversations WHERE conversation_id = ?"
+                    " LIMIT 4",
+                    (conversation_id,),
+                )
+            ]
+        for session_id in dict.fromkeys(session_ids):
+            rows = conn.execute(
+                "SELECT b.block_id,"
+                " COALESCE(json_extract(b.payload_json, '$.topic'), ''),"
+                " substr(COALESCE(json_extract(b.payload_json, '$.summary'),"
+                "  json_extract(CAST(c.bytes AS TEXT), '$.text'), ''), 1, ?)"
+                " FROM blocks b LEFT JOIN content c ON c.hash = b.summary_hash"
+                " WHERE b.session_id = ? AND b.active = 1 ORDER BY b.ord, b.block_id",
+                (max_chars, session_id),
+            )
+            found = False
+            for block_id, topic, summary in rows:
+                found = True
+                if str(block_id) in done or not summary:
+                    continue
+                yield str(block_id), str(topic), str(summary)
+            if found:
+                return
+    except sqlite3.Error:
+        return
+    finally:
+        conn.close()
+
+
+def summary_chunks(
+    rows: typing.Iterable[tuple[str, str, str]], max_chars: int, seen: list[str]
+) -> typing.Iterator[str]:
+    """Pack summaries into chunks of at most *max_chars*; record ids in *seen*."""
+    parts: list[str] = []
+    size = 0
+    for block_id, topic, summary in rows:
+        piece = f'<summary block="{block_id}" topic="{topic}">\n{summary}\n</summary>\n'
+        piece = piece[:max_chars]
+        if parts and size + len(piece) > max_chars:
+            yield "".join(parts)
+            parts, size = [], 0
+        parts.append(piece)
+        size += len(piece)
+        seen.append(block_id)
+    if parts:
+        yield "".join(parts)
+
+
+def _extracted_path(conversation_id: str) -> pathlib.Path:
+    return _state_path(conversation_id).with_suffix(".extracted.json")
+
+
+def extracted_blocks(conversation_id: str) -> set[str]:
+    try:
+        return set(json.loads(_extracted_path(conversation_id).read_text()))
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def mark_extracted_blocks(
+    conversation_id: str, block_ids: typing.Iterable[str]
+) -> None:
+    path = _extracted_path(conversation_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(sorted(extracted_blocks(conversation_id) | set(block_ids)))
+    )
+    tmp.replace(path)
+
+
+def session_info(conversation_id: str) -> dict[str, typing.Any]:
+    """Host source and project directory recorded at the last turn end."""
+    state = _load(conversation_id)
+    return {"source": state.get("source"), "cwd": state.get("cwd", "")}
+
+
+def _queue_summary_extraction(conversation_id: str) -> None:
+    import simba.transcripts.llm_extract as llm
+
+    if not bool(llm._cfg().auto_extract):
+        return
+    llm.enqueue(f"bili:{conversation_id}")
+    llm.spawn_worker()
+
+
+# ---------------------------------------------------------------------------
 # Hook entry point
 # ---------------------------------------------------------------------------
 
@@ -354,6 +467,7 @@ def on_turn_end(hook_input: dict[str, typing.Any]) -> dict[str, typing.Any]:
         return {"bili": False}
 
     state = _load(conversation_id)
+    first_sighting = "signature" not in state and signature is not None
     folded = False
     if signature is not None and "signature" in state:
         folded = signature != state["signature"]
@@ -367,19 +481,30 @@ def on_turn_end(hook_input: dict[str, typing.Any]) -> dict[str, typing.Any]:
     if markers is not None:
         state["markers"] = markers
     state["seen_at"] = time.time()
+    if hook_input.get("cwd"):
+        state["cwd"] = str(hook_input["cwd"])
+    source = hook_input.get("source")
+    if not source:
+        with contextlib.suppress(Exception):
+            import simba.hooks.pre_compact as pre_compact
+
+            source = pre_compact._export_source()
+    if source:
+        state["source"] = source
 
     if folded:
-        if not hook_input.get("source"):
-            with contextlib.suppress(Exception):
-                import simba.hooks.pre_compact as pre_compact
-
-                hook_input = {**hook_input, "source": pre_compact._export_source()}
+        hook_input = {**hook_input, "source": source or ""}
         with contextlib.suppress(Exception):
             import simba.guardian.signal_flag as signal_flag
 
             signal_flag.reset_signal(conversation_id)
         with contextlib.suppress(Exception):
             _spawn_export(hook_input)
+    if folded or first_sighting:
+        # Learnings come from bili's summaries of the folded ranges; the first
+        # sighting also covers folds from before simba was watching.
+        with contextlib.suppress(Exception):
+            _queue_summary_extraction(conversation_id)
 
     rules_added = 0
     recently_skipped = time.time() - state.get("rules_checked_at", 0) < 3600
@@ -400,7 +525,7 @@ def on_turn_end(hook_input: dict[str, typing.Any]) -> dict[str, typing.Any]:
 
 
 # ---------------------------------------------------------------------------
-# Setup: turn on bili's rules feature for the agents that use bili
+# Detection helpers (setup and restore live in billion_context_setup)
 # ---------------------------------------------------------------------------
 
 
@@ -437,58 +562,3 @@ def detect_agents(home: pathlib.Path | None = None) -> list[str]:
         if re.search(r"^\s*\[mcp_servers\.bili\]\s*$", codex, re.M):
             found.append("codex")
     return found
-
-
-def ensure_rules_enabled(
-    *, dry_run: bool = False, home: pathlib.Path | None = None
-) -> dict[str, typing.Any]:
-    """Set ``compress.rules: true`` in bili's config, once.
-
-    Only when an installed agent uses bili. simba records that it made the
-    change and never flips the setting back if the user turns it off later.
-    A config that is not plain JSON (bili also accepts JSONC) is left alone,
-    so comments are never lost. The previous file is kept as a backup.
-    """
-    agents = detect_agents(home)
-    path = bili_config_path()
-    result: dict[str, typing.Any] = {"agents": agents, "config": str(path)}
-    if not agents:
-        return {**result, "status": "bili not used by any installed agent"}
-    marker = state_dir() / "setup.json"
-    with contextlib.suppress(OSError, ValueError):
-        if json.loads(marker.read_text()).get("rules_enabled_at"):
-            return {**result, "status": "already set by simba once; left as is"}
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        raw = "{}"
-    except OSError as exc:
-        return {**result, "status": f"unreadable: {exc}"}
-    try:
-        config = json.loads(raw) if raw.strip() else {}
-    except ValueError:
-        return {**result, "status": "not plain JSON (JSONC?); edit it by hand"}
-    if not isinstance(config, dict):
-        return {**result, "status": "unexpected config shape; edit it by hand"}
-    compress = config.setdefault("compress", {})
-    if not isinstance(compress, dict):
-        return {**result, "status": "unexpected compress section; edit it by hand"}
-    if compress.get("rules") is True:
-        status = "rules already on"
-    elif dry_run:
-        return {**result, "status": "would set compress.rules: true"}
-    else:
-        compress["rules"] = True
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            backup = path.with_name(f"{path.name}.bak-simba-{int(time.time())}")
-            backup.write_text(raw, encoding="utf-8")
-            result["backup"] = str(backup)
-        tmp = path.with_name(path.name + ".simba-tmp")
-        tmp.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
-        status = "set compress.rules: true"
-    if not dry_run:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps({"rules_enabled_at": time.time()}))
-    return {**result, "status": status}

@@ -276,11 +276,19 @@ host, simba notices its folds at each turn end (bili's plugin `status`
 endpoint, or its SQLite store read-only; for Codex, bili's compaction marker in
 the rollout) and reacts as it would to a compaction: it re-injects CORE rules
 and exports the transcript. CORE rules are also recorded as `[simba]` rules
-through bili's `acp_rule` tool, which bili keeps through folds. That tool needs
-`compress.rules: true`; simba sets it once, at session start or with
-`simba bili setup`, when an installed agent (`~/.pi`, `~/.claude`, `~/.codex`)
-routes through bili, keeping a backup of bili's config and never flipping it
-back if you turn it off. The context-low notice is skipped while bili
+through bili's `acp_rule` tool, which bili keeps through folds. Learnings from
+a bili session come from bili's own summaries of the folded ranges (the first
+time simba sees a session, from all of them), extracted in the background with
+the host's model, instead of re-reading the transcript.
+
+The first time a session starts with an installed agent (`~/.pi`, `~/.claude`,
+`~/.codex`) routing through bili, simba configures bili and says so: "Detected
+Billion Context: ran `simba bili setup` automatically ...; run `simba bili
+restore` to restore settings." Setup turns on `compress.rules`; simba needs
+no API keys, because it extracts from the summaries bili already stores using
+each host's own CLI and login. Every key simba changes is recorded with its previous value; `simba bili
+restore` reverts exactly those keys. A bili
+config with comments (JSONC) is never edited. The context-low notice is skipped while bili
 manages a session. Design:
 [`docs/adr/2026-11-23-billion-context-adapter.md`](docs/adr/2026-11-23-billion-context-adapter.md).
 

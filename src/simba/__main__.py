@@ -6,7 +6,7 @@ Usage:
     simba install --remove Remove hooks (add --global for global)
     simba codex-install    Install bundled skills for Codex (~/.codex/skills)
     simba update-qmd       Install/upgrade qmd (@tobilu/qmd); --dry-run, --backup
-    simba bili setup       Enable Billion Context rules for agents that use it
+    simba bili setup       Configure Billion Context for simba (restore: undo)
     simba codex-install --remove
                            Remove bundled Codex skills
     simba codex-status     Check daemon health + transcript extraction status
@@ -5356,20 +5356,27 @@ def _cmd_transcript(args: list[str]) -> int:
 
 
 def _cmd_bili(args: list[str]) -> int:
-    """`simba bili setup [--dry-run]` -- configure Billion Context for simba.
+    """`simba bili setup|restore` -- configure Billion Context for simba, or undo it.
 
-    Detects which installed agents (~/.pi, ~/.claude, ~/.codex) route through
-    Billion Context and turns on its rules feature (``compress.rules: true``)
-    so simba can keep CORE rules through folds. Runs once; see
-    simba.integrations.billion_context.ensure_rules_enabled.
+    ``setup [--dry-run]`` detects which installed agents (~/.pi, ~/.claude,
+    ~/.codex) route through Billion Context and turns on its rules feature
+    (``compress.rules``). ``restore [--dry-run]`` reverts exactly the keys setup
+    changed. SessionStart runs setup once automatically. See
+    simba.integrations.billion_context_setup.
     """
-    if not args or args[0] != "setup":
-        print("usage: simba bili setup [--dry-run]", file=sys.stderr)
+    usage = "usage: simba bili setup [--dry-run]\n       simba bili restore [--dry-run]"
+    if not args or args[0] not in {"setup", "restore"}:
+        print(usage, file=sys.stderr)
         return 1
-    import simba.integrations.billion_context as bili
+    import simba.integrations.billion_context_setup as setup
 
-    result = bili.ensure_rules_enabled(dry_run="--dry-run" in args)
-    print(f"agents using Billion Context: {', '.join(result['agents']) or 'none'}")
+    dry_run = "--dry-run" in args
+    if args[0] == "restore":
+        result = setup.restore(dry_run=dry_run)
+    else:
+        result = setup.apply(dry_run=dry_run)
+        agents = ", ".join(result.get("agents") or []) or "none"
+        print(f"agents using Billion Context: {agents}")
     print(f"config: {result['config']}")
     if result.get("backup"):
         print(f"backup: {result['backup']}")
@@ -5463,7 +5470,49 @@ def _cmd_transcript_extract(args: list[str]) -> int:
     if "--worker" in args:
         by_id = {str(m.get("session_id")): m for m in _llm.list_pending()}
 
+        def handle_bili(conversation_id: str) -> None:
+            import simba.integrations.billion_context as _bili
+
+            info = _bili.session_info(conversation_id)
+            source = info["source"]
+            meta = {"session_id": conversation_id, "project_path": info["cwd"]}
+            if source not in _llm.SOURCES:
+                report(meta, {"status": "unknown_source", "source": source})
+                return
+            maxlen = simba.memory.config.resolve_max_content_length(
+                pathlib.Path(info["cwd"]) if info["cwd"] else None
+            )
+            chunk_chars = int(cfg.chunk_chars)
+            seen: list[str] = []
+            rows = _bili.summary_rows(
+                conversation_id, _bili.extracted_blocks(conversation_id), chunk_chars
+            )
+
+            def storer(learning: _llm.Learning) -> str:
+                return _llm.store(
+                    learning, session_id=conversation_id,
+                    project_path=info["cwd"], daemon=daemon,
+                )  # fmt: skip
+
+            try:
+                result = _llm.extract_chunks(
+                    _bili.summary_chunks(rows, chunk_chars, seen),
+                    runner=_llm.runner_for(source, cfg),
+                    storer=storer,
+                    maxlen=maxlen,
+                    project_path=info["cwd"],
+                )
+            except Exception as exc:  # keep draining the queue
+                result = {"status": "errors", "errors": [repr(exc)]}
+            if result["status"] == "extracted" and seen:
+                _bili.mark_extracted_blocks(conversation_id, seen)
+            result["source"] = f"bili summaries, {source}"
+            report(meta, result)
+
         def handle(session_id: str) -> None:
+            if session_id.startswith("bili:"):
+                handle_bili(session_id[len("bili:") :])
+                return
             meta = by_id.get(session_id) or next(
                 (
                     m
