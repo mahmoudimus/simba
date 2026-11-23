@@ -397,9 +397,7 @@ class TestSupersede:
         assert chain[0].project_path == "/proj-1"
 
     @pytest.mark.asyncio
-    async def test_superseded_recall_hit_is_demoted_and_annotated(
-        self, hybrid_client
-    ) -> None:
+    async def test_superseded_recall_hit_is_excluded(self, hybrid_client) -> None:
         ac, _, app = hybrid_client
         app.state.config.duplicate_threshold = 1.5
         app.state.config.supersede_threshold = 0.5
@@ -411,6 +409,36 @@ class TestSupersede:
             json={"type": "PATTERN", "content": "ruff lints", "projectPath": "/proj-1"},
         )
         second = second_resp.json()
+
+        recall = await ac.post(
+            "/recall",
+            json={"query": "ruff", "projectPath": "/proj-1", "maxResults": 5},
+        )
+        ids = [m["id"] for m in recall.json()["memories"]]
+        assert second["id"] in ids
+        assert first["id"] not in ids
+
+    @pytest.mark.asyncio
+    async def test_superseded_recall_hit_demoted_when_lever_off(
+        self, hybrid_client
+    ) -> None:
+        ac, _, app = hybrid_client
+        app.state.config.duplicate_threshold = 1.5
+        app.state.config.supersede_threshold = 0.5
+        app.state.config.supersede_enabled = True
+
+        first = await _store(ac, "ruff is the linter", mtype="PATTERN")
+        second = (
+            await ac.post(
+                "/store",
+                json={
+                    "type": "PATTERN",
+                    "content": "ruff lints",
+                    "projectPath": "/proj-1",
+                },
+            )
+        ).json()
+        app.state.config.supersede_enabled = False
 
         recall = await ac.post(
             "/recall",
@@ -478,9 +506,8 @@ class TestSupersede:
             "/recall",
             json={"query": "linting", "projectPath": "/proj-1", "maxResults": 5},
         )
-        old = next(m for m in recall.json()["memories"] if m["id"] == first["id"])
-        assert old["supersededBy"] == second["id"]
-        assert "pendingSupersededBy" not in old
+        ids = [m["id"] for m in recall.json()["memories"]]
+        assert first["id"] not in ids
 
     @pytest.mark.asyncio
     async def test_rejected_pending_replacement_stays_diagnostic_only(

@@ -516,9 +516,18 @@ async def _stored_memory_trust_score(
 
 
 async def _mark_superseded(
-    memories: list[dict[str, typing.Any]], cwd: pathlib.Path
+    memories: list[dict[str, typing.Any]],
+    cwd: pathlib.Path,
+    *,
+    exclude_superseded: bool = False,
 ) -> list[dict[str, typing.Any]]:
-    """Annotate and demote superseded recall hits using the append-only audit."""
+    """Annotate superseded recall hits using the append-only audit.
+
+    A memory with an *active* (confirmed or trust-gate-passed) supersession is
+    dropped when ``exclude_superseded`` (``memory.supersede_enabled``), else it
+    is only demoted below live hits. A *pending* supersession (trust gate,
+    awaiting confirmation) is annotated but stays in place and visible.
+    """
     if not memories:
         return memories
     import simba.db
@@ -551,7 +560,8 @@ async def _mark_superseded(
         if mid in successors:
             mem = dict(mem)
             mem["supersededBy"] = successors[mid]
-            out.append((True, idx, mem))
+            if not exclude_superseded:
+                out.append((True, idx, mem))
         elif mid in pending:
             mem = dict(mem)
             replacement_id, event_id = pending[mid]
@@ -1178,7 +1188,11 @@ async def _recall_memories_impl(body: RecallRequest, request: fastapi.Request) -
         threshold=getattr(config, "recall_reject_threshold", 0.0),
     )
     memories = simba.memory.query_filters.apply(memories, parsed_query.post_filters)
-    memories = await _mark_superseded(memories, recall_cwd)
+    memories = await _mark_superseded(
+        memories,
+        recall_cwd,
+        exclude_superseded=bool(getattr(config, "supersede_enabled", False)),
+    )
 
     # Consumption freshness (spec 33): lets rule-TTL refresh and other clients
     # key off max(createdAt, lastUsedAt) instead of creation alone.

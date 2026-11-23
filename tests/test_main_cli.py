@@ -2136,6 +2136,37 @@ def test_memory_supersession_prints_chain(
     assert "sim=0.910" in out
 
 
+def test_memory_supersession_falls_back_to_daemon_db(
+    tmp_path: pathlib.Path, monkeypatch, capsys
+) -> None:
+    """Audit rows live in the daemon's repo DB; a CLI run from another cwd
+    must still find the chain instead of reporting none."""
+    import simba.db
+    import simba.memory.supersession as supersession
+
+    daemon_root = tmp_path / "daemon_repo"
+    other = tmp_path / "other"
+    daemon_root.mkdir()
+    other.mkdir()
+    with simba.db.connect(daemon_root):
+        supersession.append_event(
+            old_id="mem_old",
+            new_id="mem_new",
+            project_path="/repo",
+            memory_type="PATTERN",
+            similarity=0.91,
+            reason="near_duplicate_same_type",
+            provenance="{}",
+            now=1000.0,
+        )
+    monkeypatch.chdir(other)
+    monkeypatch.setattr(cli, "_daemon_db_root", lambda: daemon_root)
+
+    rc = cli._memory_supersession(["mem_old"])
+    assert rc == 0
+    assert "mem_old -> mem_new" in capsys.readouterr().out
+
+
 def test_memory_supersession_confirm_pending(
     tmp_path: pathlib.Path, monkeypatch, capsys
 ) -> None:

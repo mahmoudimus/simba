@@ -44,10 +44,10 @@ ALLOWLIST: set[tuple[str, int]] = {
     # corpus-wide scan).
     ("src/simba/__main__.py", 2279),
     # `simba memory prune`: human-invoked CLI, not an automated daemon pass.
-    ("src/simba/__main__.py", 3029),
+    ("src/simba/__main__.py", 3058),
     # `simba eval build`: human-invoked CLI; needs real content/context to
     # build eval cases.
-    ("src/simba/__main__.py", 4197),
+    ("src/simba/__main__.py", 4226),
     # `simba rules list`: human-facing CLI, type-filtered + limit=50.
     ("src/simba/rules_cli.py", 104),
     # `simba rules prune`: human-facing CLI, type-filtered + limit=1000.
