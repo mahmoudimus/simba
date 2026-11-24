@@ -229,3 +229,18 @@ async def test_reembed_keeps_writes_made_during_the_long_pass(
     assert by_id["m1"]["type"] == "PATTERN"  # metadata update kept
     assert by_id["m3"]["vector"] == pytest.approx([3.0, 1.0, 1.0, 1.0])  # caught up
     assert by_id["m1"]["vector"] == pytest.approx([12.0, 1.0, 1.0, 1.0])
+
+
+@pytest.mark.asyncio
+async def test_embed_pass_holds_float32_arrays_not_python_lists() -> None:
+    """The whole-corpus pass must not hold ~42M Python floats (2048-d x 20k
+    rows, ~1.3GB measured as RSS growth on the live 2026-11-24 migration)."""
+    import numpy as np
+
+    async def fake_embed(text: str) -> list[float]:
+        return [0.5] * 8
+
+    failed: list[str] = []
+    out = await vdb._embed_texts(["a", "b"], ["x", ""], fake_embed, failed)
+    assert list(out) == [0] and failed == []
+    assert isinstance(out[0], np.ndarray) and out[0].dtype == np.float32
