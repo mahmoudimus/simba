@@ -525,7 +525,7 @@ Query: "
 simba memory reembed
 ```
 
-A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `scripts/embedder_bakeoff.py` scores candidates on the eval datasets. The default is **bge-large-en-v1.5** (the 2026-06-06 bake-off beat nomic-embed-text on both LoCoMo r@5 0.595→0.614 and LongMemEval r@5 0.780→0.814, lifting multi-hop + open-domain with no single-hop regression); later candidates (nomic-Q8, Qwen3-0.6B) were a wash, so bge-large stays — a further embedder change needs the hardened/real-corpus eval.
+A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `simba eval embedders run` scores candidates on LoCoMo + LongMemEval-S (dense and Simba-pipeline arms, with reference and in-process checks); see [docs/embedder-bakeoff.md](docs/embedder-bakeoff.md), which also holds the 2026-11-23 results. The default is **bge-large-en-v1.5** (the 2026-06-06 bake-off beat nomic-embed-text on both LoCoMo r@5 0.595→0.614 and LongMemEval r@5 0.780→0.814, lifting multi-hop + open-domain with no single-hop regression); later candidates (nomic-Q8, Qwen3-0.6B) were a wash, so bge-large stays — a further embedder change needs the hardened/real-corpus eval.
 
 ### Endpoints
 

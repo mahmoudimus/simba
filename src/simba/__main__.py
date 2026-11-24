@@ -4084,6 +4084,10 @@ def _cmd_eval(args: list[str]) -> int:
         return _eval_leaderboard(args[1:])
     if args and args[0] == "build":
         return _eval_build(args[1:])
+    if args and args[0] == "embedders":
+        import simba.eval.embedders.cli
+
+        return simba.eval.embedders.cli.main(args[1:])
     if args and args[0] == "run":
         args = args[1:]
 

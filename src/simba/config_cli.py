@@ -28,6 +28,7 @@ def _ensure_registry() -> None:
     import simba.episodes.config
     import simba.eval.bench_config  # registers the "bench" section
     import simba.eval.config
+    import simba.eval.embedders.config  # registers the "embedders" section
     import simba.guardian.config
     import simba.hooks.config
     import simba.kg.config
