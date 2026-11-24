@@ -39,11 +39,9 @@ jobs:
                   curl -LsSf https://astral.sh/uv/install.sh | sh
                   echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-            # Prefer the prebuilt llama-cpp-python CPU wheel to skip the slow
-            # source build (falls back to building if no matching wheel exists).
+            # llama-cpp-python resolves to the prebuilt upstream CPU wheel via
+            # pyproject's [tool.uv.sources] (pinned in uv.lock), so no source build.
             - name: Install dependencies
-              env:
-                  UV_EXTRA_INDEX_URL: https://abetlen.github.io/llama-cpp-python/whl/cpu
               run: uv sync --python 3.13
 
             # Both steps below call scripts/checks.sh — the SAME script the git

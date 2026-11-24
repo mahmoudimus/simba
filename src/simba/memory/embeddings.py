@@ -10,7 +10,9 @@ import asyncio
 import contextlib
 import enum
 import logging
+import math
 import pathlib
+import typing
 from typing import TYPE_CHECKING
 
 from simba.memory._llama import LLAMA_LOCK
@@ -23,8 +25,90 @@ if TYPE_CHECKING:
 logger = logging.getLogger("simba.memory")
 
 
+def unit_normalize(vec: list[float]) -> list[float]:
+    """Return ``vec`` scaled to unit L2 length.
+
+    Every similarity in the daemon is a cosine, so this changes no score; it
+    makes dot product == cosine for any future index/metric and rejects
+    degenerate output (all-zero or non-finite) instead of storing it.
+    """
+    norm = math.sqrt(math.fsum(x * x for x in vec))
+    if not math.isfinite(norm) or norm == 0.0:
+        msg = f"embedder returned a degenerate vector (norm={norm})"
+        raise ValueError(msg)
+    return [x / norm for x in vec]
+
+
+def resolve_n_ctx(requested: int, train_ctx: int | None) -> int:
+    """Effective in-process context: ``requested`` capped at the training context.
+
+    ``requested <= 0`` means "the model's training context". When the training
+    context is unknown, a positive request is used as is (0 falls back to 512,
+    the old llama-cpp-python default batch, rather than an unbounded context).
+    """
+    if train_ctx and train_ctx > 0:
+        return train_ctx if requested <= 0 else min(requested, train_ctx)
+    return requested if requested > 0 else 512
+
+
+def _train_ctx(llama_cpp: typing.Any, model_path: pathlib.Path) -> int | None:
+    """Training context from GGUF metadata via a cheap vocab-only load (~0.1s)."""
+    try:
+        meta = llama_cpp.Llama(
+            model_path=str(model_path), vocab_only=True, verbose=False
+        ).metadata
+        arch = meta.get("general.architecture", "")
+        return int(meta[f"{arch}.context_length"])
+    except Exception:
+        return None
+
+
+def embedder_config_warnings(config: simba.memory.config.MemoryConfig) -> list[str]:
+    """Warnings for a partially overridden embedder config.
+
+    The task prefixes and ``embedding_model`` defaults belong to the default
+    model (Nemotron). A config that swaps the model (``model_repo``/
+    ``model_file``/``model_path``, ``embed_url`` or llm-cli) but leaves those at
+    their defaults embeds with the wrong prompts -- silently worse recall -- and
+    sends the wrong model name to an HTTP server.
+    """
+    import dataclasses
+
+    import simba.memory.config as mc
+
+    d = {f.name: f.default for f in dataclasses.fields(mc.MemoryConfig)}
+    swapped = (
+        config.model_repo != d["model_repo"]
+        or config.model_file != d["model_file"]
+        or bool(config.model_path)
+        or bool(config.embed_url)
+        or config.embed_provider == "llm-cli"
+    )
+    if not swapped:
+        return []
+    out = []
+    if (
+        config.embed_doc_prefix == d["embed_doc_prefix"]
+        and config.embed_query_prefix == d["embed_query_prefix"]
+    ):
+        out.append(
+            "embedder model overridden but memory.embed_doc_prefix / "
+            f"memory.embed_query_prefix are still the {d['embedding_model']} "
+            f"defaults ({d['embed_doc_prefix']!r} / {d['embed_query_prefix']!r}); "
+            "set them to the new model's prompts"
+        )
+    if (config.embed_url or config.embed_provider == "llm-cli") and (
+        config.embedding_model == d["embedding_model"]
+    ):
+        out.append(
+            f"memory.embedding_model is still the default {d['embedding_model']!r} "
+            "but an external embedder is configured; set it to that model's name"
+        )
+    return out
+
+
 class TaskType(enum.Enum):
-    """Nomic-embed-text task prefixes for asymmetric embedding."""
+    """Asymmetric embedding task; selects embed_doc_prefix / embed_query_prefix."""
 
     DOCUMENT = "search_document"
     QUERY = "search_query"
@@ -71,6 +155,8 @@ class EmbeddingService:
 
     async def start(self) -> None:
         """Load the model or connect to the HTTP server, then start the queue."""
+        for warning in embedder_config_warnings(self.config):
+            logger.warning("[embed] %s", warning)
         backend = self._backend
         if backend == "http":
             await self._start_http()
@@ -130,7 +216,7 @@ class EmbeddingService:
                     result = await asyncio.to_thread(self._embed_llm_cli, text, task)
                 else:
                     result = await asyncio.to_thread(self._embed_sync, text, task)
-                future.set_result(result)
+                future.set_result(unit_normalize(result))
             except Exception as e:
                 future.set_exception(e)
             finally:
@@ -176,14 +262,27 @@ class EmbeddingService:
                     EmbeddingService._llama_log_cb, ctypes.c_void_p(0)
                 )
 
-            return llama_cpp.Llama(
-                model_path=str(model_path),
-                embedding=True,
-                n_ctx=0,  # use model's training context (2048 for nomic-embed-text)
-                pooling_type=llama_cpp.LLAMA_POOLING_TYPE_MEAN,
-                n_gpu_layers=self.config.n_gpu_layers,
-                verbose=False,
+            n_ctx = resolve_n_ctx(
+                int(self.config.embed_n_ctx), _train_ctx(llama_cpp, model_path)
             )
+            return self._llama(llama_cpp, model_path, n_ctx)
+
+    def _llama(
+        self, llama_cpp: typing.Any, model_path: pathlib.Path, n_ctx: int
+    ) -> llama_cpp.Llama:
+        # n_batch = n_ubatch = n_ctx: a mean-pooled embedding must fit in ONE
+        # ubatch, and llama-cpp-python truncates input to n_batch, so this makes
+        # `embed_n_ctx` the real per-text token budget (default n_batch is 512).
+        return llama_cpp.Llama(
+            model_path=str(model_path),
+            embedding=True,
+            n_ctx=n_ctx,
+            n_batch=n_ctx,
+            n_ubatch=n_ctx,
+            pooling_type=llama_cpp.LLAMA_POOLING_TYPE_MEAN,
+            n_gpu_layers=self.config.n_gpu_layers,
+            verbose=False,
+        )
 
     def _embed_sync(self, text: str, task: TaskType) -> list[float]:
         """Synchronous embedding call (runs in executor thread)."""

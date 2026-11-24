@@ -32,7 +32,15 @@ class DoctrineMatch:
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    """Cosine similarity of two equal-length vectors; 0.0 on a zero vector."""
+    """Cosine similarity of two equal-length vectors; 0.0 on a zero vector.
+
+    Also 0.0 when the lengths differ: a trigger embedded by a previous embedder
+    (e.g. 1024-d) must never match a prompt from the current one (2048-d) --
+    zipping the shorter prefix would yield a plausible-looking wrong score.
+    Re-add such doctrines to re-embed their triggers.
+    """
+    if len(a) != len(b):
+        return 0.0
     dot = 0.0
     na = 0.0
     nb = 0.0

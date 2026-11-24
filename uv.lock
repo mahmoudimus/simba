@@ -2,8 +2,14 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and platform_machine != 'arm64' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.14' and sys_platform == 'linux') or (python_full_version >= '3.14' and sys_platform == 'win32')",
+    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and platform_machine != 'arm64' and sys_platform == 'darwin'",
+    "(python_full_version < '3.14' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform == 'win32')",
+    "python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 
 [[package]]
@@ -764,15 +770,63 @@ wheels = [
 
 [[package]]
 name = "llama-cpp-python"
-version = "0.3.16"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "diskcache" },
-    { name = "jinja2" },
-    { name = "numpy" },
-    { name = "typing-extensions" },
+version = "0.3.38"
+source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cpu" }
+resolution-markers = [
+    "(python_full_version >= '3.14' and sys_platform == 'linux') or (python_full_version >= '3.14' and sys_platform == 'win32')",
+    "(python_full_version < '3.14' and sys_platform == 'linux') or (python_full_version < '3.14' and sys_platform == 'win32')",
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/b4/c8cd17629ced0b9644a71d399a91145aedef109c0333443bef015e45b704/llama_cpp_python-0.3.16.tar.gz", hash = "sha256:34ed0f9bd9431af045bb63d9324ae620ad0536653740e9bb163a2e1fcb973be6", size = 50688636, upload-time = "2025-08-15T04:58:29.212Z" }
+dependencies = [
+    { name = "diskcache", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "jinja2", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "numpy", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+wheels = [
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-linux_riscv64.whl", hash = "sha256:651f90a35c1026191b57051dbec745ec34ea82bbd07f739a79cbc2f8ec90db74" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:ba02704e16b02e2f6f85b0c9b01f6efcb86b8427385f825788493d949a80778a" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9a27213ff2b65614f3a25d87cf1721829588ed475650e84ded16a8dedb033426" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:72ede898e86e5bf87ef58f77eb783f4bcdc935f7c487dd439242db8c15081726" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:8d0d83923a702dbaa76b00c41c5650308e277e2a406daa0db1ee246b2a1646e1" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-pyemscripten_2026_0_wasm32.whl", hash = "sha256:158494fd276988fc1f4b3f9d4bbd706b7736c5175fe5fe1ad5a437befda798f7" },
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38/llama_cpp_python-0.3.38-py3-none-win_amd64.whl", hash = "sha256:8c6a06b7128cd9dff06e9c3d918e6a7a7f95b39554a1bec12e84537df9a4bdf4" },
+]
+
+[[package]]
+name = "llama-cpp-python"
+version = "0.3.38"
+source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/metal" }
+resolution-markers = [
+    "python_full_version >= '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "diskcache", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "numpy", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+]
+wheels = [
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.38-metal/llama_cpp_python-0.3.38-py3-none-macosx_11_0_arm64.whl", hash = "sha256:268bc30ee8eac4f8256b2702654436d968807529225d8c64f55e63a96208e62b" },
+]
+
+[[package]]
+name = "llama-cpp-python"
+version = "0.3.38"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and platform_machine != 'arm64' and sys_platform == 'darwin'",
+    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.14' and platform_machine != 'arm64' and sys_platform == 'darwin'",
+    "python_full_version < '3.14' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "diskcache", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "jinja2", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "numpy", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "typing-extensions", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6c/50/e3eba8a25c3927659da15d80bdc3f5ce8692f4f7cda16eeabde5185e1164/llama_cpp_python-0.3.38.tar.gz", hash = "sha256:0570c9736b5e2a239b651da18687238eeba7fc2369dcdfd8cbb009dc1321e23f", size = 79441646, upload-time = "2026-11-23T09:23:00.326Z" }
 
 [[package]]
 name = "locate"
@@ -1669,12 +1723,16 @@ dependencies = [
 embed = [
     { name = "huggingface-hub" },
     { name = "lancedb" },
-    { name = "llama-cpp-python" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/metal" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 full = [
     { name = "huggingface-hub" },
     { name = "lancedb" },
-    { name = "llama-cpp-python" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/metal" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 
 [package.dev-dependencies]
@@ -1683,7 +1741,9 @@ dev = [
     { name = "huggingface-hub" },
     { name = "lancedb" },
     { name = "libcst" },
-    { name = "llama-cpp-python" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://abetlen.github.io/llama-cpp-python/whl/metal" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "llama-cpp-python", version = "0.3.38", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "pre-commit" },
     { name = "pyrefly" },
     { name = "pytest" },
@@ -1700,7 +1760,9 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "huggingface-hub", marker = "extra == 'embed'", specifier = ">=0.26" },
     { name = "lancedb", marker = "extra == 'embed'", specifier = ">=0.4" },
-    { name = "llama-cpp-python", marker = "extra == 'embed'", specifier = ">=0.3" },
+    { name = "llama-cpp-python", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'embed'", specifier = ">=0.3.38", index = "https://abetlen.github.io/llama-cpp-python/whl/metal" },
+    { name = "llama-cpp-python", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin' and extra == 'embed') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'embed')", specifier = ">=0.3.38" },
+    { name = "llama-cpp-python", marker = "(sys_platform == 'linux' and extra == 'embed') or (sys_platform == 'win32' and extra == 'embed')", specifier = ">=0.3.38", index = "https://abetlen.github.io/llama-cpp-python/whl/cpu" },
     { name = "mcp", extras = ["cli"] },
     { name = "simba-ai", extras = ["embed"], marker = "extra == 'full'" },
     { name = "tomli-w", specifier = ">=1.0" },
@@ -1716,7 +1778,9 @@ dev = [
     { name = "huggingface-hub", specifier = ">=0.26" },
     { name = "lancedb", specifier = ">=0.4" },
     { name = "libcst", specifier = ">=1.0" },
-    { name = "llama-cpp-python", specifier = ">=0.3" },
+    { name = "llama-cpp-python", marker = "(platform_machine != 'arm64' and sys_platform == 'darwin') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=0.3.38" },
+    { name = "llama-cpp-python", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.3.38", index = "https://abetlen.github.io/llama-cpp-python/whl/metal" },
+    { name = "llama-cpp-python", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=0.3.38", index = "https://abetlen.github.io/llama-cpp-python/whl/cpu" },
     { name = "pre-commit", specifier = ">=4.0" },
     { name = "pyrefly", specifier = ">=0.15" },
     { name = "pytest", specifier = ">=8.0" },
