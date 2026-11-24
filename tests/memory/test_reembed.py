@@ -193,3 +193,39 @@ async def test_reembed_only_empty_rows_is_a_noop(tmp_path: pathlib.Path) -> None
     assert (count, backup) == (1, None)
     rows = await table.query().to_list()
     assert rows[0]["vector"] == pytest.approx([0.7, 0.8, 0.9])
+
+
+@pytest.mark.asyncio
+async def test_reembed_keeps_writes_made_during_the_long_pass(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The long embed pass runs on a snapshot; writes landing meanwhile must
+    survive the overwrite: a delete stays deleted, a metadata update is kept,
+    and a newly stored row is embedded in the catch-up pass."""
+    import lancedb
+
+    db_path = tmp_path / "memories.lance"
+    await _make_table(db_path)  # m1 "gh 401"+"token", m2 "rrf fusion"
+    db = await lancedb.connect_async(str(db_path))
+    live = await db.open_table("memories")
+    wrote = False
+
+    async def embed_while_writing(text: str) -> list[float]:
+        nonlocal wrote
+        if not wrote:  # concurrent writes, mid-pass
+            wrote = True
+            await live.delete("id = 'm2'")
+            await live.update(where="id = 'm1'", updates={"type": "PATTERN"})
+            await live.add(
+                [{"id": "m3", "type": "GOTCHA", "content": "new", "context": "",
+                  "vector": [0.0, 0.0, 1.0]}]
+            )  # fmt: skip
+        return [float(len(text)), 1.0, 1.0, 1.0]
+
+    table, count, _ = await vdb.reembed_table(db_path, embed_while_writing)
+    by_id = {r["id"]: r for r in await table.query().to_list()}
+    assert set(by_id) == {"m1", "m3"}  # m2's delete stuck
+    assert count == 2
+    assert by_id["m1"]["type"] == "PATTERN"  # metadata update kept
+    assert by_id["m3"]["vector"] == pytest.approx([3.0, 1.0, 1.0, 1.0])  # caught up
+    assert by_id["m1"]["vector"] == pytest.approx([12.0, 1.0, 1.0, 1.0])

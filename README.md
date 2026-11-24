@@ -491,7 +491,7 @@ FastAPI server backed by LanceDB for vector storage. Supports two embedding back
 
 ### In-process mode (default)
 
-Loads a GGUF model via llama-cpp-python (>= 0.3.38; uv installs the upstream prebuilt wheel: Metal on macOS, CPU elsewhere). No external services needed. The model (Nemotron-3-Embed-1B Q8_0, ~1.2 GB, 2048-d) auto-downloads from Hugging Face on first startup. `memory.embed_n_ctx` (default 4096) bounds the context: Nemotron's 262k training context would otherwise allocate ~17.6 GB.
+Loads a GGUF model via llama-cpp-python (>= 0.3.38; with uv, the upstream prebuilt wheel: Metal on Apple-silicon macOS, CPU on Linux/Windows. `pip install simba-ai[embed]` and Intel macOS build the PyPI sdist; on macOS that build may need `CC=/usr/bin/clang CXX=/usr/bin/clang++` if CMake picks Homebrew llvm). No external services needed. The model (Nemotron-3-Embed-1B Q8_0, ~1.2 GB, 2048-d) auto-downloads from Hugging Face on first startup. `memory.embed_n_ctx` (default 4096) bounds the context: Nemotron's 262k training context would otherwise allocate ~17.6 GB.
 
 ```bash
 simba server                                    # Default — auto-downloads Nemotron-3-Embed-1B

@@ -72,7 +72,9 @@ dev = [
 # llama-cpp-python >= 0.3.38 is needed for the default embedder's `mistral3`
 # architecture (Nemotron-3-Embed-1B); 0.3.16 cannot load it. PyPI ships only an
 # sdist, whose macOS build breaks when CMake picks Homebrew llvm, so uv pulls the
-# upstream prebuilt wheels instead: Metal on macOS, CPU elsewhere.
+# upstream prebuilt wheels instead: Metal on Apple-silicon macOS, CPU on Linux
+# and Windows. Other platforms (Intel macOS) fall back to the PyPI sdist. pip
+# ignores these sources: `pip install simba-ai[embed]` builds the sdist.
 [[tool.uv.index]]
 name = "llama-cpp-metal"
 url = "https://abetlen.github.io/llama-cpp-python/whl/metal"
@@ -85,8 +87,8 @@ explicit = true
 
 [tool.uv.sources]
 llama-cpp-python = [
-    { index = "llama-cpp-metal", marker = "sys_platform == 'darwin'" },
-    { index = "llama-cpp-cpu", marker = "sys_platform != 'darwin'" },
+    { index = "llama-cpp-metal", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+    { index = "llama-cpp-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [tool.ruff]

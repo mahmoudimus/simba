@@ -63,6 +63,50 @@ def _train_ctx(llama_cpp: typing.Any, model_path: pathlib.Path) -> int | None:
         return None
 
 
+def embedder_config_warnings(config: simba.memory.config.MemoryConfig) -> list[str]:
+    """Warnings for a partially overridden embedder config.
+
+    The task prefixes and ``embedding_model`` defaults belong to the default
+    model (Nemotron). A config that swaps the model (``model_repo``/
+    ``model_file``/``model_path``, ``embed_url`` or llm-cli) but leaves those at
+    their defaults embeds with the wrong prompts -- silently worse recall -- and
+    sends the wrong model name to an HTTP server.
+    """
+    import dataclasses
+
+    import simba.memory.config as mc
+
+    d = {f.name: f.default for f in dataclasses.fields(mc.MemoryConfig)}
+    swapped = (
+        config.model_repo != d["model_repo"]
+        or config.model_file != d["model_file"]
+        or bool(config.model_path)
+        or bool(config.embed_url)
+        or config.embed_provider == "llm-cli"
+    )
+    if not swapped:
+        return []
+    out = []
+    if (
+        config.embed_doc_prefix == d["embed_doc_prefix"]
+        and config.embed_query_prefix == d["embed_query_prefix"]
+    ):
+        out.append(
+            "embedder model overridden but memory.embed_doc_prefix / "
+            f"memory.embed_query_prefix are still the {d['embedding_model']} "
+            f"defaults ({d['embed_doc_prefix']!r} / {d['embed_query_prefix']!r}); "
+            "set them to the new model's prompts"
+        )
+    if (config.embed_url or config.embed_provider == "llm-cli") and (
+        config.embedding_model == d["embedding_model"]
+    ):
+        out.append(
+            f"memory.embedding_model is still the default {d['embedding_model']!r} "
+            "but an external embedder is configured; set it to that model's name"
+        )
+    return out
+
+
 class TaskType(enum.Enum):
     """Asymmetric embedding task; selects embed_doc_prefix / embed_query_prefix."""
 
@@ -111,6 +155,8 @@ class EmbeddingService:
 
     async def start(self) -> None:
         """Load the model or connect to the HTTP server, then start the queue."""
+        for warning in embedder_config_warnings(self.config):
+            logger.warning("[embed] %s", warning)
         backend = self._backend
         if backend == "http":
             await self._start_http()

@@ -439,3 +439,34 @@ class TestLoadModelContext:
         real = calls[-1]
         assert real["n_ctx"] == real["n_batch"] == real["n_ubatch"] == 4096
         assert real["embedding"] is True
+
+
+class TestEmbedderConfigWarnings:
+    def test_defaults_are_clean(self) -> None:
+        cfg = simba.memory.config.MemoryConfig()
+        assert simba.memory.embeddings.embedder_config_warnings(cfg) == []
+
+    def test_pinned_bge_with_default_prefixes_warns(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(
+            model_repo="CompendiumLabs/bge-large-en-v1.5-gguf",
+            model_file="bge-large-en-v1.5-q8_0.gguf",
+            embedding_dims=1024,
+        )
+        (w,) = simba.memory.embeddings.embedder_config_warnings(cfg)
+        assert "embed_doc_prefix" in w
+
+    def test_pinned_bge_with_its_own_prefixes_is_clean(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(
+            model_repo="CompendiumLabs/bge-large-en-v1.5-gguf",
+            model_file="bge-large-en-v1.5-q8_0.gguf",
+            embed_doc_prefix="",
+            embed_query_prefix="Represent this sentence: ",
+        )
+        assert simba.memory.embeddings.embedder_config_warnings(cfg) == []
+
+    def test_http_with_default_model_name_warns(self) -> None:
+        cfg = simba.memory.config.MemoryConfig(
+            embed_url="http://localhost:8080", embed_doc_prefix="d: "
+        )
+        (w,) = simba.memory.embeddings.embedder_config_warnings(cfg)
+        assert "embedding_model" in w
