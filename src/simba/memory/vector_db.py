@@ -350,14 +350,21 @@ async def _embed_texts(
     texts: list[str],
     embed_fn: typing.Callable[[str], typing.Awaitable[list[float]]],
     failed: list[str],
-) -> dict[int, list[float]]:
-    """Embed each non-empty text; record failing ids in ``failed``."""
-    out: dict[int, list[float]] = {}
+) -> dict[int, typing.Any]:
+    """Embed each non-empty text; record failing ids in ``failed``.
+
+    Each vector is kept as a float32 array (4 bytes/dim), not the embedder's
+    Python list (~32 bytes/dim): over a 20k-row, 2048-d corpus that is ~170MB
+    instead of ~1.3GB held for the whole pass.
+    """
+    import numpy as np
+
+    out: dict[int, typing.Any] = {}
     for i, (memory_id, text) in enumerate(zip(ids, texts, strict=True)):
         if not text:
             continue
         try:
-            out[i] = await embed_fn(text)
+            out[i] = np.asarray(await embed_fn(text), dtype=np.float32)
         except Exception as exc:
             logger.warning("reembed failed for %s: %s", memory_id, exc)
             failed.append(memory_id)
