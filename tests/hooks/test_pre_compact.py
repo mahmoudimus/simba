@@ -443,7 +443,24 @@ class TestCodexRollout:
         assert to_block(self._line("user", "<environment_context>cwd</x>")) is None
         assert to_block(self._line("user", "# AGENTS.md instructions for /p")) is None
         reasoning = {"type": "response_item", "payload": {"type": "reasoning"}}
-        assert to_block(reasoning) is None
+        assert to_block(reasoning) is None  # encrypted only, no summary
+
+    def test_reasoning_summaries_are_exported(self):
+        to_block = simba.hooks.pre_compact._entry_to_block
+        reasoning = {
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "**Checking the parser**"}
+                ],
+                "encrypted_content": "gAAAA...",
+            },
+        }
+        assert to_block(reasoning) == (
+            "<assistant>\n<reasoning-summary>\n**Checking the parser**\n"
+            "</reasoning-summary>\n</assistant>"
+        )
         assert (
             to_block({"type": "event_msg", "payload": {"type": "token_count"}}) is None
         )

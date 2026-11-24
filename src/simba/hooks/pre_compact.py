@@ -106,13 +106,32 @@ _CODEX_INJECTED_PREFIXES = (
 
 
 def _codex_entry_to_block(payload: object) -> str | None:
-    """Markdown block for a Codex rollout ``response_item`` message, or None.
+    """Markdown block for a Codex rollout ``response_item``, or None.
 
     Codex rollouts put messages under ``payload`` with ``input_text`` /
-    ``output_text`` content items; ``developer`` messages (system
-    instructions) and reasoning, tool calls and telemetry are skipped.
+    ``output_text`` content items. Codex's full reasoning is encrypted, but
+    many reasoning items carry readable summaries; those become a
+    ``<reasoning-summary>`` block, which extraction keeps (unlike Claude's
+    and pi's long ``<thinking>`` traces). ``developer`` messages (system
+    instructions), tool calls and telemetry are skipped.
     """
-    if not isinstance(payload, dict) or payload.get("type") != "message":
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") == "reasoning":
+        summary = "\n".join(
+            item["text"]
+            for item in payload.get("summary") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("text"), str)
+            and item["text"].strip()
+        )
+        if not summary:
+            return None
+        return (
+            f"<assistant>\n<reasoning-summary>\n{summary}\n"
+            "</reasoning-summary>\n</assistant>"
+        )
+    if payload.get("type") != "message":
         return None
     role = payload.get("role")
     if role not in {"user", "assistant"}:
