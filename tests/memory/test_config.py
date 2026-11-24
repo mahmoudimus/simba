@@ -41,17 +41,21 @@ class TestEmbedderDefaults:
     def test_embed_provider_default_is_gguf(self) -> None:
         assert config.MemoryConfig().embed_provider == "gguf"
 
-    def test_default_embedder_is_bge_large(self) -> None:
-        # Default flipped nomic-embed-text (768-d) -> bge-large-en-v1.5 (1024-d)
-        # after a cross-dataset bake-off win (docs/plans/07-recall-excellence.md).
+    def test_default_embedder_is_nemotron(self) -> None:
+        # Default flipped bge-large-en-v1.5 (1024-d) -> Nemotron-3-Embed-1B
+        # (2048-d) after the 2026-11-23 `simba eval embedders` win
+        # (docs/embedder-bakeoff.md).
         cfg = config.MemoryConfig()
-        assert cfg.embedding_model == "bge-large-en-v1.5"
-        assert cfg.embedding_dims == 1024
-        assert cfg.model_file == "bge-large-en-v1.5-q8_0.gguf"
-        assert cfg.embed_doc_prefix == ""
-        assert cfg.embed_query_prefix == (
-            "Represent this sentence for searching relevant passages: "
-        )
+        assert cfg.embedding_model == "nemotron-3-embed-1b"
+        assert cfg.embedding_dims == 2048
+        assert cfg.model_repo == "mradermacher/Nemotron-3-Embed-1B-BF16-GGUF"
+        assert cfg.model_file == "Nemotron-3-Embed-1B-BF16.Q8_0.gguf"
+        assert cfg.embed_doc_prefix == "passage: "
+        assert cfg.embed_query_prefix == "query: "
+
+    def test_default_embed_n_ctx_is_bounded(self) -> None:
+        # 0 (= training ctx) allocates ~17.6GB for Nemotron's 262k context.
+        assert config.MemoryConfig().embed_n_ctx == 4096
 
 
 class TestRerankModeDefault:

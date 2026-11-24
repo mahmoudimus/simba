@@ -33,6 +33,11 @@ class TestCosine:
     def test_zero_vector_is_safe(self) -> None:
         assert intent._cosine([0.0, 0.0], [1.0, 0.0]) == 0.0
 
+    def test_width_mismatch_never_matches(self) -> None:
+        # A trigger embedded by the previous embedder (shorter) must not score
+        # on the shared prefix: [1, 0] vs [1, 0, 0, 0] would otherwise be 1.0.
+        assert intent._cosine([1.0, 0.0, 0.0, 0.0], [1.0, 0.0]) == 0.0
+
 
 class TestMatchDoctrine:
     def test_review_pr_prompt_matches_pr_trigger(self) -> None:

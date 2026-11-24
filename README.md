@@ -491,10 +491,10 @@ FastAPI server backed by LanceDB for vector storage. Supports two embedding back
 
 ### In-process mode (default)
 
-Loads a GGUF model via llama-cpp-python. No external services needed. The model (bge-large-en-v1.5 q8_0, ~330 MB) auto-downloads from Hugging Face on first startup.
+Loads a GGUF model via llama-cpp-python (>= 0.3.38; uv installs the upstream prebuilt wheel: Metal on macOS, CPU elsewhere). No external services needed. The model (Nemotron-3-Embed-1B Q8_0, ~1.2 GB, 2048-d) auto-downloads from Hugging Face on first startup. `memory.embed_n_ctx` (default 4096) bounds the context: Nemotron's 262k training context would otherwise allocate ~17.6 GB.
 
 ```bash
-simba server                                    # Default — auto-downloads bge-large-en-v1.5
+simba server                                    # Default — auto-downloads Nemotron-3-Embed-1B
 simba server --model-path /path/to/model.gguf   # Use a local GGUF file
 simba server --n-gpu-layers 0                   # CPU-only mode
 simba server --port 9000 --db-path /path/to/db  # Custom port and database
@@ -525,7 +525,7 @@ Query: "
 simba memory reembed
 ```
 
-A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). **Measure before you switch:** `simba eval embedders run` scores candidates on LoCoMo + LongMemEval-S (dense and Simba-pipeline arms, with reference and in-process checks); see [docs/embedder-bakeoff.md](docs/embedder-bakeoff.md), which also holds the 2026-11-23 results. The default is **bge-large-en-v1.5** (the 2026-06-06 bake-off beat nomic-embed-text on both LoCoMo r@5 0.595→0.614 and LongMemEval r@5 0.780→0.814, lifting multi-hop + open-domain with no single-hop regression); later candidates (nomic-Q8, Qwen3-0.6B) were a wash, so bge-large stays — a further embedder change needs the hardened/real-corpus eval.
+A dimension change requires re-embedding the whole corpus — that's `simba memory reembed` (explicit, never automatic). It is all-or-nothing: any row that fails to embed aborts with the table untouched, and on success the previous rows are kept in a `memories_backup_<UTC timestamp>` table. **Measure before you switch:** `simba eval embedders run` scores candidates on LoCoMo + LongMemEval-S (dense and Simba-pipeline arms, with reference and in-process checks); see [docs/embedder-bakeoff.md](docs/embedder-bakeoff.md), which also holds the 2026-11-23 results. The default is **Nemotron-3-Embed-1B** since 2026-11-24: against the previous bge-large-en-v1.5 default it gained LoCoMo dense R@10 +0.043, Simba cold-query pipeline R@3 +0.031 and LongMemEval-S R@10 +0.103 (paired-bootstrap 95% CIs excluding 0), at ~1.5 GB more memory and about half the single-text throughput. Existing stores must run `simba memory reembed` after upgrading.
 
 ### Endpoints
 
@@ -1413,10 +1413,12 @@ New config sections can be added by decorating a dataclass with `@simba.config.c
 |-------|---------|-------------|
 | `port` | 8741 | Daemon listen port |
 | `db_path` | `""` (cwd/.simba/memory) | Database directory |
-| `embedding_dims` | 1024 | Embedding vector dimensions |
-| `embedding_model` | bge-large-en-v1.5 | Default embedder (bake-off 2026-06-06 beat nomic on LoCoMo + LongMemEval) |
-| `model_repo` | CompendiumLabs/bge-large-en-v1.5-gguf | HuggingFace repo |
-| `model_file` | bge-large-en-v1.5-q8_0.gguf | GGUF file name |
+| `embedding_dims` | 2048 | Embedding vector dimensions |
+| `embedding_model` | nemotron-3-embed-1b | Default embedder (2026-11-23 `simba eval embedders` beat bge-large on LoCoMo + LongMemEval-S) |
+| `model_repo` | mradermacher/Nemotron-3-Embed-1B-BF16-GGUF | HuggingFace repo |
+| `model_file` | Nemotron-3-Embed-1B-BF16.Q8_0.gguf | GGUF file name |
+| `embed_n_ctx` | 4096 | In-process context = max tokens per text (capped at the model's training context; 0 = training context) |
+| `embed_doc_prefix` / `embed_query_prefix` | `"passage: "` / `"query: "` | Per-model task prefixes |
 | `model_path` | `""` (auto-download) | Local path to GGUF file |
 | `n_gpu_layers` | -1 | GPU layers (-1=all, 0=CPU only) |
 | `embed_url` | `""` (in-process) | External embedding server URL |

@@ -2068,7 +2068,15 @@ def _memory_reembed(args: list[str]) -> int:
     if body.get("status") == "not_ready":
         print("daemon not ready (no table/embedder)")
         return 1
+    if body.get("status") == "failed":
+        print(f"Error: {body.get('error', 're-embed failed')}", file=sys.stderr)
+        ids = body.get("failedIds") or []
+        if ids:
+            print(f"  first failed ids: {', '.join(ids)}", file=sys.stderr)
+        return 1
     print(f"reembedded: {body.get('count', 0)} memories")
+    if body.get("backup"):
+        print(f"previous vectors kept in table: {body['backup']}")
     return 0
 
 

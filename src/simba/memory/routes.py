@@ -2286,14 +2286,26 @@ async def reembed(request: fastapi.Request) -> dict:
 
     Needed after switching the embedder (a changed dimension requires rebuilding
     the LanceDB table). Uses the daemon's loaded doc embedder, then rebuilds the
-    FTS mirror and swaps in the new table handle.
+    FTS mirror and swaps in the new table handle. All-or-nothing: any row that
+    fails to embed aborts with ``status: failed`` and the table untouched. The
+    pre-reembed rows are kept in the ``backup`` table.
     """
     db_path = getattr(request.app.state, "db_path", None)
     embed = getattr(request.app.state, "embed", None)
     if not db_path or embed is None:
         return {"status": "not_ready"}
 
-    new_table, count = await simba.memory.vector_db.reembed_table(db_path, embed)
+    try:
+        new_table, count, backup = await simba.memory.vector_db.reembed_table(
+            db_path, embed
+        )
+    except simba.memory.vector_db.ReembedError as exc:
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "failedCount": len(exc.failed_ids),
+            "failedIds": exc.failed_ids[:20],
+        }
     request.app.state.table = new_table
 
     fts_path = getattr(request.app.state, "fts_path", None)
@@ -2313,7 +2325,7 @@ async def reembed(request: fastapi.Request) -> dict:
 
         await asyncio.to_thread(_rebuild)
 
-    return {"status": "reembedded", "count": count}
+    return {"status": "reembedded", "count": count, "backup": backup}
 
 
 class PatchRequest(pydantic.BaseModel):

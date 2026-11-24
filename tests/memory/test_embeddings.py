@@ -14,7 +14,7 @@ import simba.memory.embeddings
 
 # These fixtures pin nomic-style model + prefixes so the tests exercise the
 # embedding *mechanism* (prefix application, model name in the request) and stay
-# valid regardless of the production default embedder (now bge-large, 1024-d).
+# valid regardless of the production default embedder (now Nemotron-3-Embed-1B, 2048-d).
 @pytest.fixture
 def config(tmp_path: pathlib.Path) -> simba.memory.config.MemoryConfig:
     return simba.memory.config.MemoryConfig(
@@ -69,7 +69,9 @@ class TestEmbeddingServiceLocal:
             await service.start()
             try:
                 result = await service.embed("test text")
-                assert result == mock_embedding
+                assert result == pytest.approx(
+                    simba.memory.embeddings.unit_normalize(mock_embedding)
+                )
                 assert len(result) == 768
                 mock_llama.create_embedding.assert_called_once_with(
                     "search_document: test text"
@@ -100,7 +102,9 @@ class TestEmbeddingServiceLocal:
                     "test query",
                     task=simba.memory.embeddings.TaskType.QUERY,
                 )
-                assert result == mock_embedding
+                assert result == pytest.approx(
+                    simba.memory.embeddings.unit_normalize(mock_embedding)
+                )
                 mock_llama.create_embedding.assert_called_once_with(
                     "search_query: test query"
                 )
@@ -248,7 +252,9 @@ class TestEmbeddingServiceHTTP:
 
         try:
             result = await service.embed("test text")
-            assert result == mock_embedding
+            assert result == pytest.approx(
+                simba.memory.embeddings.unit_normalize(mock_embedding)
+            )
             mock_client.post.assert_called_once_with(
                 "/v1/embeddings",
                 json={
@@ -283,7 +289,9 @@ class TestEmbeddingServiceHTTP:
                 "test query",
                 task=simba.memory.embeddings.TaskType.QUERY,
             )
-            assert result == mock_embedding
+            assert result == pytest.approx(
+                simba.memory.embeddings.unit_normalize(mock_embedding)
+            )
             mock_client.post.assert_called_once_with(
                 "/v1/embeddings",
                 json={
@@ -359,3 +367,75 @@ class TestLlmCliBackend:
         assert argv[0] == "llm" and "embed" in argv
         assert argv[argv.index("-m") + 1] == "my-embed"
         assert "Q: hi" in argv  # prefixed content passed via -c
+
+
+class TestUnitNormalize:
+    def test_scales_to_unit_length_preserving_direction(self) -> None:
+        out = simba.memory.embeddings.unit_normalize([3.0, 4.0])
+        assert out == pytest.approx([0.6, 0.8])
+
+    @pytest.mark.parametrize("bad", [[0.0, 0.0], [float("nan"), 1.0], [float("inf")]])
+    def test_rejects_degenerate_vectors(self, bad: list[float]) -> None:
+        with pytest.raises(ValueError, match="degenerate"):
+            simba.memory.embeddings.unit_normalize(bad)
+
+    @pytest.mark.asyncio
+    async def test_degenerate_output_fails_the_embed(
+        self, config: simba.memory.config.MemoryConfig
+    ) -> None:
+        service = simba.memory.embeddings.EmbeddingService(config)
+        mock_llama = unittest.mock.MagicMock()
+        mock_llama.create_embedding.return_value = {"data": [{"embedding": [0.0]}]}
+        with (
+            unittest.mock.patch.object(service, "_resolve_model_path"),
+            unittest.mock.patch.object(service, "_load_model", return_value=mock_llama),
+        ):
+            await service.start()
+            try:
+                with pytest.raises(ValueError, match="degenerate"):
+                    await service.embed("x")
+            finally:
+                await service.stop()
+
+
+class TestResolveNCtx:
+    @pytest.mark.parametrize(
+        ("requested", "train", "expected"),
+        [
+            (4096, 262144, 4096),  # Nemotron: bounded, not the 262k training ctx
+            (4096, 512, 512),  # BERT-style model: never past trained positions
+            (0, 512, 512),  # 0 = the training context
+            (0, 262144, 262144),
+            (4096, None, 4096),  # unknown training ctx: use the request
+            (0, None, 512),  # ...but never an unbounded one
+        ],
+    )
+    def test_resolve(self, requested: int, train: int | None, expected: int) -> None:
+        assert simba.memory.embeddings.resolve_n_ctx(requested, train) == expected
+
+
+class TestLoadModelContext:
+    def test_load_uses_bounded_ctx_and_matching_batch(
+        self, config: simba.memory.config.MemoryConfig
+    ) -> None:
+        """n_batch/n_ubatch == n_ctx so `embed_n_ctx` is the real per-text token
+        budget (llama-cpp-python truncates to n_batch, default 512)."""
+        fake = unittest.mock.MagicMock()
+        fake.LLAMA_POOLING_TYPE_MEAN = 1
+        meta = {"general.architecture": "mistral3", "mistral3.context_length": "262144"}
+        calls: list[dict] = []
+
+        def llama(**kw):
+            calls.append(kw)
+            m = unittest.mock.MagicMock()
+            m.metadata = meta
+            return m
+
+        fake.Llama.side_effect = llama
+        service = simba.memory.embeddings.EmbeddingService(config)
+        with unittest.mock.patch.dict("sys.modules", {"llama_cpp": fake}):
+            service._load_model(pathlib.Path("/m.gguf"))
+        assert calls[0]["vocab_only"] is True  # metadata probe
+        real = calls[-1]
+        assert real["n_ctx"] == real["n_batch"] == real["n_ubatch"] == 4096
+        assert real["embedding"] is True

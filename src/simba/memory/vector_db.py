@@ -319,80 +319,114 @@ async def search_memories(
         return []
 
 
-async def _fetch_old_vector(
-    table: typing.Any, memory_id: typing.Any
-) -> list[float] | None:
-    """Bounded (``.limit(1)``) fallback read of ONE row's stored ``vector``.
+class ReembedError(RuntimeError):
+    """Re-embedding aborted before any write; the live table is untouched."""
 
-    Used only when ``reembed_table`` couldn't produce a fresh embedding for a
-    row (empty content/context, or a raised ``embed_fn``) so that row keeps a
-    valid vector instead of a missing/null one -- without the bulk read ever
-    fetching the whole corpus's `vector` column up front (2026-07-18).
-    """
-    if not memory_id:
-        return None
-    escaped = str(memory_id).replace("'", "''")
-    rows = (
-        await table.query()
-        .where(f"id = '{escaped}'")
-        .select(["vector"])
-        .limit(1)
-        .to_list()
-    )
-    return rows[0].get("vector") if rows else None
+    def __init__(self, message: str, failed_ids: list[str]) -> None:
+        super().__init__(message)
+        self.failed_ids = failed_ids
+
+
+class ReembedResult(typing.NamedTuple):
+    table: typing.Any
+    count: int
+    backup: str | None  # name of the pre-reembed copy, or None if not kept
 
 
 async def reembed_table(
     db_path: typing.Any,
     embed_fn: typing.Callable[[str], typing.Awaitable[list[float]]],
-) -> tuple[typing.Any, int]:
+    *,
+    backup: bool = True,
+) -> ReembedResult:
     """Re-embed every memory's content and rewrite the table at the new dim.
 
-    Reads all rows from the ``memories`` table, re-embeds ``content`` (+ context
-    when present) with ``embed_fn`` (the daemon's doc embedder — async), drops and
-    recreates the table so a changed embedding dimension takes effect, and returns
-    ``(new_table, count)``. The caller is responsible for rebuilding the FTS
-    mirror and swapping the app's table handle. A per-row embed failure keeps the
-    old vector (via a bounded single-row re-fetch, see ``_fetch_old_vector``) so
-    one bad row can't abort the rebuild.
+    All-or-nothing: every row is embedded BEFORE anything is written, and any
+    embed failure (or a width disagreement) raises :class:`ReembedError` with
+    the live table untouched. Keeping a row's old vector instead would mix two
+    models' vector spaces in one table -- silently wrong at the same width, and
+    a mixed-width table at a different one. Rows with no content and no context
+    (the SYSTEM init row) get a zero vector of the new width.
+
+    With ``backup`` the current rows (old vectors included) are first copied to
+    a ``memories_backup_<UTC timestamp>`` table in the same database, so the
+    migration can be undone. The copy is Arrow-native (latest version only, no
+    LanceDB history), and the new vectors are packed into one float32 buffer,
+    so no step materializes the corpus as Python floats (2026-07-18 incident).
+
+    Returns ``(new_table, count, backup_name)``. The caller rebuilds the FTS
+    mirror and swaps the app's table handle.
     """
+    import datetime
+
     import lancedb
+    import numpy as np
+    import pyarrow as pa
 
     db = await lancedb.connect_async(str(db_path))
     table = await db.open_table("memories")
-
-    # Every column EXCEPT `vector` is copied verbatim into the rebuilt table;
-    # the OLD vector is never needed for the (overwhelmingly common)
-    # successful-embed row -- it's about to be overwritten. This still avoids
-    # the ~10M-Arrow-float materialization this ADR is about (2026-07-18) while
-    # preserving every other stored column, including ones this function never
-    # reasons about by name.
     schema = await table.schema()
-    non_vector_columns = [f.name for f in schema if f.name != "vector"]
-    rows = await table.query().select(non_vector_columns).to_list()
+    columns = [f.name for f in schema]
+    old = await table.query().select(columns).to_arrow()
 
-    new_rows = []
-    for raw in rows:
-        row = dict(raw)
-        row.pop("_distance", None)
-        text = (row.get("content") or "").strip()
-        ctx = (row.get("context") or "").strip()
-        if ctx:
-            text = f"{text} {ctx}".strip()
-        vector: list[float] | None = None
-        if text:
-            try:
-                vector = await embed_fn(text)
-            except Exception:
-                logger.warning("reembed failed for %s; kept old vector", row.get("id"))
-        if vector is None:
-            vector = await _fetch_old_vector(table, row.get("id"))
-        row["vector"] = vector
-        new_rows.append(row)
+    ids = [str(x) for x in old.column("id").to_pylist()]
+    contents = old.column("content").to_pylist() if "content" in columns else []
+    contexts = old.column("context").to_pylist() if "context" in columns else []
 
-    await db.drop_table("memories")
-    new_table = await db.create_table("memories", new_rows)
-    return new_table, len(new_rows)
+    vectors: np.ndarray | None = None
+    empty_rows: list[int] = []
+    failed: list[str] = []
+    for i, memory_id in enumerate(ids):
+        text = (contents[i] if contents else "") or ""
+        ctx = (contexts[i] if contexts else "") or ""
+        text = f"{text.strip()} {ctx.strip()}".strip()
+        if not text:
+            empty_rows.append(i)
+            continue
+        try:
+            vec = await embed_fn(text)
+        except Exception as exc:
+            logger.warning("reembed failed for %s: %s", memory_id, exc)
+            failed.append(memory_id)
+            continue
+        if vectors is None:
+            vectors = np.zeros((len(ids), len(vec)), dtype=np.float32)
+        if len(vec) != vectors.shape[1]:
+            failed.append(memory_id)
+            continue
+        vectors[i] = vec
+
+    if failed:
+        raise ReembedError(
+            f"re-embed aborted: {len(failed)} of {len(ids)} rows failed; "
+            "the table was not modified",
+            failed,
+        )
+    if vectors is None:  # nothing embeddable (only empty rows): nothing to do
+        return ReembedResult(table, len(ids), None)
+
+    dim = int(vectors.shape[1])
+    vec_type = pa.list_(pa.float32(), dim)
+    new_vectors = pa.FixedSizeListArray.from_arrays(
+        pa.array(vectors.reshape(-1), type=pa.float32()), dim
+    )
+    pos = columns.index("vector")
+    new = old.set_column(pos, pa.field("vector", vec_type), new_vectors)
+
+    backup_name: str | None = None
+    if backup:
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup_name = f"memories_backup_{stamp}"
+        await db.create_table(backup_name, old)
+    new_table = await db.create_table("memories", new, mode="overwrite")
+    logger.info(
+        "[reembed] %d rows -> %d-d (%d empty); backup=%s",
+        len(ids),
+        dim,
+        len(empty_rows),
+        backup_name,
+    )
+    return ReembedResult(new_table, len(ids), backup_name)
 
 
 async def compact_table(

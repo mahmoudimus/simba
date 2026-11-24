@@ -734,8 +734,8 @@ class TestHealthEndpoint:
         assert data["degraded"] is False
         assert "uptime" in data
         assert "memoryCount" in data
-        assert data["embeddingModel"] == "bge-large-en-v1.5"
-        assert data["embeddingDims"] == 1024
+        assert data["embeddingModel"] == "nemotron-3-embed-1b"
+        assert data["embeddingDims"] == 2048
         assert "requestId" in data
         assert data["components"]["vector"]["ready"] is True
         assert data["components"]["fts"]["ready"] is True
@@ -1854,3 +1854,44 @@ class TestDeleteEndpoint:
         resp = await async_client.delete("/memory/nonexistent")
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"
+
+
+class TestReembedEndpoint:
+    @pytest.mark.asyncio
+    async def test_reembed_failure_reports_and_keeps_table(
+        self, async_client, monkeypatch
+    ):
+        import simba.memory.vector_db as vdb
+
+        async def boom(db_path, embed):
+            raise vdb.ReembedError("re-embed aborted: 1 of 2 rows failed", ["m1"])
+
+        app = async_client._transport.app
+        before = app.state.table
+        app.state.db_path = "/tmp/x"
+        monkeypatch.setattr(vdb, "reembed_table", boom)
+        resp = await async_client.post("/reembed")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "failed"
+        assert body["failedCount"] == 1 and body["failedIds"] == ["m1"]
+        assert app.state.table is before  # handle not swapped
+
+    @pytest.mark.asyncio
+    async def test_reembed_success_reports_backup(self, async_client, monkeypatch):
+        import simba.memory.vector_db as vdb
+
+        app = async_client._transport.app
+        new_table = app.state.table
+
+        async def ok(db_path, embed):
+            return vdb.ReembedResult(new_table, 3, "memories_backup_X")
+
+        app.state.db_path = "/tmp/x"
+        monkeypatch.setattr(vdb, "reembed_table", ok)
+        body = (await async_client.post("/reembed")).json()
+        assert body == {
+            "status": "reembedded",
+            "count": 3,
+            "backup": "memories_backup_X",
+        }

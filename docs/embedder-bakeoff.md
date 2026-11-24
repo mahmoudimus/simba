@@ -144,3 +144,38 @@ Findings:
 - 0.3.38 truncates EmbeddingGemma 2's output to 512 of its 768 dims.
 - Nemotron 3 in-process: 1,548 MB peak RSS (BGE 528 MB), 36.5 docs/s (BGE
   67.5), 13.2 ms median query latency (BGE 10.7).
+
+## Adopted: Nemotron-3-Embed-1B (2026-11-24)
+
+`memory.*` now defaults to `mradermacher/Nemotron-3-Embed-1B-BF16-GGUF` Q8_0
+(sha256 `c0da3118…`, the file measured above): 2048 dims, `passage: ` /
+`query: ` prefixes, `embed_n_ctx = 4096`. The similarity thresholds (0.35
+recall floor, 0.92 duplicate, supersession) were left at their BGE values; the
+pipeline arm above already measured Nemotron with them. Recalibrating them for
+Nemotron's cosine scale is a separate, measured follow-up.
+
+What adopting it needed, and why:
+
+- **llama-cpp-python 0.3.38.** uv takes the upstream prebuilt wheels (Metal
+  on macOS, CPU elsewhere) from `abetlen.github.io/llama-cpp-python/whl/*`, so
+  no local build is needed.
+- **A bounded context.** With `n_ctx = 0` (the model's training context,
+  262,144 tokens) the load peaks at 17.6 GB; at 4096 it peaks at 2.0 GB.
+  `n_batch = n_ubatch = n_ctx`, because llama-cpp-python truncates input to
+  `n_batch` (default 512).
+- **Unit-normalized vectors.** Every daemon similarity is a cosine, so no score
+  changes; it guards future dot / L2 metrics and indexes.
+- **An all-or-nothing `reembed`** that keeps a `memories_backup_<ts>` table.
+  The old fallback (keep a failed row's old vector) would have mixed 1024-d and
+  2048-d vectors.
+
+MLX was compared on the same Mac (M5 Pro, 600 LoCoMo turns, 100 queries) using
+`mlx-community/Nemotron-3-Embed-1B-BF16-8bit`. Its vectors match the GGUF's
+(cosine ≥ 0.9992, top-10 overlap 0.986). Throughput was 53.8 vs 51.8 docs/s one
+at a time and 148.7 vs 173.9 docs/s in batches of 16, and peak RSS was 1567 vs
+1788 MB. GGUF stays: it is just as fast and it is the one backend that also
+runs on Linux and Windows.
+
+Nemotron 3.5 Embed 1B (2026-10-20) needs no separate run for text. Its model
+card says the language model is frozen from Nemotron-3-Embed-1B and "shares the
+same text embedding space"; it only adds image retrieval.

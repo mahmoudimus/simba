@@ -19,17 +19,18 @@ if typing.TYPE_CHECKING:
 class MemoryConfig:
     port: int = 8741
     db_path: str = ""
-    # Default embedder: bge-large-en-v1.5 (1024-d). Bake-off (2026-06-06) on a
-    # discriminating eval showed it clearly beats nomic-embed-text (768-d) on
-    # both LoCoMo (r@5 0.595->0.614) and LongMemEval (r@5 0.780->0.814), lifting
-    # both weak axes (multi-hop, open-domain) with no single-hop regression. See
-    # docs/plans/07-recall-excellence.md. Switching embedders changes the vector
-    # dimension, so an existing store must be migrated with `simba memory reembed`
-    # (a guard raises a clear error on dim mismatch).
-    embedding_model: str = "bge-large-en-v1.5"
-    embedding_dims: int = 1024
-    model_repo: str = "CompendiumLabs/bge-large-en-v1.5-gguf"
-    model_file: str = "bge-large-en-v1.5-q8_0.gguf"
+    # Default embedder: Nemotron-3-Embed-1B (2048-d, mean pooling, Q8_0 GGUF).
+    # `simba eval embedders` (2026-11-23, docs/embedder-bakeoff.md) vs the previous
+    # bge-large-en-v1.5 default, paired-bootstrap 95% CIs excluding 0: LoCoMo
+    # dense R@10 +0.043, Simba cold-query pipeline R@3 +0.031, LongMemEval-S
+    # (151 q) R@10 +0.103 / MRR +0.055. Needs llama-cpp-python >= 0.3.38 (its
+    # `mistral3` architecture). Switching embedders changes the vector
+    # dimension, so an existing store must be migrated with `simba memory
+    # reembed` (a guard raises a clear error on dim mismatch).
+    embedding_model: str = "nemotron-3-embed-1b"
+    embedding_dims: int = 2048
+    model_repo: str = "mradermacher/Nemotron-3-Embed-1B-BF16-GGUF"
+    model_file: str = "Nemotron-3-Embed-1B-BF16.Q8_0.gguf"
     model_path: str = ""
     n_gpu_layers: int = -1
     embed_url: str = ""
@@ -37,14 +38,18 @@ class MemoryConfig:
     # embed_url is set), or "llm-cli" (shell `llm embed`; note: only as local as
     # the chosen llm model — cloud models cross the no-external-service line).
     embed_provider: str = "gguf"
-    # Asymmetric task prefixes (model-specific). bge-large uses "" for docs and a
-    # "Represent this sentence for searching relevant passages: " instruction for
-    # queries; nomic used "search_document: " / "search_query: ". Prepended to
-    # the text before embedding.
-    embed_doc_prefix: str = ""
-    embed_query_prefix: str = (
-        "Represent this sentence for searching relevant passages: "
-    )
+    # Asymmetric task prefixes (model-specific), prepended before embedding.
+    # Nemotron uses "passage: " / "query: " (model card). bge-large used "" and
+    # "Represent this sentence for searching relevant passages: "; nomic used
+    # "search_document: " / "search_query: ".
+    embed_doc_prefix: str = "passage: "
+    embed_query_prefix: str = "query: "
+    # In-process GGUF context (= max input tokens per text; longer input is
+    # truncated). 0 = the model's training context, which for Nemotron is 262,144
+    # tokens and allocates ~17.6GB (measured 2026-11-24; 4096 -> ~2.0GB peak).
+    # Capped at the model's training context, so a 512-token BERT stays at 512.
+    # 4096 matches the bake-off; memory content + context is p99 ~863 chars.
+    embed_n_ctx: int = 4096
     min_similarity: float = 0.35
     # Low-confidence rejection (abstention) gate. When enabled, if the TOP recall
     # candidate's similarity is below `recall_reject_threshold`, the whole recall is
@@ -140,9 +145,10 @@ class MemoryConfig:
     # under-reports leaks (a process at 52GB physical footprint showed
     # ~0.36GB resident in the motivating incident). Both limits default to 0
     # (disabled) per repo policy (UNMEASURED lever); the daemon's steady-state
-    # floor is ~1.5-3.6GB (bge-large embedder + cross-encoder reranker +
-    # LanceDB), so a soft/hard pair like 2500/3500 is a reasonable starting
-    # point once enabled. See rss_watchdog.py.
+    # floor was ~1.5-3.6GB with the bge-large embedder (+ cross-encoder
+    # reranker + LanceDB); the Nemotron default adds ~1.5GB (2.0GB peak at
+    # embed_n_ctx=4096 vs ~0.5GB), so size a soft/hard pair (e.g. 4000/5000)
+    # from `GET /health` rssHistory once enabled. See rss_watchdog.py.
     rss_soft_limit_mb: int = 0
     rss_hard_limit_mb: int = 0
     rss_check_interval_seconds: float = 30.0
