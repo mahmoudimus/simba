@@ -366,7 +366,7 @@ def test_runner_for_picks_each_hosts_cli_and_model(monkeypatch) -> None:
         le.runner_for(source, cfg)("PROMPT")
     assert seen["pi"]["model"] == "deepseek/deepseek-flash"
     assert seen["cl"]["model"] == "claude-haiku-5-5"
-    assert seen["cx"]["model"] == "gpt-5.6-luna"
+    assert seen["cx"]["model"] == "gpt-6-luna"
     assert seen["cx"]["effort"] == "max"
     with pytest.raises(le.ExtractionError):
         le.runner_for("unknown", cfg)
@@ -451,3 +451,20 @@ def test_unreadable_export_is_never_marked_extracted(tmp_path, monkeypatch) -> N
     result = le.extract(meta, runner=lambda p: "[]", storer=lambda x: "x", maxlen=200)
     assert result["status"] == "no_content"
     assert _status(meta) == _tr.PENDING
+
+
+def test_reasoning_summaries_are_kept_but_thinking_is_dropped() -> None:
+    text = (
+        "<assistant>\n<thinking>\nlong private trace\n</thinking>\n"
+        "<reasoning-summary>\nChose streaming over slurping\n</reasoning-summary>\n"
+        "</assistant>\n"
+    )
+    joined = "".join(le.chunk_transcript(text))
+    assert "Chose streaming over slurping" in joined
+    assert "long private trace" not in joined
+
+
+def test_codex_default_model_is_current_luna() -> None:
+    cfg = le._cfg()
+    assert cfg.model_codex == "gpt-6-luna"
+    assert cfg.codex_reasoning_effort == "max"

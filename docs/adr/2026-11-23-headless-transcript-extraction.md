@@ -50,7 +50,7 @@ Costs, accepted:
 |---|---|---|
 | pi | `pi -p` | `deepseek/deepseek-flash` (`transcripts.model_pi`) |
 | Claude Code | `claude -p` | `claude-haiku-5-5` (`transcripts.model_claude`) |
-| Codex | `codex exec` | `gpt-5.6-luna`, reasoning `max` (`transcripts.model_codex`, `transcripts.codex_reasoning_effort`) |
+| Codex | `codex exec` | `gpt-6-luna`, reasoning `max` (`transcripts.model_codex`, `transcripts.codex_reasoning_effort`) |
 
 Why: a work transcript (e.g. vgs, kirafin) should not be sent to a provider
 its session never used. The smallest model of each host keeps the cost low.
@@ -142,3 +142,20 @@ them extracted. Now:
 Live: a Codex export (chernobog) went from a 132-byte to an 83,989-byte
 transcript (47 user, 96 assistant turns) and extracted through `codex exec`
 (gpt-5.6-luna, reasoning max): 22 learnings stored, peak RSS 205.0 MB.
+
+## Codex model and reasoning summaries (2026-11-23)
+
+- The Codex extraction model is `gpt-6-luna` at reasoning `max`. The first
+  release used `gpt-5.6-luna`, taken from pi's model list, which was stale;
+  Codex's own model cache (`~/.codex/models_cache.json`) marks it "Legacy" and
+  lists `gpt-6-luna` ("Fast and affordable model for easier tasks", reasoning
+  up to `max`) and `gpt-6.1-terra` (up to `ultra`). Live: `gpt-6-luna` at
+  `max` returned schema-valid output through `codex exec`, peak RSS 190.1 MB.
+- Codex's full reasoning is encrypted (`encrypted_content` on every reasoning
+  item), but many items carry readable summaries: in one session, 235 of 420
+  items, 25,777 characters, against an 83,989-character transcript. The
+  export writes them as `<reasoning-summary>` blocks, which extraction keeps:
+  they record why a choice was made and which approaches failed. Claude's and
+  pi's `<thinking>` traces are still dropped: they are the full, long chain
+  of thought (about 10% of the text across the 147 pending exports measured
+  on 2026-11-23).

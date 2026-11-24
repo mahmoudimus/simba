@@ -17,7 +17,9 @@ class TranscriptsConfig:
     # Each host's transcripts go to that host's own CLI and provider.
     model_pi: str = "deepseek/deepseek-flash"  # run with `pi -p`
     model_claude: str = "claude-haiku-5-5"  # run with `claude -p`
-    model_codex: str = "gpt-5.6-luna"  # run with `codex exec`
+    # Codex's smallest current model (gpt-5.6-luna is "Legacy" in Codex's model
+    # cache); supports reasoning up to "max".
+    model_codex: str = "gpt-6-luna"  # run with `codex exec`
     codex_reasoning_effort: str = "max"
     # Characters per model call. A chunk is the largest piece held in memory.
     chunk_chars: int = 240_000

@@ -296,7 +296,7 @@ manages a session. Design:
 it and a single background worker extracts it with that host's own CLI and a
 small model: pi exports with `pi -p` (`deepseek/deepseek-flash`), Claude Code
 exports with `claude -p` (`claude-haiku-5-5`), Codex exports with `codex exec`
-(`gpt-5.6-luna`, reasoning `max`). The model gets no tools, MCP servers or
+(`gpt-6-luna`, reasoning `max`). The model gets no tools, MCP servers or
 context files and returns JSON; simba validates it and stores learnings through
 `/store`. simba's own hooks are disabled inside these runs
 (`SIMBA_HOOKS_DISABLED=1`). Memory stays bounded: the transcript is streamed,
