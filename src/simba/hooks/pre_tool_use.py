@@ -24,6 +24,7 @@ import simba.hooks._io
 import simba.hooks._kg_client
 import simba.hooks._memory_client
 import simba.hooks._tail
+import simba.hooks.engagement
 import simba.redirect.check
 from simba.harness.core import CanonicalResult
 
@@ -745,7 +746,7 @@ def run(hook_input: dict) -> CanonicalResult:
 
     combined = "\n\n".join(parts)
     tokens = len(combined) // 4
-    combined += f"\n[simba: ~{tokens} tokens injected]"
+    combined += "\n" + simba.hooks.engagement.footer(f"~{tokens} tokens injected")
     return CanonicalResult(
         additional_context=combined,
         escalated_block=escalated_block,

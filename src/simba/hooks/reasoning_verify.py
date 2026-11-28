@@ -44,6 +44,7 @@ def verify(response: str, cwd_str: str | None, cfg) -> str | None:
         return None
     try:
         import simba.hooks._memory_client as memory_client
+        import simba.hooks.recall_query
         import simba.memory.pitfall
 
         types = [
@@ -55,8 +56,11 @@ def verify(response: str, cwd_str: str | None, cfg) -> str | None:
         ]
         if not types:
             return None
+        query = simba.hooks.recall_query.recall_query(response, cfg)
+        if not query:
+            return None
         memories = memory_client.recall_memories(
-            response,
+            query,
             project_path=cwd_str if cwd_str else None,
             max_results=getattr(cfg, "pitfall_gate_max_results", 5),
             filters={"types": types},

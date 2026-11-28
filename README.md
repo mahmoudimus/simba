@@ -469,6 +469,7 @@ Every capability is a `simba config` lever (`simba config set <section>.<key>`).
 | ✅ | Tool-call redirect | `hooks.redirect_enabled` (`redirect_mode=deny`) | Steer bare commands to better tooling (`python`→`uv run`, …). |
 | ✅ | Auto-learn from failures | `hooks.auto_learn_from_failures` | PostToolUse: record tool failures as rules (probe/reader/exit-code guards on). |
 | ⬜ | Retrieval triage | `hooks.recall_triage_enabled` | Default-off UserPromptSubmit classifier that skips recall/RAG only for narrow self-contained prompts; uncertain still retrieves. |
+| ⬜ | Recall-query cleaning | `hooks.recall_query_clean_enabled` | Strips `<system-reminder>`, the task-notification envelope, the 🦁☑ line, `[✓ rules]` and `[simba: …]` footers from the text prompt recall and Stop reasoning-verify embed. Boilerplate-only text skips recall. |
 | ✅ | Permission deny *(Codex)* | `hooks.permission_check_enabled` | Deny a proposed call matching a high-confidence rule. |
 | ⬜ | Codex raw-transcript fallback | `codex.auto_extract_on_status` | Optional `codex-status` fallback stores learnings from pending Codex JSONL transcripts and records an append-only extraction ledger. |
 | ⬜ | Codex extraction trace | `codex.extraction_trace_enabled` | Optional JSONL sidecar for replaying raw-transcript candidates, evidence, keep decisions, and store results. |

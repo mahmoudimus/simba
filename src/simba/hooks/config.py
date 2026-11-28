@@ -27,6 +27,13 @@ class HooksConfig:
     # User-prompt-submit recall
     prompt_min_length: int = 10  # skip recall for prompts shorter than this
     prompt_min_similarity: float = 0.45  # stricter floor than the daemon default
+    # Strip harness/simba boilerplate (<system-reminder>, the task-notification
+    # envelope, the 🦁☑ line, [✓ rules], [simba: …] footers) from the text that
+    # prompt recall and Stop reasoning-verify embed as their query
+    # (hooks/recall_query.py). Live log 2026-11-28: 385 of 15,070 recall queries
+    # began with 🦁☑, 610 carried a task-notification envelope. Default-OFF:
+    # unmeasured for recall quality.
+    recall_query_clean_enabled: bool = False
     # Cheap UserPromptSubmit retrieval triage. Default-OFF: every prompt that
     # passes prompt_min_length still retrieves as before. When enabled, only
     # narrow self-contained prompts skip memory/RAG; uncertain still retrieves.

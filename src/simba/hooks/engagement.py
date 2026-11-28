@@ -20,9 +20,21 @@ from __future__ import annotations
 # (spec 28) so both surfaces read identically.
 from simba.doctrine.preflight import MARKER
 
+# Opening of the ``[simba: …]`` footer hooks append to injected context. One
+# definition so the emitters and hooks/recall_query (which strips it) agree.
+FOOTER_OPEN = "[simba:"
+
+
+def footer(tags: str) -> str:
+    """The ``[simba: <tags>]`` footer line."""
+    return f"{FOOTER_OPEN} {tags}]"
+
+
 __all__ = [
+    "FOOTER_OPEN",
     "MARKER",
     "append_gate_action",
+    "footer",
     "gate_action_label",
     "has_marker",
     "prompt_ledger",

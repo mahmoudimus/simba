@@ -17,7 +17,9 @@ import simba.guardian.extract_core
 import simba.harness.client
 import simba.hooks._memory_client
 import simba.hooks.context_lanes
+import simba.hooks.engagement
 import simba.hooks.quoted_reply
+import simba.hooks.recall_query
 import simba.hooks.recall_triage
 import simba.search.rag_context
 from simba.harness.core import CanonicalResult
@@ -372,11 +374,12 @@ def run(hook_input: dict) -> CanonicalResult:
 
     # 2. Memory: recall relevant memories using prompt
     memories: list[dict] = []
-    if retrieval_allowed and prompt and len(prompt) >= cfg.prompt_min_length:
+    query = simba.hooks.recall_query.recall_query(prompt, cfg)
+    if retrieval_allowed and query and len(query) >= cfg.prompt_min_length:
         project_path = str(cwd) if cwd_str else None
-        memories = _recall_prompt(prompt, project_path, cfg)
+        memories = _recall_prompt(query, project_path, cfg)
         formatted = simba.hooks._memory_client.format_memories(
-            memories, source="user-prompt", query=prompt
+            memories, source="user-prompt", query=query
         )
         # Cross-project user lane (spec 33 Phase 3): rides in the recall lane
         # so it shares the recall budget. Default-off → "" (byte-identical).
@@ -500,8 +503,9 @@ def run(hook_input: dict) -> CanonicalResult:
         tags = f"~{tokens} tokens"
         if core_blocks:
             tags += " | \u2713 rules"
-        combined += f"\n[simba: {tags}]"
-        print(f"[simba: {tags}]", file=sys.stderr)
+        line = simba.hooks.engagement.footer(tags)
+        combined += f"\n{line}"
+        print(line, file=sys.stderr)
     return CanonicalResult(additional_context=combined, memory_count=len(memories))
 
 
