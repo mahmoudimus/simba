@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import re
 
+import simba.guardian.check_signal
+import simba.hooks.engagement
+
 # Whole blocks the harness injects; none of their text is the user's.
 _DROP_BLOCKS = re.compile(
     r"<(system-reminder)\b[^>]*>.*?</\1>",
@@ -33,10 +36,13 @@ _NOTIFICATION_KEEP = re.compile(
     r"<(summary|result)\b[^>]*>(.*?)(?:</\1>|\Z)", re.DOTALL | re.IGNORECASE
 )
 # simba's own markers: the engagement ledger line, the rules signal, and the
-# token footer the hooks append.
-_ENGAGEMENT_LINE = re.compile(r"^[ \t]*🦁☑[^\n]*$", re.MULTILINE)
-_SIGNAL = re.compile(r"\[✓ rules\]")
-_FOOTER = re.compile(r"\[simba:[^\]\n]*\]")
+# footer the hooks append. Built from the emitters' constants, so renaming a
+# marker at its source updates what is stripped here.
+_ENGAGEMENT_LINE = re.compile(
+    rf"^[ \t]*{re.escape(simba.hooks.engagement.MARKER)}[^\n]*$", re.MULTILINE
+)
+_SIGNAL = re.compile(re.escape(simba.guardian.check_signal.SIGNAL))
+_FOOTER = re.compile(rf"{re.escape(simba.hooks.engagement.FOOTER_OPEN)}[^\]\n]*\]")
 _SPACE = re.compile(r"[ \t]+")
 _BLANK_LINES = re.compile(r"\n{3,}")
 

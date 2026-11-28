@@ -141,3 +141,49 @@ class TestPromptRecallQuery:
 
     def test_off_recalls_on_raw_prompt(self, monkeypatch) -> None:
         assert self._run(monkeypatch, False, _NOTIFICATION) == [_NOTIFICATION]
+
+
+class TestTracksEmitters:
+    """The cleaner reads the emitters' constants, so renaming a marker at its
+    source changes what is stripped. These feed real emitter output through."""
+
+    def test_strips_every_prompt_ledger_form(self) -> None:
+        import simba.hooks.engagement as eng
+
+        for line in (
+            eng.prompt_ledger(memory_count=3, top_similarity=0.47),
+            eng.prompt_ledger(memory_count=0, top_similarity=0.0),
+            eng.append_gate_action(
+                eng.prompt_ledger(memory_count=1, top_similarity=0.5),
+                eng.gate_action_label("warn", "rm -rf build"),
+            ),
+        ):
+            assert rq.clean(f"{line}\nreal words") == "real words"
+
+    def test_strips_the_footer_the_hooks_emit(self) -> None:
+        import simba.hooks.engagement as eng
+
+        for tags in ("~320 tokens", "~320 tokens | ✓ rules", "~9 tokens injected"):
+            assert rq.clean(f"real words\n{eng.footer(tags)}") == "real words"
+
+    def test_strips_the_signal_the_guardian_checks(self) -> None:
+        import simba.guardian.check_signal as cs
+
+        reply = f"done\n\n{cs.SIGNAL}"
+        assert cs.check_signal(reply)
+        assert rq.clean(reply) == "done"
+
+    def test_patterns_follow_a_renamed_marker(self, monkeypatch) -> None:
+        import importlib
+
+        import simba.hooks.engagement as eng
+
+        monkeypatch.setattr(eng, "MARKER", "🐯✔")
+        reloaded = importlib.reload(rq)
+        try:
+            assert (
+                reloaded.clean("🐯✔ recalled 2 (top 0.40)\nreal words") == "real words"
+            )
+        finally:
+            monkeypatch.undo()
+            importlib.reload(rq)

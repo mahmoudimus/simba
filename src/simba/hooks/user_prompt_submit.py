@@ -17,6 +17,7 @@ import simba.guardian.extract_core
 import simba.harness.client
 import simba.hooks._memory_client
 import simba.hooks.context_lanes
+import simba.hooks.engagement
 import simba.hooks.quoted_reply
 import simba.hooks.recall_query
 import simba.hooks.recall_triage
@@ -502,8 +503,9 @@ def run(hook_input: dict) -> CanonicalResult:
         tags = f"~{tokens} tokens"
         if core_blocks:
             tags += " | \u2713 rules"
-        combined += f"\n[simba: {tags}]"
-        print(f"[simba: {tags}]", file=sys.stderr)
+        line = simba.hooks.engagement.footer(tags)
+        combined += f"\n{line}"
+        print(line, file=sys.stderr)
     return CanonicalResult(additional_context=combined, memory_count=len(memories))
 
 

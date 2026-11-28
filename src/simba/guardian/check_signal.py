@@ -9,7 +9,9 @@ import json
 import pathlib
 import sys
 
-_SIGNAL = "[✓ rules]"
+# Public: hooks/recall_query strips it from recall queries.
+SIGNAL = "[✓ rules]"
+_SIGNAL = SIGNAL
 
 
 def check_signal(response: str) -> bool:
